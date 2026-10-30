@@ -1,4 +1,4 @@
-<!-- fact sheet stamp: version 84, 2026-10-30T13:10:01Z, source bc974a4eeab9bb90 (make facts restamps it: AGENTS.md) -->
+<!-- fact sheet stamp: version 104, 2026-10-30T22:23:33Z, source 3a52fd1ed505e0c8 (make facts restamps it: AGENTS.md) -->
 # Wheelhouse fact sheet
 
 What the helper chat knows before any question. The guide below is written by hand; the
@@ -29,13 +29,18 @@ daemon running.
 
 ## Words the app uses
 
-- Item: anything a session posts. Kinds: task, question, decision, subagent (A), PR, doc.
+- Item: anything a session posts. Kinds: task, question, decision, subagent (A), PR, doc, command (C: a shell command a session asks the person to run, with a Run button that opens it in an editable box with a "Send the output back" checkbox, then runs it in a quick shell's tab).
 - Queued and Immediate: a session's send mode. Queued holds answers until Send (Ctrl+S).
 - Park: a session writes its handoff and stops, kept dimmed until Unpark.
+- Busy (blue eye): from Park, Stop & Forget, Relaunch, Handover, New session, Adopt, a
+  fork's new session or a compaction until it ends, sends and other
+  operations are refused ("is busy parking: ... or Interrupt to abort it"); queueing stays open,
+  Interrupt aborts it, and a park or Stop & Forget not done in 15 minutes fails with a warning.
 - Forget: the session leaves the wheelhouse (its data deleted); Adopt brings one back.
 - Relaunch: start a session again where it left off.
 - Dead: a session not running and not parked (an Available one), red in the session list; its rows dim in every pane (session list, inbox, PRs, Decisions) until it runs again.
 - Fork: a new session carrying on from another's conversation.
+- Shell (Alt+H): a quick shell, the person's login shell in a new terminal tab titled ⌁ <session>, in the session in context's live directory (home with none). Untracked; exit closes it. Not the old Shell: handing a session run in the wheelhouse to a Claude Code tab is Handover to Claude Code in a shell, in the session's right-click menu only, no key.
 - Pin: an item kept through Delete, Ctrl+A, Ctrl+Delete and autocleanse.
 - Completed: an item done with (a task done or dropped, a subagent done or failed, a PR merged or closed, a question answered, a decision seen, a doc read). Ctrl+Delete deletes them all at once (Ctrl+Z undoes it); autocleanse hides each 5 minutes after it completed (AUTOCLEANSE_MINUTES, 0 off) until Alt+V shows it.
 - Session steps: what the wheelhouse tells a session at compaction, ending, resuming or a
@@ -119,6 +124,8 @@ This fact sheet describes claude-wheelhouse 0.2.0.dev0.
 - **Ctrl+Q**: Quit the wheelhouse (sessions carry on without it)
 
 ### The buttons
+
+- **Alt+H**: Shell: a quick shell in a new terminal tab, in the session's directory (home with none)
 
 - **Alt+Shift+A**: Send all: every running session's queue (a dead or parked one's waits until it's relaunched or unparked)
 
@@ -232,7 +239,7 @@ Click selects a row; in the session list, a click on the selected session or the
 
 ### Buttons
 
-The buttons under the session list act on the session highlighted there, and only those that apply show: Rename on a running one, Relaunch (Unpark on a parked one), Forget (Stop & Forget on a running one) and Fork on any, and Park on one that isn't parked; then Mode, and Send on one that isn't dead. Hover over one for what it does, and its key is in brackets below. New, Adopt and Relaunch all are keys in the footer. An item opened full screen has Mode, Send and the rest in its bar, for its own session. Ctrl+S and Ctrl+T act on the same session: highlighting an item highlights its session there.
+The buttons under the session list act on the session highlighted there, and only those that apply show: Rename on a running one, Relaunch (Unpark on a parked one), Forget (Stop & Forget on a running one) and Fork on any, and Park on one that isn't parked; then Mode, and Send on one that isn't dead. Hover over one for what it does, and its key is in brackets below. New, Adopt and Relaunch all are keys in the footer. An item opened full screen has Mode, Send and the rest in its bar, for its own session. Ctrl+S and Ctrl+T act on the same session: highlighting an item highlights its session there. Shell shows always, and with none selected opens in your home directory.
 
 - Mode (Ctrl+T): the session's send mode, Queued or Immediate
 
@@ -240,15 +247,19 @@ The buttons under the session list act on the session highlighted there, and onl
 
 - Send all (Alt+Shift+A), above the footer: send every running session's queue; a dead or parked one's waits until it's relaunched or unparked
 
+- Shell (Alt+H, from anywhere): a quick shell in a new terminal tab, in the session in context's directory (where it works now), or home with none; exit or Ctrl+D closes it
+
+- Run (on a command a session suggested): opens it in a box you can edit, with whether its output goes back to the session; Run there runs it in a new terminal tab in the session's directory
+
 - Relaunch / Unpark (Alt+L in the session list): start the session again where it left off, stopping it first if it's running (asked only if it's mid-turn); on a parked one, Unpark (Alt+P too)
 
 - Rename (Alt+R in the session list): the session's name in the wheelhouse
 
 - Fork (Alt+K in the session list): a new session, "<name> (fork)", carrying on from this one's conversation so far, which carries on too. Ticked items move to it; in a linked git worktree, it works in a new one on a new branch from the last commit (uncommitted changes stay behind), or this one
 
-- Park (Alt+P in the session list): a running session writes its handoff notes into its items, then stops; it stays, dimmed, at the foot of the list, its items off the inbox, until Unpark. Off while it's asked; on again after 30 s, pressed again to cancel or force it
+- Park (Alt+P in the session list): a running session writes its handoff notes into its items, then stops; it stays, dimmed, at the foot of the list, its items off the inbox, until Unpark. Off while it's asked; on again after 30 s, pressed again to cancel it
 
-- Stop & Forget, or Forget (Delete or Backspace in the session list): a running session asks first, Let it know (Alt+L: it does its own end steps, then stops) or Just stop it (Alt+J: stopped now, told nothing), the first by default while its prompt cache is warm, the second once cold, as its end steps would re-read its whole context; its wheelhouse data is deleted either way, queued answers with it. One not running is deleted at once, once you confirm. Adopt brings a forgotten one back. Off while it's asked; on again after 30 s, pressed again to cancel or force it
+- Stop & Forget, or Forget (Delete or Backspace in the session list): a running session asks first, Let it know (Alt+L: it does its own end steps, then stops) or Just stop it (Alt+J: stopped now, told nothing), the first by default while its prompt cache is warm, the second once cold, as its end steps would re-read its whole context; its wheelhouse data is deleted either way, queued answers with it. One not running is deleted at once, once you confirm. Adopt brings a forgotten one back. Off while it's asked; on again after 30 s, pressed again to cancel it
 
 ### Sending
 
@@ -368,4 +379,7 @@ The app's command line args (make args). Give them to make run in ARGS, for exam
 - Back after two hours or more away, a card at the top of the inbox says what happened meanwhile: what needs you, what landed, which sessions went quiet and what was decided. Esc dismisses it.
 - The ⓘ at the stats pane's top right shows the selected session's info: its id (C copies it), user, machine, branch, model, transcript, and its MCP server's code, flagged when it needs a relaunch.
 - Every compaction, in a tab too, is a task in the inbox that follows it to done, failed or dropped, and the conversation shows its stages as the trash compactor's walls closing in, with the crew and the droids panicking while it runs.
+- Park, Stop & Forget, Relaunch, Handover, New session, Adopt and a fork's new session keep it blue from the press until done: sends and other operations wait, queueing stays open, Interrupt aborts it, and one that can't finish in time is called off with a warning.
 - A dead session (not parked) keeps its red dot, and its rows dim everywhere: its session list row, its inbox items and conversation, its PRs (their lights kept bright) and the decisions only it looks at.
+- Shell (Alt+H, from anywhere) opens a quick shell in a new terminal tab, in the directory the session in context works in now, or home. Handing a session run in the wheelhouse to a Claude Code tab is now Handover to Claude Code in a shell, in its right-click menu.
+- A session can suggest a shell command for you to run: a C item with a Run button that opens it in an editable box and runs it in a new terminal tab, sending the output back if you tick it.

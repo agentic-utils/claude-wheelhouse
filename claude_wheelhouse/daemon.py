@@ -423,13 +423,17 @@ class Daemon:
             Route("/sessions/{sid}/fork", self.query(
                 lambda request: dataclasses.asdict(self.hub.fork_plan(request.path_params["sid"])))),
             Route("/sessions/{sid}/info", self.query(lambda request: self.hub.session_info(request.path_params["sid"]))),
+            Route("/sessions/{sid}/shell-dir", self.query(
+                lambda request: list(self.hub.shell_dir(request.path_params["sid"])))),
             Route("/sessions/{sid}/{action}", self.command(self.session_command), methods=["POST"]),
             Route("/dispatch", self.command(lambda request, body: self.hub.send_all()), methods=["POST"]),
+            Route("/shell", self.command(self.open_shell), methods=["POST"]),
             Route("/items", self.query(self.items)),
             Route("/items/{sid}/{ref}/thread", self.query(self.thread)),
             Route("/items/{sid}/{ref}/permission", self.command(self.permission), methods=["POST"]),
             Route("/items/{sid}/{ref}/close", self.command(self.close), methods=["POST"]),
             Route("/items/{sid}/{ref}/pin", self.command(self.pin), methods=["POST"]),
+            Route("/items/{sid}/{ref}/run", self.command(self.run_command), methods=["POST"]),
             Route("/items/{sid}/{ref}/notes-wait", self.command(
                 lambda request, body: self.hub.notes_wait(request.path_params["sid"], request.path_params["ref"],
                                                           bool(body.get("abort")))), methods=["POST"]),
@@ -1132,6 +1136,13 @@ class Daemon:
             raise Refused(404, f"no command {action}")
         return commands[action](sid)
 
+    def open_shell(self, request: Request, body: dict) -> Done:
+        """Shell (#257): a quick shell's tab, on this machine's screen, so refused (403) from
+        another machine, where nobody would see it."""
+        if not this_machine(request):
+            raise Refused(403, "a shell opens on the wheelhouse's own machine: this wheelhouse doesn't open them remotely")
+        return self.hub.open_shell(text(body, "sid", False))
+
     def permission(self, request: Request, body: dict) -> Done:
         """Allow, Always or Deny, once: a permission already decided, by another client or
         an outbox replayed late, is a conflict."""
@@ -1174,6 +1185,19 @@ class Daemon:
         if status is not None and not isinstance(status, str):
             raise Refused(400, "status must be a string")
         return self.hub.close(request.path_params["sid"], request.path_params["ref"], closed, status)
+
+    def run_command(self, request: Request, body: dict) -> Done:
+        """Run, on a command item (#257): a quick shell's tab running the text, so refused (403)
+        from another machine, as Shell is."""
+        if not this_machine(request):
+            raise Refused(403, "a command runs on the wheelhouse's own machine: this wheelhouse doesn't run them remotely")
+        send = body.get("send")
+        if not isinstance(send, bool):
+            raise Refused(400, "send must be true or false")
+        try:
+            return self.hub.run_command(request.path_params["sid"], request.path_params["ref"], text(body, "text"), send)
+        except ValueError as e:
+            raise Refused(400, str(e)) from e
 
     def pin(self, request: Request, body: dict) -> Done:
         pinned = body.get("pinned")

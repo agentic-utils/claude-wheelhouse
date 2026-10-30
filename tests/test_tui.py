@@ -241,10 +241,12 @@ async def test_confirm_keys_stay_in_the_dialog(store, sid, key, expected, desc):
 
 @pytest.mark.anyio
 async def test_enter_on_a_destructive_confirm_declines(store, sid):
-    """R6: Confirm opens on No, so a reflex Enter on "Force end" keeps the wheelhouse data."""
+    """R6: Confirm opens on No, so a reflex Enter on a Forget keeps the wheelhouse data. (A pending
+    request's Force, where this began, has gone: #249.)"""
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        app.resolve_request(sid, "end", "force")
+        app.push_screen(Confirm("Forget demo? Its wheelhouse data is deleted."),
+                        lambda yes: yes and store.end(sid))
         await pilot.pause()
         await pilot.press("enter")
         await pilot.pause()
@@ -440,7 +442,8 @@ async def test_send_bar_and_session_buttons_follow_the_queues(store, sid, tmp_pa
         await pick(app, pilot, sid)
         bar = lambda: {b.id: (str(b.label), b.disabled) for b in app.screen.query("SendBar Button") if b.display}
         assert bar() == {"send-all": ("Send all (0)", True)}, "the inbox's bar: only Send all (D20)"
-        assert session_buttons(app) == {"mode": ("Mode: Queued", False), "send": ("Send (0)", True)}, \
+        assert session_buttons(app) == {"mode": ("Mode: Queued", False), "send": ("Send (0)", True),
+                                     "shell": ("Shell", False)}, \
             "the highlighted session's, nothing queued"
         store.queue(sid, "a")
         store.queue(other, "b")
@@ -1833,7 +1836,6 @@ class Burst:
     ("items", "qa", ("alt+i", "down"), lambda b: (b.command("alpha"), b.command("bravo")), ("interrupt", None),
      "Alt+I interrupts the session of the item it was on"),
     ("items", "qa", ("alt+c", "down"), lambda b: b.asked(), "alpha", "Alt+C compacts the session of the item it was on"),
-    ("items", "qa", ("alt+h", "down"), lambda b: b.asked(), "alpha", "Alt+H opens a shell on the session of the item it was on"),
 ])
 @pytest.mark.both
 async def test_a_raw_burst_acts_in_the_order_typed(store, tmp_path, monkeypatch, sdk_on, focus, at, burst, seen, want,
@@ -1888,10 +1890,11 @@ async def test_a_raw_burst_acts_in_the_order_typed(store, tmp_path, monkeypatch,
      "Enter on the conversation row goes to its box, and the letters behind it land there"),
     ("session-list", "gone", ("enter", "alt+n", "ctrl+q"), ("Screen", "", [], True, "park"),
      "Enter on a dead session offers a relaunch: Alt+N declines it, then Ctrl+Q quits"),
-    ("items", "qa", ("alt+h", "alt+n", "ctrl+q"), ("Screen", "", [], True, "park"), "review 15 (2): Alt+H's Confirm takes Alt+N, then Ctrl+Q quits"),
-    ("items", "qa", ("alt+h", "alt+y", "alt+y"), ("Screen", "", ["shell"], False, "park"),
+    ("items", "qa", ("delete", "alt+n", "ctrl+q"), ("Screen", "", [], True, "park"),
+     "review 15 (2): Delete's Confirm takes Alt+N, then Ctrl+Q quits"),
+    ("items", "qa", ("delete", "alt+y", "alt+y"), ("Screen", "", [], False, "park"),
      "review 15 (2): a second Alt+Y once the dialog has closed doesn't dismiss it again"),
-    ("items", "qa", ("alt+h", "alt+n", "alt+n"), ("NewSession", "", [], False, "park"),
+    ("items", "qa", ("delete", "alt+n", "alt+n"), ("NewSession", "", [], False, "park"),
      "review 15 (2): a second Alt+N once the dialog has closed is the inbox's: New session"),
     ("session-list", "alpha", ("alt+p", "alt+c", "ctrl+q"), ("Screen", "", [], True, None),
      "review 15 (2): Alt+P on a session asked to park offers the Choice, Alt+C cancels the request, then Ctrl+Q quits"),
@@ -1959,7 +1962,8 @@ async def burst_outcome(store, tmp_path, monkeypatch, focus, at, burst, desc, sl
                "pending": s and app.pending(alpha), "parked": bool(s and s["parked"]),
                "queued": [m["body"] for m in store.drafts(alpha)] + [m["body"] for m in store.pending(alpha)],
                "current": current and store.session(current)["name"], "finished": app.show_finished,
-               "model": s and s["model"], "effort": s and s["effort"]}
+               "model": s and s["model"], "effort": s and s["effort"],
+               "open": [it["title"] for it in store.items(alpha) if it["status"] == "open"] if s else []}
         if isinstance(app.screen, ThreadView) or len(app.screen_stack) == 1:
             assert_one_current(app, desc)
     return out
@@ -1968,9 +1972,9 @@ async def burst_outcome(store, tmp_path, monkeypatch, focus, at, burst, desc, sl
 @pytest.mark.usefixtures("sdk_on")
 @pytest.mark.anyio
 @pytest.mark.parametrize("focus, at, burst, want, desc", [
-    ("items", "qa", ("alt+h", "enter", "alt+y"), {"stack": ("Screen",), "hosts": []},
-     "review 16 (1): H's Confirm opens on No, so Enter answers No, and the Y behind it isn't a Yes"),
-    ("items", "qa", ("alt+h", "enter", "ctrl+q"), {"stack": ("Screen",), "hosts": [], "quit": True},
+    ("items", "qa", ("delete", "enter", "alt+y"), {"stack": ("Screen",), "open": ["which db?"]},
+     "review 16 (1): Delete's Confirm opens on No, so Enter answers No, and the Y behind it isn't a Yes"),
+    ("items", "qa", ("delete", "enter", "ctrl+q"), {"stack": ("Screen",), "open": ["which db?"], "quit": True},
      "review 16 (1): Enter on No answers No, then Q quits"),
     ("session-list", "gone", ("enter", "enter", "alt+y"), {"stack": ("Screen",), "launched": []},
      "review 16 (1): Relaunch's Confirm opens on No, so Enter declines, and the Y behind it doesn't relaunch"),
@@ -1986,8 +1990,6 @@ async def burst_outcome(store, tmp_path, monkeypatch, focus, at, burst, desc, sl
      "review 16 (2): X Enter renames, and the second Enter is the session list's"),
     ("session-list", "alpha", ("alt+n", "tab", "enter", "escape"), {"stack": ("Screen", "NewSession"), "focus": "browse"},
      "review 16 (3): Enter on Browse opens the picker, and the Esc behind it closes the picker, not New session"),
-    ("session-list", "alpha", ("alt+p", "alt+o", "alt+y"), {"stack": ("Screen",), "parked": True},
-     "F on the Choice asks to confirm Force, and the Y behind it confirms"),
     ("session-list", "alpha", ("alt+p", "alt+c", "alt+p"), {"stack": ("Screen", "ParkSession"), "pending": None},
      "C cancels the request before the P behind it, which asks afresh: Park's dialog, as alpha runs in the wheelhouse"),
     ("session-list", "alpha", ("alt+m", "down", "enter"), {"stack": ("Screen",), "model": "claude-sonnet-5-5"},
@@ -2013,7 +2015,6 @@ async def test_a_key_lands_before_the_next_acts(store, tmp_path, monkeypatch, fo
 @pytest.mark.parametrize("focus, at, burst, desc", [
     ("items", "qa", ("alt+h", "enter", "alt+y"), "a focused button's Enter, then a dialog key"),
     ("session-list", "alpha", ("alt+p", "enter", "escape"), "the Choice's Enter, then Esc"),
-    ("session-list", "alpha", ("alt+p", "alt+o", "alt+y"), "a dialog's answer that opens another"),
     ("session-list", "alpha", ("alt+p", "alt+c", "alt+p"), "a dialog's answer, then a key that reads what it did"),
     ("session-list", "alpha", ("alt+r", "x", "enter", "ctrl+q"), "an input's Enter, then a key on the screen behind"),
     ("session-list", "alpha", ("alt+r", "x", "enter", "enter"), "an input's Enter twice"),
@@ -2771,7 +2772,7 @@ async def test_one_click_on_a_dead_session_opens_one_prompt_and_yes_closes_it(st
 
 @pytest.mark.parametrize("screen, labels, desc", [
     (lambda: Confirm("ok?"), ["Yes [Alt+Y]", "No [Alt+N]"], "the relaunch and destructive confirms"),
-    (lambda: Choice("hm?"), ["Cancel request [Alt+C]", "Force [Alt+O]", "Leave it [Esc]"], "a pending request's choice"),
+    (lambda: Choice("hm?"), ["Cancel request [Alt+C]", "Leave it [Esc]"], "a pending request's choice"),
     (lambda: RelaunchChoice("big?"), ["Compact first [Alt+C]", "Relaunch now [Alt+R]", "Cancel [Esc]"],
      "Relaunch of a big session"),
 ])
@@ -4894,7 +4895,7 @@ async def test_a_refused_send_keeps_the_text_and_says_why(store, tmp_path, monke
         await pilot.pause()
         left = app.answer.text
     assert left == "use Postgres", f"{desc}: the box keeps the text"
-    assert "hosted is compacting: send once it's done, or Interrupt to cancel the compaction." in toasts, \
+    assert "hosted is busy compacting: send once it's done, or Interrupt to abort it." in toasts, \
         f"{desc}: {toasts}"
     assert not store.drafts(sid) and not store.pending(sid), desc
 
@@ -5087,7 +5088,8 @@ async def test_host_buttons(store, tmp_path, monkeypatch, runner_, live, shown, 
     app = WheelhouseApp(store)
     async with app.run_test(size=(180, 40)) as pilot:
         await pick(app, pilot, sid)
-        assert ({"interrupt", "compact", "shell"} <= shown_buttons(app)) == shown, desc
+        assert ({"interrupt", "compact"} <= shown_buttons(app)) == shown, desc
+        assert "shell" in shown_buttons(app), f"{desc}: Shell, a quick shell, shows for any session (#257)"
         activity = str(app.screen.query_one("#activity", Label).content)
         assert (activity == "running Bash: make test") == shown, desc
         if shown:
@@ -5534,8 +5536,81 @@ async def session_menu(app, pilot, sid, offset=None):
     await pilot.pause()
     got = []
     for id_, *_ in app.session_menu_buttons(next(x for x in app.sessions if x["id"] == sid)):
-        app.screen_stack[0].query_one(f"#{id_}", Button).press = functools.partial(got.append, id_)
+        if id_ != "handover":   # the menu's alone, no button (#257)
+            app.screen_stack[0].query_one(f"#{id_}", Button).press = functools.partial(got.append, id_)
     return got
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("runner_, answer, sent, said, desc", [
+    ("sdk", True, [("shell", None, None)], None, "a hosted session: asked first, then handed over (the hub's shell)"),
+    ("sdk", False, [], None, "No hands nothing over"),
+    ("tab", None, [], "Handover to Claude Code in a shell applies only to a session run in the wheelhouse",
+     "a tab's: said, nothing asked"),
+])
+async def test_handover_is_in_the_session_menu(store, tmp_path, monkeypatch, sdk_on, runner_, answer, sent, said, desc):
+    """#257: Handover, today's Shell renamed, is the session menu's alone: no button, no key."""
+    sid, app = await hosted_app(store, tmp_path, monkeypatch, runner_)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        notes, got = [], []
+        app.notify = lambda message, **kw: notes.append(message)
+        app.client.host_command = lambda s, what, notes=None, then=None: got.append((what, notes, then)) or tui.Done()
+        await session_menu(app, pilot, sid)
+        entry = next(e for e in app.screen.buttons if e[0] == "handover")
+        assert entry[1] == "Handover to Claude Code in a shell" and entry[3] == (runner_ == "sdk"), desc
+        assert not app.screen_stack[0].query("#handover"), f"{desc}: no button of its own"
+        app.screen.action_answer("handover")
+        await pilot.pause()
+        if answer is not None:
+            assert isinstance(app.screen, tui.Confirm), desc
+            app.screen.action_answer(answer)
+            await pilot.pause()
+        assert got == sent and (notes[-1] if notes else None) == said, desc
+        assert ("handover" in app.busy_buttons(app.row(sid))) == bool(sent), f"{desc}: off till it lands"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("how, select, elsewhere, opened, desc", [
+    ("alt+h", "item", False, ["item"], "Alt+H: the selected item's session"),
+    ("alt+h", "none", False, [None], "Alt+H with no session in context: home"),
+    ("button", "session", False, ["session"], "the Shell button: the highlighted session's"),
+    ("thread", "item", False, ["item"], "Alt+H on a full-screen item: its session's"),
+    ("alt+h", "item", True, [], "with --connect the tab would open out of sight: said, nothing opened"),
+])
+async def test_shell_opens_a_quick_shell(store, tmp_path, monkeypatch, how, select, elsewhere, opened, desc):
+    """#257: Shell (Alt+H) asks the hub for a quick shell in the session in context's directory;
+    nothing about the session changes, and it applies whatever the session is doing."""
+    from claude_wheelhouse import liveness
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
+    one = store.create_session(str(tmp_path), name="item")
+    two = store.create_session(str(tmp_path), name="session")
+    ref = store.post_item(one, "question", "Which?")
+    names = {one: "item", two: "session"}
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        got, notes = [], []
+        app.notify = lambda message, **kw: notes.append(message)
+        app.client.open_shell = lambda sid: got.append(names.get(sid)) or tui.Done()
+        app.client.elsewhere = elsewhere
+        if select == "item":
+            await to_first_item(app, pilot)
+        elif select == "session":
+            await pick(app, pilot, two)
+        else:
+            app.filter_sid = app.selected = None
+        await pilot.pause()
+        if how == "thread":
+            app.push_screen(ThreadView(one, ref))
+            await pilot.pause()
+        if how == "button":
+            app.screen.query_one("#shell", Button).press()
+        else:
+            await pilot.press("alt+h")
+        await pilot.pause()
+        assert got == opened, desc
+        assert bool(notes and "isn't this one" in notes[-1]) == elsewhere, desc
 
 
 @pytest.mark.anyio
@@ -5756,9 +5831,9 @@ async def test_the_f_label_says_what_f_does(store, sid, presses, label, shown, d
      "longest captions"),
     ("live", False, ["rename", "relaunch", "park", "end", "model", "fork", "mode", "send", "interrupt", "compact", "shell"],
      "an Active one: Stop & Forget"),
-    ("dead", False, ["relaunch", "park", "end", "fork", "mode"],
+    ("dead", False, ["relaunch", "park", "end", "fork", "mode", "shell"],
      "an Available one: Relaunch, Park and Forget, nothing to interrupt, and no Send: it can't receive (D30)"),
-    ("dead", True, ["relaunch", "end", "fork", "mode"], "a Parked one: Unpark in Relaunch's place, no Park, and Forget"),
+    ("dead", True, ["relaunch", "end", "fork", "mode", "shell"], "a Parked one: Unpark in Relaunch's place, no Park, and Forget"),
     ("stalled", False, ["rename", "relaunch", "park", "end", "model", "fork", "mode", "send", "interrupt", "compact", "shell"],
      "a stalled one still takes what's sent"),
 ])
@@ -6469,7 +6544,7 @@ async def test_a_long_prompt_wraps_in_its_dialog(store, sid, dialog, height, des
     (lambda app, sid, cwd: ParkSession("demo", True), "Park: was top-left"),
     (lambda app, sid, cwd: ForgetChoice("Forget demo?", True), "Forget: was top-left"),
     (lambda app, sid, cwd: Confirm("Relaunch demo?"), "a confirmation"),
-    (lambda app, sid, cwd: Choice("Force it?"), "a choice"),
+    (lambda app, sid, cwd: Choice("Cancel it?"), "a choice"),
     (lambda app, sid, cwd: RelaunchChoice("Relaunch demo?"), "Relaunch's choice: was top-left"),
     (lambda app, sid, cwd: tui.TourInvite(), "the tour's invite: was a line across the top"),
     (lambda app, sid, cwd: tui.KeysHelp(), "the keys"),
@@ -6520,7 +6595,7 @@ OPEN = object()   # the dialog still open: Enter was its focus's own (a list's, 
     (lambda app, sid, cwd: ForgetChoice("Forget demo?", True), None, None, "tell",
      ["forget-tell", "forget-stop", "forget-cancel"], "Forget: Enter the focused default"),
     (lambda app, sid, cwd: Confirm("Relaunch demo?"), False, False, False, ["no", "yes"], "a confirmation: No focused"),
-    (lambda app, sid, cwd: Choice("Force it?"), "leave", "leave", "cancel", ["cancel", "force", "leave"], "a choice"),
+    (lambda app, sid, cwd: Choice("Cancel it?"), "leave", "leave", "cancel", ["cancel", "leave"], "a choice"),
     (lambda app, sid, cwd: RelaunchChoice("Relaunch demo?"), None, None, None,
      ["relaunch-cancel", "relaunch-compact", "relaunch-now"], "Relaunch's choice: Cancel focused"),
     (lambda app, sid, cwd: tui.TourInvite(), "later", "later", "start", ["invite-start", "invite-later", "invite-never"],
@@ -6661,7 +6736,7 @@ async def test_ctrl_enter_leaves_focus_in_the_box(store, sid, text, focus, desc)
 # the inbox's Tab stops with a running tab session selected and an answer queued (#77): the
 # lists, the box, then every button shown and enabled in reading order, the session pane's
 # then the send bar's (Model, Mode, Interrupt, Compact and Shell disabled: a wheelhouse-run session's)
-INBOX_STOPS = ["session-list", "items", "answer", "rename", "relaunch", "park", "end", "fork", "send", "send-all",
+INBOX_STOPS = ["session-list", "items", "answer", "rename", "relaunch", "park", "end", "fork", "send", "shell", "send-all",
                "stats:zoom-out", "stats:zoom-in", "stats:info"]   # then the stats pane's zoom (no slider: a tab session), and its ⓘ (#242)
 
 
@@ -6672,9 +6747,9 @@ INBOX_STOPS = ["session-list", "items", "answer", "rename", "relaunch", "park", 
     ("inbox", "shift+tab", ["session-list", *INBOX_STOPS[:0:-1], "session-list"], "Shift+Tab: the reverse"),
     ("tour", "tab", INBOX_STOPS[:3] + ["tour-next"] + INBOX_STOPS[3:] + ["session-list"],
      "a tour box's Next after the answer box, before the buttons (review of #93)"),
-    ("thread", "tab", ["thread-answer", "send", "send-all", "thread-answer"],
+    ("thread", "tab", ["thread-answer", "send", "send-all", "shell", "thread-answer"],
      "a full-screen item: its box, then its buttons, not its thread (#77)"),
-    ("thread", "shift+tab", ["thread-answer", "send-all", "send", "thread-answer"], "and back"),
+    ("thread", "shift+tab", ["thread-answer", "shell", "send-all", "send", "thread-answer"], "and back"),
 ])
 async def test_the_tab_order(store, sid, monkeypatch, screen, key, order, desc):
     by_name(monkeypatch, {"demo": "live"})
@@ -6934,7 +7009,7 @@ def presses(app) -> list[str]:
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("key, button", [("alt+i", "interrupt"), ("alt+c", "compact"), ("alt+h", "shell"),
+@pytest.mark.parametrize("key, button", [("alt+i", "interrupt"), ("alt+c", "compact"),
                                          ("alt+y", "allow"), ("alt+w", "always"), ("alt+d", "deny"),
                                          ("alt+shift+a", "send-all")])
 @pytest.mark.parametrize("where, pressed", [
@@ -7005,7 +7080,7 @@ async def test_a_button_key_that_does_not_apply_says_so(store, tmp_path, monkeyp
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("runner_, shown, desc", [
-    ("sdk", ["interrupt", "compact", "shell"], "a host's session, SDK mode off: the buttons it shows"),
+    ("sdk", ["interrupt", "compact", "handover"], "a host's session, SDK mode off: the buttons it shows, and its menu's Handover"),
     ("tab", [], "a tab's: none of SDK mode's"),
 ])
 async def test_the_overlay_lists_the_buttons_the_screen_shows(store, tmp_path, monkeypatch, runner_, shown, desc):
@@ -7020,8 +7095,9 @@ async def test_the_overlay_lists_the_buttons_the_screen_shows(store, tmp_path, m
         await pilot.pause()
         assert isinstance(app.screen, KeysHelp) and app.screen.shown == shown, desc
     text = keys_help(False, shown)
-    for word in ("Interrupt", "Compact", "Shell"):
+    for word in ("Interrupt", "Compact", "Handover"):
         assert (word in text) is bool(shown), f"{desc}: {word}"
+    assert "Shell (Alt+H" in text, f"{desc}: Shell, the quick shell, is everyone's (#257)"
     for word in ("Model", "Allow", "effort"):
         assert word not in text, f"{desc}: {word} isn't showing"
 
@@ -8910,7 +8986,7 @@ BUSY_ROW = {"id": "s1", "name": "demo", "host_command": None, "activity": "idle"
     ("interrupt", "live", {}, {"interrupted_at": "9999"}, "Interrupt taken before a refresh saw it: its stamp lands it"),
     ("compact", "live", {"host_command": "compact"}, {"host_command": None, "activity": "idle · compacted 300k → 40k tokens"}, "Compact: until compacted"),
     ("compact", "live", {"host_command": "compact"}, {"_status": "dead"}, "Compact: the host dying ends it"),
-    ("shell", "live", {"host_command": "shell"}, {"host_command": None, "activity": "", "shell": "tab"}, "Shell: until handed over"),
+    ("handover", "live", {"host_command": "shell"}, {"host_command": None, "activity": "", "shell": "tab"}, "Handover: until handed over"),
     ("model", "live", {"model": "sonnet"}, {"applied_model": "sonnet"}, "Model: until applied"),
     ("park", "live", {"park_requested_at": "x"}, {"park_requested_at": None, "_status": "dead"}, "Park: until parked"),
     ("end", "live", {"end_requested_at": "x"}, {"_gone": True}, "Forget, let it know: until it's gone"),
@@ -9974,3 +10050,67 @@ async def test_double_click_on_detail_goes_full_screen_and_back(store, sid, tmp_
         assert app.detail_editor.key is None and not app.screen.selections, f"{desc}: no editor, nothing selected"
         if kind == "doc":
             assert app.detail_panes.tab == tui.DOC_TAB, f"{desc}: the doc's tab, as before"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("want_output, edit, untick, sent, error, desc", [
+    (False, None, False, [("ls -la", False)], None, "as suggested: Run runs the box's text, output not asked"),
+    (True, None, False, [("ls -la", True)], None, "asked for: ticked, and sent so"),
+    (True, None, True, [("ls -la", False)], None, "the person unticks it"),
+    (False, "ls -la | head", False, [("ls -la | head", False)], None, "edited: exactly what the box holds"),
+    (False, "ls ’x", False, [], "U+2019 at line 1, column 4", "a paste outside ASCII: refused with its place"),
+])
+async def test_run_opens_the_command_and_runs_what_the_box_holds(store, tmp_path, monkeypatch, want_output, edit,
+                                                                  untick, sent, error, desc):
+    """#257: Run on a command item opens RunCommand, focus in the box; Run there runs exactly its
+    text, with the checkbox's choice; a box holding what can't be read as it runs is refused."""
+    from claude_wheelhouse import liveness
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
+    sid = store.create_session(str(tmp_path), name="demo")
+    ref, _ = store.post_command(sid, "ls -la", "List the files", want_output)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        got = []
+        app.client.run_command = lambda s, r, text, send: got.append((text, send)) or tui.Done()
+        await to_first_item(app, pilot)
+        app.items_table.move_cursor(row=app.items_table.keys().index(f"{sid}|{ref}"))
+        await pilot.pause()
+        app.paint_sendbar()
+        await pilot.pause()
+        run = app.screen.query_one("#run-command", Button)
+        assert tui.showing(run), f"{desc}: Run shows on a command item"
+        run.press()
+        await pilot.pause()
+        dialog = app.screen
+        assert isinstance(dialog, tui.RunCommand), desc
+        box = dialog.query_one("#run-text", TextArea)
+        assert app.focused is box and box.text == "ls -la" and not box.soft_wrap, f"{desc}: focus in the box"
+        check = dialog.query_one("#run-send", tui.Checkbox)
+        assert check.value == want_output, desc
+        assert dialog.query_one("#run-warning").display == want_output, f"{desc}: the warning while ticked"
+        if edit is not None:
+            box.text = edit
+        if untick:
+            check.value = False
+            await pilot.pause()
+            assert not dialog.query_one("#run-warning").display, desc
+        await pilot.press("enter")   # a stray Enter edits, never runs
+        await pilot.pause()
+        assert got == [] and isinstance(app.screen, tui.RunCommand), f"{desc}: Enter in the box runs nothing"
+        box.text = edit or "ls -la"   # the newline Enter typed taken out again
+        dialog.query_one("#run-go", Button).press()
+        await pilot.pause()
+        assert got == sent, desc
+        if error:
+            assert error in str(dialog.query_one("#run-error", Label).content), desc
+            assert isinstance(app.screen, tui.RunCommand), f"{desc}: still open to fix"
+
+
+def test_a_command_items_thread_shows_the_command_and_the_run():
+    """#257: the command in a code block, as it runs; a run whose output wasn't sent as a dim note."""
+    item = {"ref": "C1", "title": "List", "kind": "command", "status": "run", "updated_at": "t", "body": "ls ```x"}
+    msgs = [{"author": "person", "kind": "run", "body": "ran 14:05", "created_at": "t", "draft": 0, "delivered_at": "t"}]
+    blocks = tui.thread_blocks((item, msgs))
+    assert blocks[1] == ("claude", "````bash\nls ```x\n````")
+    assert blocks[2] == ("note", "_ran 14:05_")

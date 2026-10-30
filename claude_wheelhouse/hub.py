@@ -31,14 +31,35 @@ from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from typing import Callable
 
-from . import adopt, api, away, compactor, features, fingerprint, fork, launch, liveness, models, plan_usage, prs, steps, subagents, transcript, transcript_usage, tutorial
+from . import adopt, api, away, quickshell, compactor, features, fingerprint, fork, launch, liveness, models, plan_usage, prs, steps, subagents, transcript, transcript_usage, tutorial
 from .docroots import DOC_CAP
-from .host import (COMPACT_TIMEOUT, PARK_COMPACT_WITHIN, KEEPALIVE_AFTER, KEEPALIVE_TOKENS, MCP_CONNECTOR, MCP_DOS, keepalive_body,
+from .host import (KEEPALIVE_AFTER, KEEPALIVE_TOKENS, MCP_CONNECTOR, MCP_DOS, keepalive_body,
                    waits_on_person)
-from .store import (COMPACT_QUESTION, NOTES_WAIT, ORIGIN_WORDS, Refused, wheelhouse_item, Compacting, DISMISSABLE, compacting_now, PRS_SINCE, STATUSES, SessionGone, requested_expired, Store, can_queue,
+from .store import (COMPACT_QUESTION, NOTES_WAIT, ORIGIN_WORDS, Refused, Busy, REQUESTS, wheelhouse_item, COMPACT_TIMEOUT, OP_DOING, PARK_WITHIN, STARTING_WITHIN, HANDOVER_WITHIN, DISMISSABLE, compacting_now, operating, op_overdue, PRS_SINCE, STATUSES, SessionGone, requested_expired, Store, can_queue,
                     PROTOCOL_VERSION, mcp_servers, mode, needs_relaunch, runner, standing)
 
 RUNNING = ("live", "stalled", "starting")
+
+
+def send_or_queue(store: Store, sid: str, ref: str, text: str) -> str:
+    """A message of the person's that goes out without them pressing send: a run's output
+    (#257). Queued while the session is parked or busy (operating, #249: the store's one busy
+    check), never refused or dropped (D232), else sent or queued by the session's mode, as
+    submit does: the send itself is the check (Busy queues it), so the quiet mark's cycle is
+    called off and the output goes, as a person's answer would. SessionGone if the session has
+    gone. "sent" or "queued"."""
+    s = store.session(sid)
+    if s is None:
+        raise SessionGone(sid)
+    if mode(s) == "immediate" and not s["parked"]:
+        try:
+            store.send(sid, text, ref)
+            return "sent"
+        except Busy:
+            pass
+    store.queue(sid, text, ref)
+    return "queued"
+
 # a hosted session's activity when nothing is under way: errored and stopped count as resting
 RESTING = ("idle", "interrupted", "stopped", "in a shell tab", "error")
 PENDING = {"end": "forgetting", "park": "parking"}
@@ -110,7 +131,7 @@ def epoch(iso: str) -> float:
 
 
 def refusable(method):
-    """A hub action the store may refuse during a compaction cycle (Compacting, #244): said as a
+    """A hub action the store may refuse during an operation (Busy, #244, #249): said as a
     warning, the one wording for every refused action, and nothing done."""
     @functools.wraps(method)
     def act(self, *args, **kwargs):
@@ -119,6 +140,31 @@ def refusable(method):
         except Refused as e:
             return Done(False).say(str(e), "warning")
     return act
+
+
+ABORTED = {"park": "park", "end": "Stop & Forget", "handover": "handover to Claude Code in a shell"}
+
+
+def op_failed(s, kind: str, status: str, overdue: bool) -> str:
+    """The warning notice for an op that failed (Q246), naming it and why. One already parked
+    (parking) stays parked: its turn or compaction ran past its own clock."""
+    name = display_name(s)
+    if kind in ("relaunch", "start") and s["op_state"] == "starting":
+        return f"{name} didn't start within {STARTING_WITHIN} s: Relaunch it."
+    if kind == "relaunch":
+        return f"{name} wasn't relaunched: Relaunch it."
+    if kind == "handover":
+        why = f"didn't finish within {HANDOVER_WITHIN} s" if overdue else "failed: its host isn't running"
+        return f"{name}'s handover to Claude Code in a shell {why}."
+    what = "parked" if kind == "park" else "stopped and forgotten"
+    if s["op_state"] == "parking":
+        minutes = round((epoch(s["op_deadline"]) - epoch(s["op_at"])) / 60)
+        return (f"{display_name(s)} parked, but didn't stop within {minutes} minutes of parking: "
+                "its compaction, if any, is called off, and it stays parked.")
+    if overdue:
+        return f"{display_name(s)} couldn't be {what} within {PARK_WITHIN // 60} minutes: it carries on as it was."
+    why = "its host stalled" if status == "stalled" else "it isn't running"
+    return f"{display_name(s)} couldn't be {what}: {why}."
 
 
 def display_name(s) -> str:
@@ -263,6 +309,7 @@ class Hub:
 
     def __init__(self, store: Store | None = None, spawn=None, post=None, sdk: bool | None = None):
         self.store = store or Store()
+        quickshell.sweep(self.store.path)   # a run's files left by a tab closed mid-run (#257)
         # SDK mode (features.py, EXPERIMENTAL: the author's alone until Anthropic's terms are
         # confirmed): off, no new session runs in a host, whoever asks (a surface, a daemon's
         # client), and a host's model and effort aren't changed. A session hosted already keeps
@@ -297,6 +344,7 @@ class Hub:
         # with the epoch second Compact was asked for
         self.compacting: dict[str, float] = {sid: asked for sid, (*_, asked) in under_way.items()
                                              if asked is not None}
+        self.stopped_launches: set[str] = set()   # launches Interrupt aborted (op ids), their process stopped (#249)
         self.followers: dict[str, transcript.Follower] = {}
         # each session's context size for the session list: read on workers, by a follower
         # shared with the stats pane (transcript_usage.follower), so each transcript is read once
@@ -371,6 +419,7 @@ class Hub:
         self.by_id = {s["id"]: s for s in self.sessions}
         self.statuses = {s["id"]: liveness.status(s, waking=self.waking) for s in self.sessions}
         self.sweep_compactions()
+        self.sweep_ops()
         self.note_quiet()
 
     def sweep_compactions(self) -> None:
@@ -392,10 +441,60 @@ class Hub:
                                               f"no word of its end in {COMPACT_TIMEOUT // 60} minutes"):
                     print(f"wheelhouse: {display_name(s)}'s compaction in its tab failed: no word of its end",
                           file=sys.stderr, flush=True)
-            elif (within := requested_expired(s, PARK_COMPACT_WITHIN)) is not None:   # read first: no lock
+            elif (within := requested_expired(s, PARK_WITHIN)) is not None:   # read first: no lock
                 if self.store.expire_requested(s["id"], s["compaction_id"], within):
                     print(f"wheelhouse: {display_name(s)}'s compaction failed: no host took it up within "
                           f"{within:g} s", file=sys.stderr, flush=True)
+
+    def sweep_ops(self) -> None:
+        """Every park or end has a way out (#249): past its deadline (PARK_WITHIN from the press), or
+        its session no longer running before it parked, it fails (a stalled one, only quiet, has
+        till the deadline), the session carrying on as it was, and
+        the person is warned (Q246). Parking, it completes once the process has gone, parked (or its
+        host died or stalled with it parked). Read first: a write only for an op to move."""
+        for s in self.sessions:
+            op, status = operating(s), self.statuses[s["id"]]
+            if op is None:
+                self.stop_aborted_launch(s, status)
+                continue
+            if op[0] not in REQUESTS:
+                self.sweep_driven(s, op, status)
+                continue
+            dead = status not in RUNNING
+            if op[1] == "parking" and s["parked"] and (dead or status == "stalled"):
+                self.store.complete_op(s["id"], s["op_id"])
+            elif op_overdue(s) or (dead and op[1] != "parking"):
+                if self.store.fail_op(s["id"], s["op_id"], "past its deadline" if op_overdue(s) else "its host stopped"):
+                    self.announce(op_failed(s, op[0], status, overdue=op_overdue(s)), "warning", s["id"])
+
+    def sweep_driven(self, s, op: tuple[str, str], status: str) -> None:
+        """A relaunch, start or handover's way out (#249): starting, past STARTING_WITHIN (the launch
+        never registered); a relaunch the hub lost track of, past its own deadline and slack; a
+        handover past HANDOVER_WITHIN a state, or untaken by a host that has gone. Each fails, said."""
+        kind, st = op
+        if kind == "compact":
+            return
+        if kind == "relaunch" and st != "starting" and s["id"] in self.relaunching:
+            return   # the hub drives it, with its own deadline (finish_relaunches)
+        if op_overdue(s) or (kind == "handover" and st == "requested" and status not in RUNNING):
+            if self.store.fail_op(s["id"], s["op_id"], "past its deadline"):
+                if kind == "relaunch" and st != "starting":
+                    self.relaunching.pop(s["id"], None)
+                    self.compacting.pop(s["id"], None)
+                    self.lapsed.discard(s["id"])
+                self.announce(op_failed(s, kind, status, overdue=op_overdue(s)), "warning", s["id"])
+
+    def stop_aborted_launch(self, s, status: str) -> None:
+        """A launch Interrupt aborted while it was starting: its process, once it has registered, is
+        stopped, once (#249, section 4). The session ends Available, to Relaunch."""
+        if (s["op"] in ("relaunch", "start") and s["op_state"] == "cancelled" and s["op_deadline"]
+                and status in RUNNING and s["op_id"] not in self.stopped_launches
+                and liveness.registered_this_launch(s)):
+            self.stopped_launches.add(s["op_id"])
+            try:
+                self.stop_process(s)
+            except OSError as e:
+                self.announce(f"couldn't stop {display_name(s)}: {e}", "error", s["id"])
 
     def note_quiet(self) -> None:
         """A session parked, ended or stopped since the last refresh (or, at a hub's first,
@@ -479,14 +578,21 @@ class Hub:
             else:
                 launch.open_session(self.store, sid, may_tab)
         except launch.NotHere as e:
+            self.store.fail_launch(sid)
             return Done(False).say(elsewhere or str(e), "warning")
         except Exception as e:   # already running, wt.exe missing...
+            self.store.fail_launch(sid)
             return Done(False).say(str(e), "error")
         return Done()
 
-    def relaunch(self, sid: str, may_tab: bool = True, elsewhere: str | None = None) -> Done:
+    def relaunch(self, sid: str, may_tab: bool = True, elsewhere: str | None = None, own: bool = False) -> Done:
         """An Available or Parked session brought back where it left off, and unparked (Relaunch,
-        Unpark). Whether it was."""
+        Unpark). Whether it was. Refused while busy (#249), but a Relaunch's own (own)."""
+        if not own:
+            try:
+                self.store.check_busy(sid, "relaunch")
+            except Refused as e:
+                return Done(False).say(str(e), "warning")
         done = self.open_session(sid, restore=True, may_tab=may_tab, elsewhere=elsewhere)
         if done.ok:
             self.store.set_parked(sid, False)
@@ -505,22 +611,23 @@ class Hub:
         same call, long before either can claim anything. Nothing is sent if it doesn't come back:
         the queue stays queued, and the text stays the person's."""
         self.store.check_sendable(sid, item_ref if text is not None else None)   # before waking it
+        self.store.check_busy(sid, "send")
         s = self.row(sid)
         verb = waking(s)
         done = self.relaunch(sid, may_tab)
         if not done.ok:
             return done
-        n = self.store.dispatch_last(sid, text, item_ref)
+        n = self.store.dispatch_last(sid, text, item_ref, waking=True)
         return Done().say(f"{verb} {display_name(s)}" + (f": {n} sent with it" if n else ""))
 
     def host_gone(self, sid: str, s, may_tab: bool) -> Done:
         """Relaunch of a host that has gone meanwhile: it comes back as a dead session does
         (relaunch), and for another machine (may_tab false) not in a tab."""
         return self.relaunch(sid, may_tab,
-                             f"{display_name(s)}'s host has stopped: Relaunch it from the daemon's machine")
+                             f"{display_name(s)}'s host has stopped: Relaunch it from the daemon's machine", own=True)
 
     @refusable
-    def stop_host(self, sid: str, host: tuple, may_tab: bool = True) -> Done:
+    def stop_host(self, sid: str, host: tuple, may_tab: bool = True, own: bool = False) -> Done:
         """Refused during a compaction cycle (#244). Stop a running session for Relaunch: a host as SIGTERM does (its own clean stop:
         Claude Code is disconnected, and an open permission or question closes as withdrawn,
         or as lost when the new host starts); a tab's Claude Code the same way, its process
@@ -528,8 +635,10 @@ class Hub:
         may have sat open meanwhile, so only the process it was asked about, (pid, start
         time), is stopped. finish_relaunches starts it again once the process has gone: a
         tab in a new tab. A host's session out in a shell tab goes back to its waiting host
-        as that tab stops, which is its relaunch. Whether anything changed."""
-        self.store.check_compacting(sid, "relaunch")
+        as that tab stops, which is its relaunch. Whether anything changed. own: the Relaunch's
+        own stop, once compacted (compacting_relaunch), never refused by its own op (#249)."""
+        if not own:
+            self.store.check_busy(sid, "relaunch")
         s = self.row(sid)
         if not liveness.is_alive(s["claude_pid"], s["claude_start"], s["boot_id"]):
             return self.host_gone(sid, s, may_tab)   # gone meanwhile: nothing to stop
@@ -614,7 +723,7 @@ class Hub:
         stops it (stop_host), and starts it again once gone. Only the host the confirm was
         about, (pid, start time), as stop_host. Refused during a compaction cycle (#244)."""
         s = self.row(sid)
-        self.store.check_compacting(sid, "relaunch")
+        self.store.check_busy(sid, "relaunch")
         if runner(s) != "sdk" or s["shell"]:   # nothing to compact it: relaunched at once
             return self.stop_host(sid, host, may_tab)
         if not liveness.is_alive(s["claude_pid"], s["claude_start"], s["boot_id"]):
@@ -631,7 +740,7 @@ class Hub:
         return Done().say(f"relaunching {display_name(s)}: compacting first (it's asked what to keep)")
 
     def relaunch_under_way(self, sid: str, host: tuple | None, asked: float | None = None,
-                           may_tab: bool = True) -> None:
+                           may_tab: bool = True, ends: str = "failed") -> None:
         """A Relaunch that has stopped a session's host, or is compacting before it does
         (Compact asked for at the epoch second `asked`), kept here and in the store; or, with
         no host, done with. may_tab false: another machine asked, and it carries on so
@@ -648,7 +757,7 @@ class Hub:
             self.relaunching.pop(sid, None)
             self.lapsed.discard(sid)
             self.compacting.pop(sid, None)
-            self.store.set_relaunch(sid, None)
+            self.store.set_relaunch(sid, None, ends=ends)
 
     def compacting_relaunch(self, sid: str, s, host: tuple, deadline: float) -> None:
         """A Relaunch compacting first, while its host still runs. Once the session is
@@ -685,7 +794,7 @@ class Hub:
             row = self.store.compaction(sid)
             if row is not None and row["state"] == "requested":   # its Compact, untaken: the cycle goes with it
                 self.store.move_compaction(sid, row["id"], "cancelled", "the relaunch went ahead before it began")
-            done = self.stop_host(sid, host, self.store.relaunch_may_tab(sid))
+            done = self.stop_host(sid, host, self.store.relaunch_may_tab(sid), own=True)
             for notice in done.notices:
                 self.emit(notice)
             if not done.ok:
@@ -807,6 +916,10 @@ class Hub:
         refs move to it, and this session is told which. What can be checked at once is; the
         worktree and the transcript's copy, which can take a while, are made on a worker
         thread (forking), and what happened then is announced."""
+        try:
+            self.store.check_busy(sid, "fork")
+        except Refused as e:
+            return Done(False).say(str(e), "warning")
         s = self.row(sid)
         name = f"{display_name(s)} (fork)"
         how = runner(s) if runner(s) == "tab" or self.sdk else "tab"
@@ -892,6 +1005,7 @@ class Hub:
         try:
             (launch.open_host if how == "sdk" else launch.open_tab)(self.store, new, notice=False)
         except Exception as e:   # wt.exe missing...: the fork stays, to Relaunch
+            self.store.fail_launch(new)
             self.announce(f"forked {name}, but it didn't start: {e}. Relaunch it", "error", sid=sid)
             return
         self.announce(f"forked {display_name(s)} as {name}"
@@ -953,9 +1067,8 @@ class Hub:
     def force(self, sid: str, what: str) -> Done:
         """Park or Forget now, without the session's own steps: a running one is stopped
         first (stop_process), then parked or its row deleted."""
-        s = self.row(sid)
-        if what != "end":   # Stop & Forget's "Just stop it" goes, and the cycle with the session
-            self.store.check_compacting(sid, "park")
+        s = self.row(sid)   # Park now and "Just stop it": Interrupt is the way out of an operation (Q245)
+        self.store.check_busy(sid, "park" if what != "end" else "stop and forget")
         try:
             self.stop_process(s)
         except OSError as e:
@@ -968,7 +1081,7 @@ class Hub:
 
     @refusable
     def unpark(self, sid: str) -> Done:
-        self.store.check_compacting(sid, "unpark")
+        self.store.check_busy(sid, "unpark")
         self.store.set_parked(sid, False)
         return Done()
 
@@ -1005,8 +1118,8 @@ class Hub:
                 return Done(False).say(str(e.args[0]), "warning")
             done.denied = True
             done.say(f"denied {target[1]}, with your message")
-        elif now or mode(s) == "immediate" or (compacting_now(s) and self.store.waits_on(*target)):
-            # during a cycle a call the notes turn waits on is answered at once: queueing is refused (#244)
+        elif now or mode(s) == "immediate" or (operating(s) and self.store.waits_on(*target)):
+            # mid-operation a call the session's turn waits on is answered at once (#244, #249)
             self.store.send(target[0], text, target[1])
             done.say(f"sent to {aimed(target)}{self.late(target[0])}")
             if mode(s) == "queued" and (drafts := self.store.drafts(target[0])):
@@ -1068,7 +1181,7 @@ class Hub:
             try:
                 if n := self.store.dispatch(sid):
                     sent.append((sid, n))
-            except Compacting as e:   # its queue waits for the cycle's end (#244)
+            except Busy as e:   # its queue waits for the operation's end (#244, #249)
                 refused.append(str(e))
         if sent:
             done = Done().say("sent " + "; ".join(self.sent_note(sid, n) for sid, n in sent))
@@ -1104,6 +1217,13 @@ class Hub:
             s = self.listed(sid)
         except SessionGone:
             return Done(False)
+        if what == "interrupt" and (done := self.abort_launch(sid, s)) is not None:   # hub-driven: here (#249)
+            return done
+        if what == "interrupt" and (aborted := self.store.abort(sid)) is not None:   # Q245: the op, nothing else
+            if aborted == ("handover", "opening"):
+                return Done(False).say(f"{display_name(s)} is being handed over to Claude Code in a shell already: "
+                                       "it can't be aborted now", "warning")
+            return Done().say(f"{display_name(s)}'s {ABORTED[aborted[0]]} aborted: it carries on as it was")
         if what == "compact" and (runner(s) != "sdk" or s["shell"] or not self.running(sid)):
             return Done(False).say(f"{display_name(s)} isn't running in the wheelhouse: nothing to {what}", "warning")
         if what == "compact" and needs_relaunch(s):   # its host would never end the cycle (#244)
@@ -1117,9 +1237,83 @@ class Hub:
                            "shell": "opening a terminal tab"}[what])
         stored = self.store.relaunches().get(sid)
         if what == "interrupt" and stored is not None and stored[2] is not None:
-            self.relaunch_under_way(sid, None)
+            self.relaunch_under_way(sid, None, ends="cancelled")
             done.say("its Relaunch, waiting on Compact, is cancelled: it stays as it is", "warning")
         return done
+
+    def abort_launch(self, sid: str, s) -> Done | None:
+        """Interrupt during a Relaunch stopping the host, or a launch starting (#249, section 4): done
+        here, never left as a command for a later host. Stopping: the signal can't be taken back, so
+        the new process is never started. Starting: the launch's op cancelled, its wake's send back
+        in the queue, and the new process stopped once it registers (sweep_ops). None for any other."""
+        if (op := self.store.abort_launch(sid)) is None:   # decided in the store, never on a stale row
+            return None
+        self.relaunching.pop(sid, None)   # the hub's memory of it goes with the store's
+        self.compacting.pop(sid, None)
+        self.lapsed.discard(sid)
+        if op[1] == "stopping":
+            return Done().say(f"{display_name(s)}'s Relaunch aborted: its host had been asked to stop, so it "
+                              "stays stopped")
+        return Done().say(f"{display_name(s)}'s {'Relaunch' if op[0] == 'relaunch' else 'start'} aborted: "
+                          "it stops as soon as it has started")
+
+    def run_command(self, sid: str, ref: str, text: str, send: bool) -> Done:
+        """Run, from a command item's dialog (#257): the text, checked again (quickshell.check_command),
+        written to a 0600 file under a random key, and a quick shell's tab opened in the session's
+        directory to run it (quickshell.run), its command line carrying only the database's path
+        and the key. Refused, never moved to home, if that directory is gone: a command in the
+        wrong repo is the failure to avoid. The item goes to run; unless the output is sent, with
+        a note of the run the session isn't sent (Store.ran)."""
+        item = self.store.item(sid, ref)
+        if item is None or item["kind"] != "command":
+            self.row(sid)   # SessionGone if that's why
+            return Done(False).say(f"no command {ref} in this session", "warning")
+        quickshell.check_command(text)
+        s = self.store.session(sid)
+        cwd, gone = self.shell_dir(sid)
+        if cwd is None:
+            return Done(False).say(f"{gone} is gone: {ref} wasn't run", "warning")
+        edited = text != item["body"]
+        db = self.store.path
+        key = quickshell.write(db, {"sid": sid, "ref": ref, "name": display_name(s), "cwd": cwd, "text": text,
+                                    "edited": edited, "want": bool(send)})
+        try:
+            launch.open_shell(self.store, cwd, f"{ref} {display_name(s)}",
+                              [sys.executable, "-m", "claude_wheelhouse", "shell", "--db", str(db), key], note=ref)
+        except (OSError, ValueError) as e:
+            (quickshell.shell_dir(db) / key).unlink(missing_ok=True)
+            return Done(False).say(f"couldn't open a shell: {e}", "error")
+        note = None if send else f"ran {time.strftime('%H:%M')}" + (", edited" if edited else "")
+        self.store.ran(sid, ref, note)
+        return Done().say(f"running {ref} in {cwd}" + (f": its output goes to {display_name(s)}" if send else ""))
+
+    def shell_dir(self, sid: str | None) -> tuple[str | None, str | None]:
+        """Where a quick shell for a session opens (#257): (directory, the one wanted if it's
+        gone). Its live directory, the newest transcript record's cwd (a session that cds into
+        a worktree works there), else the one it was started in; with no session, or that
+        directory gone, (None, it) for the caller to choose."""
+        s = self.store.session(sid) if sid else None
+        if s is None:
+            return None, None
+        want = transcript.live_cwd(sid) or s["cwd"]
+        return (want, None) if os.path.isdir(want) else (None, want)
+
+    def open_shell(self, sid: str | None) -> Done:
+        """Shell (#257): a new terminal tab with the person's login shell, in the session's
+        directory (shell_dir), else home with a notice naming the one gone. Not a session:
+        nothing tracks it, and nothing about the session changes."""
+        cwd, gone = self.shell_dir(sid)
+        s = self.store.session(sid) if sid else None
+        done = Done()
+        if cwd is None:
+            cwd = os.path.expanduser("~")
+            if gone:
+                done.say(f"{gone} is gone: the shell opens in {cwd}", "warning")
+        try:
+            launch.open_shell(self.store, cwd, display_name(s) if s else "shell")
+        except (OSError, ValueError) as e:
+            return Done(False).say(f"couldn't open a shell: {e}", "error")
+        return done.say(f"shell opened in {cwd}")
 
     # model and effort (.plan/model-effort.md)
 
@@ -1246,12 +1440,15 @@ class Hub:
             raise KeyError(f"no item {ref} in this session")
         if closed and standing(item) == "finished":
             return Done(False)
-        if status is not None and (item["kind"] not in ("question", "decision") or status not in STATUSES[item["kind"]]):
+        if status is not None and (item["kind"] not in ("question", "decision", "command")
+                                   or status not in STATUSES[item["kind"]]):
             raise ValueError(f"{ref} can't be reopened as {status}")
         if not closed:   # Ctrl+R: one deleted with its parent comes back too
             self.store.undelete(sid, ref)
         if item["kind"] == "decision":
             self.store.close_decision(sid, ref, closed, status)
+        elif item["kind"] == "command":
+            self.store.close_command(sid, ref, closed, status)
         elif item["kind"] in DISMISSABLE:
             self.store.dismiss(sid, ref, closed)
         else:
@@ -1388,7 +1585,7 @@ class Hub:
             sid = s["id"]
             follower = self.contexts.get(sid)
             snap = follower.snap if follower is not None and follower.ready else None
-            if snap is None or snap.last_at is None or runner(s) != "tab" or compacting_now(s):   # never mid-cycle (#244)
+            if snap is None or snap.last_at is None or runner(s) != "tab" or operating(s):   # never mid-operation (#244, #249)
                 self.warmth.pop(sid, None)
                 continue
             w = self.warmth.setdefault(sid, Warmth(snap.last_at, snap.last_at))
