@@ -9,12 +9,15 @@ from pathlib import Path
 from urllib.parse import parse_qsl
 
 from . import api, docroots
+from .hub import lifeless
 
 
 def facts(hub) -> list[dict]:
     """The hub's sessions as a module's daemon side sees them (api.Context.sessions): id,
-    name, whether it's running, its directory and the doc dirs it declared (set_doc_dirs)."""
+    name, whether it's running, whether it's dead and not parked (hub.lifeless, #252), its
+    directory and the doc dirs it declared (set_doc_dirs)."""
     return [{"id": s["id"], "name": s["name"], "running": hub.running(s["id"]),
+             "dead": lifeless(hub.shown_status(s["id"]), s["parked"]),
              "cwd": s["cwd"], "doc_dirs": docroots.declared(s["doc_dirs"])} for s in hub.sessions]
 
 

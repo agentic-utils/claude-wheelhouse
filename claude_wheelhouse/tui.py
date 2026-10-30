@@ -64,11 +64,11 @@ from textual.widgets import (
 )
 
 from . import api, away, callout, columns, docblocks, docroots, emoji, features, helper, models, ordering, prs, steps, subagents, transcript, transcript_usage, tutorial, whatsnew
-from .rows import KIND_COLOUR, KeepColours, RowTips, marked, plain
+from .rows import KIND_COLOUR, KeepColours, RowTips, faded, marked, plain
 from .callout import TourCallout
 from .client import LocalClient, Unreachable
 from .host import MCP_CONNECTOR, NUDGE_TOKENS, SHELL_OPENING
-from .hub import COMPACT_RELAUNCH_WAIT, VERBS, Done, wake_verb, compacting_now, state as hub_state, Event, aimed, display_name, host_context, short
+from .hub import COMPACT_RELAUNCH_WAIT, VERBS, Done, wake_verb, compacting_now, lifeless, state as hub_state, Event, aimed, display_name, host_context, short
 from .knurl import KnurlRender
 from .splitter import SlotSplitter, Splitter, fit
 from textual.css.scalar import Unit
@@ -1599,14 +1599,6 @@ class ItemList(SinkList):
             self.anchor = self.cursor_key()
         self.go(lambda i, n: i + step)
         self.extend_to(self.cursor_key())
-
-
-def faded(cells: tuple) -> tuple:
-    """A row's cells dimmed, whatever their own colours: its session is being compacted (#150)."""
-    out = tuple(c.copy() if isinstance(c, Text) else Text(str(c)) for c in cells)
-    for c in out:
-        c.stylize("dim")
-    return out
 
 
 class Compose(TextArea):
@@ -5337,6 +5329,10 @@ class WheelhouseApp(App):
         self.eye_frame = self.frame
         self.session_list.sweep(self.eye_frame)
 
+    def lifeless_sids(self) -> set[str]:
+        """The sessions dead and not parked (hub.lifeless), whose rows every pane dims (#252)."""
+        return {s["id"] for s in self.sessions if lifeless(self.shown_status(s["id"]), s["parked"])}
+
     def paint_sessions(self) -> None:
         """Every session: parked ones dimmed, at the foot of the list's room (they fall there
         as they park, and rise as they're unparked: Sink), so the buttons below still reach
@@ -5362,7 +5358,10 @@ class WheelhouseApp(App):
             # a parked session's questions wait for its unpark: dimmed and still, not calling (#210)
             q = (Text(str(s["open_questions"]), style="dim #ffd300" if s["parked"] else "bold #ffd300 blink")
                  if s["open_questions"] else "")
-            rows.append((s["id"], (dot, name, self.context_cell(s), q, unseen, queued, busy)))
+            cells = (name, self.context_cell(s), q, unseen, queued)
+            if lifeless(st, s["parked"]):   # dead, not parked: dimmed, its dot kept red (#252)
+                cells = faded(cells)
+            rows.append((s["id"], (dot, *cells, busy)))   # the eye's room drawn over as it is (sweep)
         # a long name widened its column and pushed ? and D past the pane's edge, scrolled out
         # of sight: it is cut to the room the others leave, at whatever width the pane is (#51)
         fits = table.name_room([cells for _, cells in rows])
@@ -5426,7 +5425,7 @@ class WheelhouseApp(App):
         if self.autocleanse and not self.show_finished:   # completed a while ago: off until Alt+V (#235)
             at, held = datetime.now(timezone.utc), under_way_parents(found, busy)
             found = [it for it in found if item_key(it) in held or not self.completed_hidden(it, busy, at)]
-        compacting = self.compacting()
+        compacting, dead = self.compacting(), self.lifeless_sids()
         keyed = self.ranked_keyed(found, processing, busy, names)
         cuts = self.cutoffs()
         table.locked = {key for key, it in keyed if self.locks(it, cuts)}
@@ -5454,6 +5453,8 @@ class WheelhouseApp(App):
             if conv in compacting:
                 cells = faded(cells)
                 table.locked.add(f"{conv}|")
+            elif conv in dead:   # its session dead, not parked: dimmed, still selectable (#252)
+                cells = faded(cells)
             conversations.append((f"{conv}|", cells))
         if self.filter_sid:
             rows_out += conversations
@@ -5485,7 +5486,9 @@ class WheelhouseApp(App):
                 cells = (pin, "", ref_text(it, child=True), shown, titled(it, "dim"))
             else:   # a subagent, tucked under its session's name
                 cells = (pin, name if nested == 0 else "", ref_text(it, child=True), shown, titled(it, "dim"))
-            if key_of[id(it)] in table.locked:   # dimmed, clicks and keys ignored, until it's compacted (#150)
+            # dimmed, clicks and keys ignored, until it's compacted (#150); or dimmed alone, its
+            # session dead and not parked (#252)
+            if key_of[id(it)] in table.locked or it["session_id"] in dead:
                 cells = faded(cells)
             rows_out.append((key_of[id(it)], cells))
             tips[key_of[id(it)]] = item_tip(it)
@@ -6374,8 +6377,9 @@ class WheelhouseApp(App):
         return self.filter_sid if any(s["id"] == self.filter_sid for s in self.sessions) else None
 
     def module_sessions(self) -> list[dict]:
+        dead = self.lifeless_sids()
         return [{"id": s["id"], "name": s["name"] or short(s["id"]), "running": self.running(s["id"]),
-                 "context": host_context(s), "cwd": s["cwd"], "doc_dirs": docroots.declared(s["doc_dirs"]),
+                 "dead": s["id"] in dead, "context": host_context(s), "cwd": s["cwd"], "doc_dirs": docroots.declared(s["doc_dirs"]),
                  **self.client.model_state(s)} for s in self.sessions]
 
     def set_effort(self, sid: str, effort: str) -> None:

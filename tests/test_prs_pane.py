@@ -1150,3 +1150,41 @@ async def test_picking_a_compacting_sessions_pr_in_the_pane(store, sid, github, 
         await on_pr(app, pilot, URL.format(109))
         await landed(app, pilot)
         assert app.selected == (sid, "PR109"), f"{desc}: compacted, picked as ever"
+
+
+def dimmed(cell) -> bool:
+    return "dim" in str(cell.style) or any("dim" in str(sp.style) for sp in cell.spans)
+
+
+@pytest.mark.anyio
+@pytest.mark.both
+@pytest.mark.parametrize("life, dim, desc", [
+    ("dead", True, "a dead session's PRs dim"),
+    ("live", False, "a live session's PRs stay bright"),
+    ("parked", False, "a parked session's PRs stay bright: parked is by intent"),
+    ("revived", False, "relaunched: its PRs brighten at once"),
+])
+async def test_a_dead_sessions_prs_are_dimmed_their_light_kept(store, sid, github, monkeypatch, life, dim, desc):
+    """#252: a session dead and not parked has its PR rows dimmed, each PR's light kept at full
+    strength so GitHub's state stays legible; a PR no session made never dims."""
+    from claude_wheelhouse import liveness
+    status = {"now": "live" if life == "live" else "dead"}
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: status["now"])
+    if life == "parked":
+        store.set_parked(sid, True)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settled(app, pilot)
+        if life == "revived":
+            assert dimmed(app.query_one("#pr-list").get_row_at(0)[0]), f"{desc}: dim first"
+            status["now"] = "live"
+            app.refresh_data()
+            await pilot.pause()
+            app.each_pane("tick")
+            await pilot.pause()
+        table = app.query_one("#pr-list")
+        keys = [str(table.ordered_columns[i].key.value) for i in range(len(table.columns))]
+        for i in range(table.row_count):
+            row = dict(zip(keys, table.get_row_at(i)))
+            assert dimmed(row["pr"]) == dim and dimmed(row["title"]) == dim, desc
+            assert not dimmed(row["light"]), f"{desc}: the light kept"

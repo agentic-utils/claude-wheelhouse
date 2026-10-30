@@ -319,6 +319,9 @@ FEATURES: tuple[Feature, ...] = (
             note="Every compaction, in a tab too, is a task in the inbox that follows it to done, failed or "
                  "dropped, and the conversation shows its stages as the trash compactor's walls closing in, "
                  "with the crew and the droids panicking while it runs."),
+    Feature("dead-dim", UNRELEASED, ADVANCED,
+            note="A dead session (not parked) keeps its red dot, and its rows dim everywhere: its session list row, "
+                 "its inbox items and conversation, its PRs (their lights kept bright) and the decisions only it looks at."),
 
 )
 
