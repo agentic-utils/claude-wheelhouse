@@ -2088,9 +2088,6 @@ class CompactButtons(Horizontal):
         return then_choice(self.query_one(RadioSet))
 
 
-HELD_RUN_ROWS: weakref.WeakKeyDictionary[Screen, list] = weakref.WeakKeyDictionary()   # each screen's RunButtons
-
-
 class RunButtons(Horizontal):
     """Over the answer box while the item in context is a command item not closed (#257): Run,
     which opens the command in RunCommand. A real button, never a segment of the item's text,
@@ -6733,13 +6730,14 @@ class WheelhouseApp(App):
         return under_way(button, s, self.statuses.get(s["id"], "dead"), s["id"] in self.relaunching)
 
     def bar_widgets(self, screen: Screen) -> tuple:
-        """A screen's send bar, answer hints, permission buttons, Compact question buttons and
-        answer boxes: held once its bar is there, as they're composed with it and live as long
-        as the screen."""
+        """A screen's send bar, answer hints, permission buttons, Compact question buttons, answer
+        boxes, Deny reasons and Run rows: held once its bar is there, as they're composed with it
+        and live as long as the screen."""
         held = self.held_bars.get(screen)
         if held is None:
             held = (next(iter(screen.query(SendBar)), None), list(screen.query(Hint)), list(screen.query(PermissionButtons)),
-                    list(screen.query(CompactButtons)), list(screen.query(Compose)), list(screen.query(DenyReason)))
+                    list(screen.query(CompactButtons)), list(screen.query(Compose)), list(screen.query(DenyReason)),
+                    list(screen.query(RunButtons)))
             if held[0] is not None:
                 self.held_bars[screen] = held
         return held
@@ -6749,7 +6747,7 @@ class WheelhouseApp(App):
         answer box: a permission is answered by its buttons alone), Compact question buttons
         and activity of the session in context there; a full-screen item's bar also has its
         session's conversation buttons."""
-        bar, hints, permission_rows, compact_rows, boxes, reasons = self.bar_widgets(self.screen)
+        bar, hints, permission_rows, compact_rows, boxes, reasons, run_rows = self.bar_widgets(self.screen)
         if bar is None:
             return
         asking = self.asking(self.bar_item(self.screen)) is not None   # first: it settles
@@ -6796,10 +6794,7 @@ class WheelhouseApp(App):
         if doc_gone and not self.focus_answer():
             self.screen.set_focus(self.items_table)
         command = self.command_item(self.bar_item(self.screen))
-        rows = HELD_RUN_ROWS.get(self.screen)
-        if rows is None:   # held once found, as bar_widgets holds the rest: a repaint never queries
-            rows = HELD_RUN_ROWS[self.screen] = list(self.screen.query(RunButtons))
-        for row in rows:
+        for row in run_rows:
             if row.display != (command is not None):
                 row.display = command is not None
                 self.refit()
