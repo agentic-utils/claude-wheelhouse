@@ -759,7 +759,7 @@ def test_compact_first_never_asks_twice(hub, store, sid, monkeypatch, state, sen
     if sent:
         assert store.compaction(sid)["origin"] == "relaunch", desc
     else:
-        assert "is compacting: relaunch once it's done" in done.notices[0].text, desc
+        assert "is busy compacting: relaunch once it's done" in done.notices[0].text, desc
 
 
 def test_interrupt_cancels_compact_first_in_every_wheelhouse(store, sid, monkeypatch):
@@ -1567,7 +1567,6 @@ def in_cycle(store, sid, state="preparing"):
 
 
 @pytest.mark.parametrize("act, desc", [
-    (lambda h, sid: h.submit((sid, None), "hi"), "a queued answer"),
     (lambda h, sid: h.submit((sid, None), "hi", now=True), "Alt+S"),
     (lambda h, sid: h.send_queue(sid), "Ctrl+S"),
     (lambda h, sid: h.host_command(sid, "compact"), "Compact again"),
@@ -1587,20 +1586,23 @@ def test_a_refused_action_is_said_as_one_warning(hub, store, sid, monkeypatch, a
     hub.refresh()
     done = act(hub, sid)
     assert not done.ok and done.notices[0].severity == "warning", desc
-    assert "demo is compacting: " in done.notices[0].text and "or Interrupt to cancel the compaction." in \
+    assert "demo is busy compacting: " in done.notices[0].text and "or Interrupt to abort it." in \
         done.notices[0].text, desc
     assert len(store.drafts(sid)) == 1 and not store.pending(sid), f"{desc}: the queue as it was"
 
 
-def test_interrupt_and_just_stop_it_go_during_a_cycle(hub, store, sid, monkeypatch):
+def test_interrupt_goes_and_just_stop_it_is_refused_during_a_cycle(hub, store, sid, monkeypatch):
+    """Q245: Interrupt is the way out of an operation; Stop & Forget's "Just stop it" waits."""
     host(store, sid)
     monkeypatch.setattr(liveness, "is_alive", lambda pid, *a: True)
     monkeypatch.setattr(liveness, "status", lambda s, **kw: "live")
     in_cycle(store, sid)
     hub.refresh()
-    assert hub.host_command(sid, "interrupt").ok
     monkeypatch.setattr(Hub, "stop_process", staticmethod(lambda s: True))
-    assert hub.force(sid, "end").ok and store.session(sid) is None, "Just stop it: the session, cycle and all"
+    done = hub.force(sid, "end")
+    assert not done.ok and "busy compacting: stop and forget once it's done" in done.notices[0].text
+    assert store.session(sid) is not None, "Just stop it refused: the session stays"
+    assert hub.host_command(sid, "interrupt").ok
 
 
 def test_send_all_skips_a_compacting_session_and_names_it(hub, store, sid, tmp_path, monkeypatch):
@@ -1612,7 +1614,7 @@ def test_send_all_skips_a_compacting_session_and_names_it(hub, store, sid, tmp_p
     hub.refresh()
     done = hub.send_all()
     assert done.ok and [m["session_id"] for m in store.drafts()] == [sid]
-    assert any("demo is compacting" in n.text and n.severity == "warning" for n in done.notices), done.notices
+    assert any("demo is compacting in its tab" in n.text and n.severity == "warning" for n in done.notices), done.notices
 
 
 def test_an_answer_to_a_waiting_permission_goes_at_once_whatever_the_mode(hub, store, sid):
@@ -1678,7 +1680,7 @@ def test_park_with_compact_first_is_refused_in_a_tab(hub, store, sid, monkeypatc
     ("person", 30, "requested", "pressed 30 s ago, not yet claimed: within CLAIM_WITHIN"),
     ("person", 61, "failed", "unclaimed past CLAIM_WITHIN (an older or wedged host): failed, unlocked"),
     ("park", 61, "requested", "Park's waits for its park, an hour, not CLAIM_WITHIN"),
-    ("park", host_mod.PARK_COMPACT_WITHIN + 1, "failed", "Park's past its own deadline: failed"),
+    ("park", host_mod.PARK_WITHIN + 1, "failed", "Park's past its op's deadline: the op fails, its cycle with it"),
 ])
 def test_an_unclaimed_cycle_has_a_deadline(hub, store, sid, monkeypatch, origin, age, state, desc):
     from datetime import datetime, timedelta, timezone
@@ -1691,6 +1693,8 @@ def test_an_unclaimed_cycle_has_a_deadline(hub, store, sid, monkeypatch, origin,
         store.command(sid, "compact")
     at = (datetime.now(timezone.utc) - timedelta(seconds=age)).isoformat(timespec="microseconds")
     store.db.execute("UPDATE sessions SET compaction_at = ?", (at,))
+    if origin == "park":   # the op's deadline owns it (#249)
+        store.db.execute("UPDATE sessions SET op_deadline = ?", (at,) if age > host_mod.PARK_WITHIN else (None,))
     hub.refresh()
     assert store.compaction(sid)["state"] == state, desc
     assert len(store.drafts(sid)) == 1, f"{desc}: drafts stay queued"

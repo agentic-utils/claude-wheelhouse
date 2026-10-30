@@ -1118,6 +1118,7 @@ def test_a_pending_compact_request_dropped(store, sid, act, dropped, desc):
         store.set_runner(sid, "sdk")
         store.set_shell(sid, None)
         store.set_parked(sid, False)
+        store.abort(sid)   # a park or end asked is an operation (#249): Interrupt ends it
         store.request_compact(sid, "again")   # no gap left to refuse it
         assert store.session(sid)["compact_request"] == "again", f"{desc}: asked again at once"
 
@@ -1134,28 +1135,27 @@ def cycle_in(store, sid, state):
 
 REFUSED = [
     (lambda st, sid: st.send(sid, "hi"), "send", "Immediate send"),
-    (lambda st, sid: st.queue(sid, "hi"), "queue", "queueing"),
     (lambda st, sid: st.dispatch(sid), "send", "Ctrl+S, Send"),
     (lambda st, sid: st.dispatch_last(sid, "hi"), "send", "a wake's send"),
     (lambda st, sid: st.command(sid, "compact"), "compact", "Compact again"),
     (lambda st, sid: st.command(sid, "shell"), "open a shell tab", "Shell"),
     (lambda st, sid: st.request(sid, "park"), "park", "Park"),
     (lambda st, sid: st.request(sid, "end"), "stop and forget", "Stop & Forget's Let it know"),
-    (lambda st, sid: st.check_compacting(sid, "relaunch"), "relaunch", "Relaunch, Unpark (the hub's check)"),
+    (lambda st, sid: st.check_busy(sid, "relaunch"), "relaunch", "Relaunch, Unpark (the hub's check)"),
 ]
 
 
 @pytest.mark.parametrize("state", ["requested", "preparing", "compacting"])
 @pytest.mark.parametrize("act, action, desc", REFUSED)
 def test_a_compaction_cycle_refuses_every_write(store, sid, state, act, action, desc):
-    from claude_wheelhouse.store import Compacting
+    from claude_wheelhouse.store import Busy
     store.set_runner(sid, "sdk")   # a host's: a tab's is waited out, worded without Interrupt
     store.queue(sid, "queued before")
     cycle_in(store, sid, state)
     before = ([dict(m) for m in store.messages(sid)], dict(store.session(sid)))
-    with pytest.raises(Compacting) as e:
+    with pytest.raises(Busy) as e:
         act(store, sid)
-    assert str(e.value) == f"demo is compacting: {action} once it's done, or Interrupt to cancel the compaction.", desc
+    assert str(e.value) == f"demo is busy compacting: {action} once it's done, or Interrupt to abort it.", desc
     assert ([dict(m) for m in store.messages(sid)], dict(store.session(sid))) == before, f"{desc}: nothing written"
 
 
@@ -1174,7 +1174,7 @@ def test_an_ended_cycle_refuses_nothing(store, sid, state, act, action, desc):
     ("permission", None, "allowed", False, "a permission answered already"),
 ])
 def test_an_answer_to_a_waiting_call_goes_during_a_cycle(store, sid, kind, answer, status, allowed, desc):
-    from claude_wheelhouse.store import Compacting
+    from claude_wheelhouse.store import Busy
     ref = store.post_item(sid, kind, "may I?")
     if answer:
         store.set_answer(sid, ref, answer)
@@ -1184,7 +1184,7 @@ def test_an_answer_to_a_waiting_call_goes_during_a_cycle(store, sid, kind, answe
         store.send(sid, "yes", ref)
         assert store.pending(sid), desc
     else:
-        with pytest.raises(Compacting):
+        with pytest.raises(Busy):
             store.send(sid, "yes", ref)
 
 
@@ -1223,10 +1223,9 @@ def test_each_start_writes_requested_and_its_origin(store, sid, origin, how, des
     ("preparing", lambda st, sid: st.queue(sid, "back"), True, "notes asked for: a queue calls it off"),
     ("preparing", lambda st, sid: st.dispatch_last(sid, "back"), True, "a wake's send calls it off"),
     ("compacting", lambda st, sid: st.send(sid, "back"), False, "/compact sent: refused as any other"),
-    ("compacting", lambda st, sid: st.queue(sid, "back"), False, "/compact sent: queueing refused too"),
 ])
 def test_the_person_writing_in_calls_off_the_quiet_marks_cycle(store, sid, state, write, goes, desc):
-    from claude_wheelhouse.store import Compacting
+    from claude_wheelhouse.store import Busy
     cid = store.start_compaction(sid, "quiet")
     if state != "requested":
         store.move_compaction(sid, cid, state)
@@ -1234,7 +1233,7 @@ def test_the_person_writing_in_calls_off_the_quiet_marks_cycle(store, sid, state
         write(store, sid)
         assert store.compaction(sid)["state"] == "cancelled" and store.messages(sid), desc
     else:
-        with pytest.raises(Compacting):
+        with pytest.raises(Busy):
             write(store, sid)
         assert store.compaction(sid)["state"] == state, desc
         assert not [m for m in store.messages(sid) if m["author"] == "person"], f"{desc}: nothing of the person's"
@@ -1282,7 +1281,7 @@ def test_the_session_never_sees_its_compaction_task(store, sid):
 
 
 def test_a_tabs_refusal_never_offers_interrupt(store, sid):
-    from claude_wheelhouse.store import Compacting
+    from claude_wheelhouse.store import Busy
     store.start_compaction(sid, "auto", "compacting")   # its PreCompact hook
-    with pytest.raises(Compacting, match="^demo is compacting in its tab: send once it's done.$"):
+    with pytest.raises(Busy, match="^demo is compacting in its tab: send once it's done.$"):
         store.send(sid, "hi")

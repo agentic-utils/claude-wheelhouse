@@ -115,3 +115,14 @@ About store +180, hub +140 (relaunch's hub memory moves to the row), host +40, T
 ## 9. Open questions for Doug
 
 - **Q-a, the quiet mark's call-off.** On main, a person's send, queue or Ctrl+S cancels the quiet mark's own compaction before its `/compact` goes, and the write goes through (#244: the wheelhouse's own, and the person has come back). This design keeps that exception for dispatch. Should adding to the queue still call it off too? Recommended yes, as now: the person is back. No means queueing during the quiet mark's notes turn leaves it running, and only a send or Interrupt stops it.
+
+## 10. As built (PR 1: park, end, the guards and the eye)
+
+Where the build settled something the design left open, or departed from it:
+
+- **Stalled is only quiet.** A stalled session (no heartbeat for 2 minutes, but its process alive) keeps a `requested` or `told` park or end until `PARK_WITHIN`: the session list already treats a stalled session as a quiet one it asks. Only a session no longer running fails it at once. In `parking`, a stalled or dead host with the row parked completes it, as designed.
+- **The pending request's dialog loses Force (Alt+O).** A pending park or end is always an op, so Force would always be refused. Cancel stays: a tab session has no Interrupt, and Cancel ends the op as cancelled.
+- **`parking` has its own clock**: `PARK_WITHIN` from entering it, plus `COMPACT_TIMEOUT` when it compacts first. Past it the op fails and the session stays parked (it has parked; its host stops).
+- **The inner park cycle's own requested deadline** (`requested_expired`) stands aside while its park's op is active, so one sweep, the op's, fails both.
+- **The session's own calls refused mid-op** are the operation calls: `park_session` (but during its park), `end_session` (but during its end) and `request_compact`. Posting items and replying stay open.
+- **The quiet mark's cache-life check** (`cold_due`) keeps its hour as `CACHE_LIFE`: it was `PARK_COMPACT_WITHIN`'s second use.

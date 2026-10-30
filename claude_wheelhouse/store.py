@@ -99,7 +99,11 @@ DECISION_FIELDS = (("why", "Why"),)
 # 25: the compaction cycle's task item (COMPACTION_TASK), which the session must never see: an older
 # MCP server lists it (list_items) and an older reminder after compaction names it; and the tab
 # plugin's PreCompact hook (compaction-start), which an older tab doesn't have.
-PROTOCOL_VERSION = 25
+# 26: an operation's row (#249, sessions.op*): from the press of Park, Stop & Forget and the other
+# wheelhouse-driven operations to their end the session is blue, its dispatch and other operations are
+# refused, and end_session is refused but during its own Stop & Forget. An older MCP server ends a
+# session mid-operation, and an older host keeps it warm.
+PROTOCOL_VERSION = 26
 # the least time between two compactions a session asks for itself (request_compact), so a
 # confused one can't loop: seconds since its last accepted request
 MODEL_COMPACT_GAP = 30 * 60
@@ -133,7 +137,7 @@ DEFAULT_THEN = "send"
 COMPACT_QUESTION = '{"from": "context nudge"}'
 # the compaction cycle (#244, .plan/244-compaction-cycle.md): a session's compaction, by any route,
 # from the press to /compact's end (sessions.compaction). While it is active every write a person
-# makes to the session is refused (Compacting), but Interrupt and an answer to a call the notes
+# makes to the session is refused (Busy), but Interrupt and an answer to a call the notes
 # turn waits on; the host makes every move after requested, and ends it
 COMPACTION_ACTIVE = ("requested", "preparing", "compacting")
 COMPACTION_ENDS = ("completed", "failed", "cancelled")
@@ -144,8 +148,24 @@ COMPACTION_ORIGINS = ("person", "model", "relaunch", "park", "quiet", "auto")
 PARK_REFUSED = ("this session is being compacted, and can't park until that has finished: end your turn, and "
                 "call park_session again once the compaction is done")
 COMPACTING_IN_TAB = "{name} is compacting in its tab: {action} once it's done."
+# an operation the wheelhouse drives (#249, .plan/249-ops-blue.md, sessions.op*): its kind, its active
+# states and its ends. The row is the lock and the clock, never a command: nothing starts because it exists
+OPS = ("park", "end", "relaunch", "start", "handover")
+OP_ACTIVE = ("requested", "told", "parking", "stopping", "starting", "opening")
+OP_ENDS = ("completed", "failed", "cancelled")
+# what a busy session is doing, by its operation's kind (operating), for the refusal and the notices
+OP_DOING = {"compact": "compacting", "park": "parking", "end": "being stopped and forgotten",
+            "relaunch": "relaunching", "start": "starting", "handover": "opening a shell tab"}
+# seconds a Park or Stop & Forget has from its press to the session acting on it (Q243): past it the
+# operation fails, and the session carries on as it was
+PARK_WITHIN = 15 * 60
+# seconds /compact may run before its cycle fails (host.py's clock); a park compacting first has that
+# besides PARK_WITHIN, as it parks before it compacts
+COMPACT_TIMEOUT = 600
+BUSY_REFUSED = "{name} is busy {doing}: {action} once it's done, or Interrupt to abort it."
+# said to the session itself, refusing its own call mid-operation
+SESSION_BUSY = "this session is busy {doing}: call {call} again once that has finished"
 NOT_THE_SESSIONS = "{ref} is the wheelhouse's own record of a compaction: there's no session to send it to"
-COMPACTING_REFUSED = "{name} is compacting: {action} once it's done, or Interrupt to cancel the compaction."
 # the cycle's task item (#244), the wheelhouse's own: never in what the session is told or lists
 COMPACTION_TASK = '{"from": "compaction"}'
 # the task item's status at each state, and its note there ({origin}, {why}: stage notes)
@@ -434,7 +454,11 @@ ADDED_COLUMNS = [("sessions", "end_requested_at", "TEXT"), ("sessions", "park_re
                  # (COMPACTION_ORIGINS), what follows it (THEN), when the state was entered (UTC) and its task item
                  ("sessions", "compaction", "TEXT"), ("sessions", "compaction_id", "TEXT"),
                  ("sessions", "compaction_origin", "TEXT"), ("sessions", "compaction_then", "TEXT"),
-                 ("sessions", "compaction_at", "TEXT"), ("sessions", "compaction_item", "TEXT")]
+                 ("sessions", "compaction_at", "TEXT"), ("sessions", "compaction_item", "TEXT"),
+                 # the operation under way (#249, OPS): its kind, state (OP_ACTIVE, OP_ENDS), id, who began it,
+                 # when the state was entered and its absolute deadline (both UTC). The last one stays till the next
+                 ("sessions", "op", "TEXT"), ("sessions", "op_state", "TEXT"), ("sessions", "op_id", "TEXT"),
+                 ("sessions", "op_origin", "TEXT"), ("sessions", "op_at", "TEXT"), ("sessions", "op_deadline", "TEXT")]
 # older databases may also carry sessions.transcript_title and sessions.renamed_at,
 # from a /rename pickup since dropped, and items.seq (RETIRED_TRIGGER): unused, and left in place
 DECISIONS_CLOSE = "migrated_decisions_close"   # settings: the one-off migration above has run
@@ -468,12 +492,14 @@ class Refused(ValueError):
     """A person's write the store refuses, said as a warning (Hub.refusable)."""
 
 
-class Compacting(Refused):
-    """Refused: the session is in a compaction cycle (COMPACTION_ACTIVE). In a tab, which has no
-    Interrupt, it is waited out (tab)."""
+class Busy(Refused):
+    """Refused: the session is in an operation (operating), its kind in `kind`. A compaction in a
+    tab, which has no Interrupt, is waited out (tab)."""
 
-    def __init__(self, name: str, action: str, tab: bool = False):
-        super().__init__((COMPACTING_IN_TAB if tab else COMPACTING_REFUSED).format(name=name, action=action))
+    def __init__(self, name: str, action: str, kind: str = "compact", tab: bool = False):
+        self.kind = kind
+        super().__init__(COMPACTING_IN_TAB.format(name=name, action=action) if tab and kind == "compact"
+                         else BUSY_REFUSED.format(name=name, doing=OP_DOING[kind], action=action))
 
 
 def session_name(s) -> str:
@@ -519,10 +545,26 @@ def compacting_now(s) -> bool:
     return (s["compaction"] if "compaction" in s.keys() else None) in COMPACTION_ACTIVE
 
 
+def operating(s) -> tuple[str, str] | None:
+    """The session's operation under way (#249), as (kind, state): its op row if active, else its
+    compaction cycle (kind compact); None for neither. One answer for blue, for every refusal and for
+    the keepalives. An outer op (Park or Relaunch compacting first) owns the lock over its inner cycle."""
+    if models_field(s, "op") in OPS and models_field(s, "op_state") in OP_ACTIVE:
+        return s["op"], s["op_state"]
+    return ("compact", s["compaction"]) if compacting_now(s) else None
+
+
+def op_overdue(s) -> bool:
+    """Whether the session's active op is past its deadline (op_deadline, UTC). Read only."""
+    return (models_field(s, "op_state") in OP_ACTIVE and bool(models_field(s, "op_deadline"))
+            and datetime.now(timezone.utc) > datetime.fromisoformat(s["op_deadline"]))
+
+
 # how long a cycle may stay requested before a host claims it (moves it on, at its next poll:
 # the claim, never the notes turn starting, so a session in a long turn never fails); past it the
 # cycle fails (a host that can't drive it: older code, wedged). Park's Compact first waits for
-# its park instead, PARK_COMPACT_WITHIN (host.py), passed in as park_within
+# its park instead, PARK_WITHIN, passed in as park_within; while its park's op is active, the op's
+# deadline owns it (Hub.sweep_ops), so the two never race
 CLAIM_WITHIN = 60
 
 
@@ -531,9 +573,16 @@ def requested_expired(s, park_within: float) -> float | None:
     expire it with (Store.expire_requested); None otherwise. Read only: no write lock taken."""
     if models_field(s, "compaction") != "requested" or not models_field(s, "compaction_at"):
         return None
+    if s["compaction_origin"] == "park" and (operating(s) or ("", ""))[0] == "park":
+        return None
     within = park_within if s["compaction_origin"] == "park" else CLAIM_WITHIN
     age = (datetime.now(timezone.utc) - datetime.fromisoformat(s["compaction_at"])).total_seconds()
     return within if age > within else None
+
+
+def due(within: float) -> str:
+    """An absolute deadline, `within` seconds from now (UTC), as op_deadline holds it."""
+    return (datetime.now(timezone.utc) + timedelta(seconds=within)).isoformat(timespec="microseconds")
 
 
 def models_field(s, key: str):
@@ -800,7 +849,7 @@ class Store:
         instructions for it (notes: the session isn't asked what to keep) and what follows it
         (THEN; None, as before: its open items, as after any compaction). Compact starts the
         compaction cycle (requested, origin), in the same transaction. During a cycle only
-        Interrupt goes (Compacting): it is the host's to end the cycle as cancelled."""
+        Interrupt goes (Busy): it is the host's to end the cycle as cancelled."""
         if what not in HOST_COMMANDS:
             raise ValueError(f"command must be one of {', '.join(HOST_COMMANDS)}, not {what!r}")
         if then is not None and then not in THEN:
@@ -808,7 +857,7 @@ class Store:
         plan = json.dumps({"notes": notes or None, "then": then}) if what == "compact" else None
         with self.tx() as db:
             if what != "interrupt":
-                self.refuse_compacting(db, sid, "compact" if what == "compact" else "open a shell tab")
+                self.refuse_busy(db, sid, "compact" if what == "compact" else "open a shell tab")
             self._require(db, sid)
             db.execute("UPDATE sessions SET host_command = ?, compact_plan = ? WHERE id = ?", (what, plan, sid))
             if what == "compact":
@@ -817,20 +866,30 @@ class Store:
     # the compaction cycle (#244)
 
     @staticmethod
-    def refuse_compacting(db, sid: str, action: str, person: bool = False) -> None:
-        """Inside a write: Compacting if the session is in a compaction cycle, SessionGone if gone.
-        person: a send or queue of the person's, which calls off the quiet mark's cycle (origin
-        quiet, the wheelhouse's own) until its /compact has gone: cancelled here, and its host
-        interrupts the notes turn (Host.cycle_due); the write then goes as normal."""
+    def refuse_busy(db, sid: str, action: str, person: bool = False) -> None:
+        """Inside a write: Busy if the session is in an operation (operating, #249), SessionGone if
+        gone. The one check for every dispatch and every operation. person: a send of the person's,
+        which first calls off the quiet mark's cycle (call_off_quiet); the write then goes as normal."""
         s = db.execute("SELECT * FROM sessions WHERE id = ?", (sid,)).fetchone()
         if s is None:
             raise SessionGone(sid)
-        if person and s["compaction_origin"] == "quiet" and s["compaction"] in ("requested", "preparing"):
-            db.execute("UPDATE sessions SET compaction = 'cancelled', compaction_at = ? WHERE id = ?", (stamp(), sid))
-            db.execute("DELETE FROM settings WHERE key = ?", (COMPACT_CUTOFF + sid,))
-            Store.staged(db, sid, "cancelled", "you wrote in, so it was called off")
-        elif compacting_now(s):
-            raise Compacting(session_name(s), action, tab=runner(s) != "sdk" or bool(s["shell"]))
+        if person and Store.call_off_quiet(db, s):
+            return
+        if (op := operating(s)) is not None:
+            raise Busy(session_name(s), action, op[0], tab=runner(s) != "sdk" or bool(s["shell"]))
+
+    @staticmethod
+    def call_off_quiet(db, s) -> bool:
+        """The person has written in (a send or a queue): the quiet mark's cycle (origin quiet, the
+        wheelhouse's own) is called off until its /compact has gone, cancelled here, and its host
+        interrupts the notes turn (Host.cycle_due) (#244, D230). Whether it was."""
+        if not (s["compaction_origin"] == "quiet" and s["compaction"] in ("requested", "preparing")
+                and (operating(s) or ("", ""))[0] == "compact"):
+            return False
+        db.execute("UPDATE sessions SET compaction = 'cancelled', compaction_at = ? WHERE id = ?", (stamp(), s["id"]))
+        db.execute("DELETE FROM settings WHERE key = ?", (COMPACT_CUTOFF + s["id"],))
+        Store.staged(db, s["id"], "cancelled", "you wrote in, so it was called off")
+        return True
 
     @staticmethod
     def drop_park_cycle(db, sid: str) -> None:
@@ -879,11 +938,98 @@ class Store:
                        "park_keep = NULL WHERE id = ?", (sid,))
             self.drop_park_cycle(db, sid)
 
-    def check_compacting(self, sid: str, action: str) -> None:
-        """Compacting if the session is in a compaction cycle: for the hub's actions that are
-        more than one write (Relaunch, Unpark, Park now), checked before the first."""
+    def check_busy(self, sid: str, action: str) -> None:
+        """Busy if the session is in an operation (refuse_busy): for the hub's actions that are
+        more than one write (Relaunch, Unpark, Park now, Fork), checked before the first."""
         with self.tx() as db:
-            self.refuse_compacting(db, sid, action)
+            self.refuse_busy(db, sid, action)
+
+    # the operation's row (#249): written only by the store methods that own its payload, in their transaction
+
+    @staticmethod
+    def begin_op(db, sid: str, kind: str, state: str, origin: str, within: float) -> str:
+        """A new operation in state, due to end within `within` seconds: its id."""
+        assert kind in OPS and state in OP_ACTIVE
+        oid = secrets.token_hex(4)
+        db.execute("UPDATE sessions SET op = ?, op_state = ?, op_id = ?, op_origin = ?, op_at = ?, op_deadline = ? "
+                   "WHERE id = ?", (kind, state, oid, origin, stamp(), due(within), sid))
+        return oid
+
+    @staticmethod
+    def move_op(db, sid: str, kind: str, state: str, within: float | None = None, since: tuple = OP_ACTIVE,
+                oid: str | None = None) -> bool:
+        """The session's active op of this kind (and id, given one), in one of `since`, enters state;
+        an active state with a new deadline (within), else the old one stands. Whether it moved."""
+        assert state in OP_ACTIVE + OP_ENDS
+        return db.execute(f"UPDATE sessions SET op_state = ?, op_at = ?, op_deadline = coalesce(?, op_deadline) "
+                          f"WHERE id = ? AND op = ? AND op_state IN ({', '.join('?' * len(since))}) "
+                          f"AND (? IS NULL OR op_id = ?)",
+                          (state, stamp(), None if within is None else due(within), sid, kind, *since, oid, oid)
+                          ).rowcount == 1
+
+    def op(self, sid: str) -> sqlite3.Row | None:
+        """The session's operation as the store holds it: kind, state, id, origin, at, deadline."""
+        return self._one("SELECT op AS kind, op_state AS state, op_id AS id, op_origin AS origin, op_at AS at, "
+                         "op_deadline AS deadline FROM sessions WHERE id = ?", (sid,))
+
+    @staticmethod
+    def unpark_request(db, sid: str, what: str, s, ends: str = "cancelled", why: str = "the park was called off") -> None:
+        """A park or end request goes, with Compact first and any inner cycle (ended as `ends`); a session
+        that was told hears the cancel message, so it can't park or end late. The op's end is the caller's."""
+        db.execute(f"UPDATE sessions SET {what}_requested_at = NULL, {what}_told_at = NULL WHERE id = ?", (sid,))
+        if what == "park":
+            db.execute("UPDATE sessions SET park_compact = 0, park_keep = NULL WHERE id = ?", (sid,))
+            if s["compaction_origin"] == "park" and compacting_now(s):
+                db.execute("UPDATE sessions SET compaction = ?, compaction_at = ? WHERE id = ?", (ends, stamp(), sid))
+                db.execute("DELETE FROM settings WHERE key = ?", (COMPACT_CUTOFF + sid,))
+                Store.drop_compact_command(db, sid)
+                Store.staged(db, sid, ends, why)
+        if s[f"{what}_told_at"] or (what == "park" and s["op_state"] == "parking"):
+            db.execute("INSERT INTO messages (session_id, author, body, created_at) VALUES (?, 'person', ?, ?)",
+                       (sid, f"The person cancelled the {what} request: carry on as before.", now()))
+
+    def fail_op(self, sid: str, oid: str, why: str) -> sqlite3.Row | None:
+        """A park or end past its deadline, or whose host has died or stalled, fails (Hub.sweep_ops):
+        only that op, only while active, its request and inner cycle cleared in the same transaction.
+        A parking session stays parked (it has, and its host stops). The row before, if it failed."""
+        with self.tx() as db:
+            s = db.execute("SELECT * FROM sessions WHERE id = ? AND op_id = ?", (sid, oid)).fetchone()
+            if s is None or s["op_state"] not in OP_ACTIVE or s["op"] not in REQUESTS:
+                return None
+            if s["op_state"] == "parking":
+                if s["compaction_origin"] == "park" and compacting_now(s):
+                    db.execute("UPDATE sessions SET compaction = 'failed', compaction_at = ? WHERE id = ?", (stamp(), sid))
+                    db.execute("DELETE FROM settings WHERE key = ?", (COMPACT_CUTOFF + sid,))
+                    self.staged(db, sid, "failed", why)
+            else:
+                self.unpark_request(db, sid, s["op"], s, "failed", why)
+            self.move_op(db, sid, s["op"], "failed", oid=oid)
+        return s
+
+    def complete_op(self, sid: str, oid: str, since: tuple = ("parking",)) -> bool:
+        """The hub has seen the op's end (a park: parked, its process gone). Whether it completed."""
+        with self.tx() as db:
+            s = db.execute("SELECT op FROM sessions WHERE id = ? AND op_id = ?", (sid, oid)).fetchone()
+            return s is not None and self.move_op(db, sid, s["op"], "completed", since=since, oid=oid)
+
+    def abort(self, sid: str) -> tuple[str, str] | None:
+        """Interrupt during a park or end (#249, Q245): the op cancelled and the session left as it
+        was before the press, as nearly as its state allows, in one transaction. Requested: nothing
+        was said, nothing is. Told: the session hears the cancel message. Parking: unparked, its
+        Compact first and inner cycle cancelled, and it hears the cancel message. Told or parking,
+        a running host is also asked to interrupt the turn or /compact (the only command left).
+        The (kind, state) aborted, or None when no park or end was under way."""
+        with self.tx() as db:
+            s = db.execute("SELECT * FROM sessions WHERE id = ?", (sid,)).fetchone()
+            if s is None or (op := operating(s)) is None or op[0] not in REQUESTS:
+                return None
+            self.unpark_request(db, sid, op[0], s)
+            if op[1] == "parking":
+                db.execute("UPDATE sessions SET parked = 0 WHERE id = ?", (sid,))
+            self.move_op(db, sid, op[0], "cancelled")
+            if op[1] != "requested" and runner(s) == "sdk" and not s["shell"]:
+                db.execute("UPDATE sessions SET host_command = 'interrupt', compact_plan = NULL WHERE id = ?", (sid,))
+        return op
 
     @staticmethod
     def begin_cycle(db, sid: str, origin: str, state: str, then: str | None = None, tokens: int | None = None) -> str:
@@ -931,6 +1077,9 @@ class Store:
         with self.tx() as db:
             s = db.execute("SELECT * FROM sessions WHERE id = ?", (sid,)).fetchone()
             if s is None or compacting_now(s):
+                return None
+            # inside another operation, only its own (a park's) or Claude Code's, which runs anyway (#249)
+            if (op := operating(s)) is not None and not (origin == "auto" or (origin == "park" and op[0] == "park")):
                 return None
             return self.begin_cycle(db, sid, origin, state, then, tokens)
 
@@ -990,6 +1139,8 @@ class Store:
                 raise ValueError("a compaction you asked for is already pending: it runs once this turn ends")
             if compacting_now(s):
                 raise ValueError("this session is being compacted already")
+            if (op := operating(s)) is not None:
+                raise ValueError(SESSION_BUSY.format(doing=OP_DOING[op[0]], call="request_compact"))
             last = s["compact_requested_at"]
             ago = (datetime.now(timezone.utc) - datetime.fromisoformat(last)).total_seconds() if last else None
             if ago is not None and ago < gap:
@@ -1004,7 +1155,7 @@ class Store:
         Compact with them. Left alone while another command waits for the host. Whether it did."""
         with self.tx() as db:
             row = db.execute("SELECT * FROM sessions WHERE id = ?", (sid,)).fetchone()
-            if not row or row["compact_request"] is None or row["host_command"] is not None or compacting_now(row):
+            if not row or row["compact_request"] is None or row["host_command"] is not None or operating(row):
                 return False
             db.execute("UPDATE sessions SET compact_request = NULL, host_command = 'compact', compact_plan = ? "
                        "WHERE id = ?", (json.dumps({"notes": row["compact_request"], "then": "compact"}), sid))
@@ -1147,6 +1298,8 @@ class Store:
             db.execute("""UPDATE sessions SET launched_at = ?, launched_over = claude_start,
                           end_requested_at = NULL, park_requested_at = NULL, end_told_at = NULL, park_told_at = NULL
                           WHERE id = ?""", (now(), sid))
+            for what in REQUESTS:   # their op fails with them (#249)
+                self.move_op(db, sid, what, "failed")
 
     def register(self, sid: str, pid: int, start: int, boot_id: str) -> None:
         with self.tx() as db:
@@ -1182,9 +1335,10 @@ class Store:
         may ask a host to compact the session once it has parked, before it stops (compact)."""
         assert what in REQUESTS
         with self.tx() as db:
-            self.refuse_compacting(db, sid, "park" if what == "park" else "stop and forget")
+            self.refuse_busy(db, sid, "park" if what == "park" else "stop and forget")
             db.execute(f"UPDATE sessions SET {what}_requested_at = coalesce({what}_requested_at, ?) "
                        "WHERE id = ?", (stamp(), sid))
+            self.begin_op(db, sid, what, "requested", "person", PARK_WITHIN)
             self.unrequest_compact(db, sid)
             if what == "park":
                 db.execute("UPDATE sessions SET park_compact = ?, park_keep = NULL WHERE id = ?",
@@ -1203,13 +1357,17 @@ class Store:
         """The monitor is about to pass a request on: record that, only if it is still the
         current request (a cancel may have just cleared it). Returns whether to print it."""
         with self.tx() as db:
-            return db.execute(f"UPDATE sessions SET {what}_told_at = ? WHERE id = ? "
+            told = db.execute(f"UPDATE sessions SET {what}_told_at = ? WHERE id = ? "
                               f"AND {what}_requested_at = ?", (asked, sid, asked)).rowcount == 1
+            if told:
+                self.move_op(db, sid, what, "told", since=("requested",))
+            return told
 
     def untell_request(self, sid: str, what: str) -> None:
         """Printing the request failed: it was never passed on after all."""
         with self.tx() as db:
             db.execute(f"UPDATE sessions SET {what}_told_at = NULL WHERE id = ?", (sid,))
+            self.move_op(db, sid, what, "requested", since=("told",))
 
     def cancel_request(self, sid: str, what: str) -> None:
         """Clear a request. Only a session that was told about it hears that it's cancelled."""
@@ -1222,6 +1380,7 @@ class Store:
             if what == "park":
                 db.execute("UPDATE sessions SET park_compact = 0, park_keep = NULL WHERE id = ?", (sid,))
                 self.drop_park_cycle(db, sid)
+            self.move_op(db, sid, what, "cancelled", since=("requested", "told"))
             if told:
                 db.execute(
                     "INSERT INTO messages (session_id, author, body, created_at) VALUES (?, 'person', ?, ?)",
@@ -1276,9 +1435,13 @@ class Store:
             s = db.execute("SELECT * FROM sessions WHERE id = ?", (sid,)).fetchone()
             if s is None:
                 raise SessionGone(sid)
-            # refused during a compaction cycle (#244), but Park's own with Compact first, whose park this is
-            if compacting_now(s) and not (s["compaction_origin"] == "park" and s["compaction"] == "requested"):
+            # refused during a compaction cycle (#244), but Park's own with Compact first, whose park this is,
+            # and during any other operation (#249) but the person's Park, which this answers
+            op = operating(s)
+            if op is not None and op[0] == "compact" and not (s["compaction_origin"] == "park" and s["compaction"] == "requested"):
                 raise ValueError(PARK_REFUSED)
+            if op is not None and op[0] not in ("compact", "park"):
+                raise ValueError(SESSION_BUSY.format(doing=OP_DOING[op[0]], call="park_session"))
             asked = s["park_requested_at"] is not None
             if not hosted:
                 compact = False
@@ -1294,7 +1457,20 @@ class Store:
             self.unrequest_compact(db, sid)
             if not compact:
                 self.drop_park_cycle(db, sid)
+            # parking until its process has gone (Hub.sweep_ops); compacting, under the cycle's own clock
+            within = PARK_WITHIN + COMPACT_TIMEOUT if compact else PARK_WITHIN
+            if not self.move_op(db, sid, "park", "parking", within, since=("requested", "told")):
+                self.begin_op(db, sid, "park", "parking", "session", within)
         return compact
+
+    def end_session(self, sid: str) -> None:
+        """The session forgets itself (end_session): refused during any operation (#249) but the
+        person's Stop & Forget, which this answers."""
+        with self.tx() as db:
+            s = db.execute("SELECT * FROM sessions WHERE id = ?", (sid,)).fetchone()
+            if s is not None and (op := operating(s)) is not None and op[0] != "end":
+                raise ValueError(SESSION_BUSY.format(doing=OP_DOING[op[0]], call="end_session"))
+        self.end(sid)
 
     def end(self, sid: str) -> None:
         with self.tx() as db:
@@ -1941,12 +2117,12 @@ class Store:
     def send(self, sid: str, body: str, item_ref: str | None = None) -> None:
         """A message from the person, sent now; the session's monitor delivers it. An answer
         to an unseen decision marks it seen, in the same transaction (_mark_seen). Refused
-        during a compaction cycle (Compacting), but an answer to a call the notes turn waits on
+        during a operation (Busy), but an answer to a call the notes turn waits on
         (waited_on), so it can't wedge on its own prompt."""
         with self.tx() as db:
             self.refuse_wheelhouse_item(db, sid, item_ref)
             if not self.waited_on(db, sid, item_ref):
-                self.refuse_compacting(db, sid, "send", person=True)
+                self.refuse_busy(db, sid, "send", person=True)
             self._require(db, sid)
             self._mark_seen(db, sid, item_ref)
             db.execute(
@@ -1988,11 +2164,12 @@ class Store:
 
     def queue(self, sid: str, body: str, item_ref: str | None = None) -> None:
         """A message from the person, held as a draft until dispatch() sends it. An answer to
-        an unseen decision marks it seen, in the same transaction (_mark_seen). Refused during a
-        compaction cycle (Compacting)."""
+        an unseen decision marks it seen, in the same transaction (_mark_seen). Allowed during any
+        operation (Q244): only dispatch waits. It still calls off the quiet mark's cycle (call_off_quiet)."""
         with self.tx() as db:
             self.refuse_wheelhouse_item(db, sid, item_ref)
-            self.refuse_compacting(db, sid, "queue", person=True)
+            self._require(db, sid)
+            self.call_off_quiet(db, db.execute("SELECT * FROM sessions WHERE id = ?", (sid,)).fetchone())
             self._mark_seen(db, sid, item_ref)
             db.execute("INSERT INTO messages (session_id, item_ref, author, body, created_at, draft) "
                        "VALUES (?, ?, 'person', ?, ?, 1)", (sid, item_ref, body, now()))
@@ -2010,10 +2187,10 @@ class Store:
     def dispatch(self, sid: str) -> int:
         """Send the session's drafts together, in one transaction: the monitor claims every sent
         message at once, so the session never sees part of a batch. Returns how many went.
-        Refused during a compaction cycle (Compacting): its host sends them once it has
+        Refused during a operation (Busy): its host sends them once it has
         completed, with then send."""
         with self.tx() as db:
-            self.refuse_compacting(db, sid, "send", person=True)
+            self.refuse_busy(db, sid, "send", person=True)
             sent = db.execute("UPDATE messages SET draft = 0 WHERE session_id = ? AND draft = 1 RETURNING id",
                               (sid,)).fetchall()
         return len(sent)
@@ -2024,10 +2201,10 @@ class Store:
         notice its launch left first, then the person's words, oldest first, in the one batch
         the monitor or host claims. The drafts are sent as new rows, so their order follows the
         notice's; each keeps its text, item and time. Returns how many went. Refused during a
-        compaction cycle (Compacting), and on a compaction's task item (Refused)."""
+        operation (Busy), and on a compaction's task item (Refused)."""
         with self.tx() as db:
             self.refuse_wheelhouse_item(db, sid, item_ref)
-            self.refuse_compacting(db, sid, "send", person=True)
+            self.refuse_busy(db, sid, "send", person=True)
             moved = db.execute("INSERT INTO messages (session_id, item_ref, author, body, created_at, kind) "
                                "SELECT session_id, item_ref, author, body, created_at, kind FROM messages "
                                "WHERE session_id = ? AND draft = 1 ORDER BY id", (sid,)).rowcount

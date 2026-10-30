@@ -1986,8 +1986,6 @@ async def burst_outcome(store, tmp_path, monkeypatch, focus, at, burst, desc, sl
      "review 16 (2): X Enter renames, and the second Enter is the session list's"),
     ("session-list", "alpha", ("alt+n", "tab", "enter", "escape"), {"stack": ("Screen", "NewSession"), "focus": "browse"},
      "review 16 (3): Enter on Browse opens the picker, and the Esc behind it closes the picker, not New session"),
-    ("session-list", "alpha", ("alt+p", "alt+o", "alt+y"), {"stack": ("Screen",), "parked": True},
-     "F on the Choice asks to confirm Force, and the Y behind it confirms"),
     ("session-list", "alpha", ("alt+p", "alt+c", "alt+p"), {"stack": ("Screen", "ParkSession"), "pending": None},
      "C cancels the request before the P behind it, which asks afresh: Park's dialog, as alpha runs in the wheelhouse"),
     ("session-list", "alpha", ("alt+m", "down", "enter"), {"stack": ("Screen",), "model": "claude-sonnet-5-5"},
@@ -2013,7 +2011,6 @@ async def test_a_key_lands_before_the_next_acts(store, tmp_path, monkeypatch, fo
 @pytest.mark.parametrize("focus, at, burst, desc", [
     ("items", "qa", ("alt+h", "enter", "alt+y"), "a focused button's Enter, then a dialog key"),
     ("session-list", "alpha", ("alt+p", "enter", "escape"), "the Choice's Enter, then Esc"),
-    ("session-list", "alpha", ("alt+p", "alt+o", "alt+y"), "a dialog's answer that opens another"),
     ("session-list", "alpha", ("alt+p", "alt+c", "alt+p"), "a dialog's answer, then a key that reads what it did"),
     ("session-list", "alpha", ("alt+r", "x", "enter", "ctrl+q"), "an input's Enter, then a key on the screen behind"),
     ("session-list", "alpha", ("alt+r", "x", "enter", "enter"), "an input's Enter twice"),
@@ -2771,7 +2768,7 @@ async def test_one_click_on_a_dead_session_opens_one_prompt_and_yes_closes_it(st
 
 @pytest.mark.parametrize("screen, labels, desc", [
     (lambda: Confirm("ok?"), ["Yes [Alt+Y]", "No [Alt+N]"], "the relaunch and destructive confirms"),
-    (lambda: Choice("hm?"), ["Cancel request [Alt+C]", "Force [Alt+O]", "Leave it [Esc]"], "a pending request's choice"),
+    (lambda: Choice("hm?"), ["Cancel request [Alt+C]", "Leave it [Esc]"], "a pending request's choice"),
     (lambda: RelaunchChoice("big?"), ["Compact first [Alt+C]", "Relaunch now [Alt+R]", "Cancel [Esc]"],
      "Relaunch of a big session"),
 ])
@@ -4894,7 +4891,7 @@ async def test_a_refused_send_keeps_the_text_and_says_why(store, tmp_path, monke
         await pilot.pause()
         left = app.answer.text
     assert left == "use Postgres", f"{desc}: the box keeps the text"
-    assert "hosted is compacting: send once it's done, or Interrupt to cancel the compaction." in toasts, \
+    assert "hosted is busy compacting: send once it's done, or Interrupt to abort it." in toasts, \
         f"{desc}: {toasts}"
     assert not store.drafts(sid) and not store.pending(sid), desc
 

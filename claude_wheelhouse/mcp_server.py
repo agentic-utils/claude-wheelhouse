@@ -323,9 +323,11 @@ def park_session(compact: bool = True, keep: str = "", reason: str = "") -> str:
 def end_session() -> str:
     """Forget this session: deletes all of its wheelhouse data, and it stops a moment after
     this returns. If your own instructions describe anything to do when a
-    session ends, do it before calling this: this is the last thing you do."""
+    session ends, do it before calling this: this is the last thing you do. Refused while
+    the wheelhouse is busy with another operation on this session (parking, compacting):
+    call it again once that has finished."""
     s = _store.session(_sid)
-    _store.end(_sid)
+    _store.end_session(_sid)
     return ("forgotten; wheelhouse data deleted; this session stops in a moment" if stop_soon(s)
             else "forgotten; wheelhouse data deleted")
 

@@ -68,7 +68,7 @@ from .rows import KIND_COLOUR, KeepColours, RowTips, faded, marked, plain
 from .callout import TourCallout
 from .client import LocalClient, Unreachable
 from .host import MCP_CONNECTOR, NUDGE_TOKENS, SHELL_OPENING
-from .hub import COMPACT_RELAUNCH_WAIT, VERBS, Done, wake_verb, compacting_now, lifeless, state as hub_state, Event, aimed, display_name, host_context, short
+from .hub import COMPACT_RELAUNCH_WAIT, VERBS, Done, wake_verb, compacting_now, operating, lifeless, state as hub_state, Event, aimed, display_name, host_context, short
 from .knurl import KnurlRender
 from .splitter import SlotSplitter, Splitter, fit
 from textual.css.scalar import Unit
@@ -1294,7 +1294,7 @@ class SessionList(SinkList):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.eyes: set[str] = set()   # the busy sessions' rows, whose eye cell paint_sessions leaves blank
-        self.blue: set[str] = set()   # of those, the compacting ones' rows: their eye is blue (#150)
+        self.blue: set[str] = set()   # of those, the rows in an operation: their eye is blue (#150, #249)
         self.eye_frame = 0
         self.swept: tuple | None = None   # the busy rows and the eye's place as last drawn again (sweep)
         self.blinked = False   # whether the busy rows' dots were last drawn dimmed (sweep)
@@ -3727,8 +3727,8 @@ class PaneMenu(SessionMenu):
 
 
 class Choice(Dialog):
-    """A pending request: cancel it, force it, or leave it be."""
-    BINDINGS = [Binding("alt+c", "answer('cancel')", show=False), Binding("alt+o", "answer('force')", show=False)]
+    """A pending request: cancel it or leave it be. Never forced: Interrupt aborts it (#249, Q245)."""
+    BINDINGS = [Binding("alt+c", "answer('cancel')", show=False)]
     CANCEL = "leave"
 
     def __init__(self, prompt: str):
@@ -3740,7 +3740,6 @@ class Choice(Dialog):
             yield Label(self.prompt, classes="dialog-prompt", markup=False)
             with Horizontal(classes="buttons"):
                 yield Button(Text("Cancel request [Alt+C]"), variant="success", id="cancel")
-                yield Button(Text("Force [Alt+O]"), variant="error", id="force")
                 yield Button(Text("Leave it [Esc]"), id="leave")
 
     @on(Button.Pressed)
@@ -4123,13 +4122,13 @@ BUTTONS = {
              "works in a new one on a new branch from the last commit (uncommitted changes stay behind), or this one"),
     "park": ("Park (Alt+P in the session list): a running session writes its handoff notes into its items, then stops; "
              "it stays, dimmed, at the foot of the list, its items off the inbox, until Unpark. Off while it's "
-             f"asked; on again after {BUSY_FOR} s, pressed again to cancel or force it"),
+             f"asked; on again after {BUSY_FOR} s, pressed again to cancel it (Interrupt aborts it too)"),
     "end": ("Stop & Forget, or Forget (Delete or Backspace in the session list): a running session asks first, "
             "Let it know (Alt+L: it does its own end steps, then stops) or Just stop it (Alt+J: stopped now, told nothing), "
             "the first by default while its prompt cache is warm, the second once cold, as its end steps would "
             "re-read its whole context; its wheelhouse data is deleted either way, queued answers with it. One not "
             "running is deleted at once, once you confirm. Adopt brings a forgotten one back. Off while it's asked; "
-            f"on again after {BUSY_FOR} s, pressed again to cancel or force it"),
+            f"on again after {BUSY_FOR} s, pressed again to cancel it (Interrupt aborts it too)"),
 }
 # keys for the buttons that have no other: each presses its button on the screen in front,
 # from a text box too, so each has a modifier (#189). Alt and a digit can't stand in for
@@ -5437,9 +5436,9 @@ class WheelhouseApp(App):
         table = self.session_list
         keep, key = table.final_row(), self.current_session()   # in the final order, as the items' (paint_items)
         pending = key != self.sessions_cursor   # the person's move, not yet settled
-        compacting = self.compacting()
-        rows, table.eyes = [], {s["id"] for s in self.sessions if self.busy(s["id"]) or s["id"] in compacting}
-        table.blue = compacting
+        blue = self.blue()
+        rows, table.eyes = [], {s["id"] for s in self.sessions if self.busy(s["id"]) or s["id"] in blue}
+        table.blue = blue
         self.pace()   # a session busy, or none now: the animation runs, or may rest
         keyed = self.pinned_session_keys()
         for s in sorted(self.sessions, key=lambda s: keyed[s["id"]][0]):
@@ -6551,8 +6550,13 @@ class WheelhouseApp(App):
         return busy | {"compact-now"} if "compact" in busy else busy
 
     def compacting(self) -> set[str]:
-        """The running sessions being compacted (hub.compacting_now, from the store)."""
-        return {s["id"] for s in self.sessions if compacting_now(s) and self.running(s["id"])}
+        """The sessions being compacted (hub.compacting_now, from the store), running or not: every
+        active state has a deadline, so none stays (#249)."""
+        return {s["id"] for s in self.sessions if compacting_now(s)}
+
+    def blue(self) -> set[str]:
+        """The sessions in an operation (hub.operating, #249): their eye is blue, running or not."""
+        return {s["id"] for s in self.sessions if operating(s)}
 
     def cutoffs(self) -> dict[str, int | None]:
         """Each compacting session's cut-off, from its listed row (Store.sessions serves it as
@@ -8556,13 +8560,13 @@ class WheelhouseApp(App):
                         "cancel that first", severity="warning")
         else:
             self.push_screen(Choice(f"{self.label(sid)} has been asked to {verb.lower()} and hasn't yet. "
-                                    "Cancel the request, or force it?"),
+                                    "Cancel the request?"),
                              lambda choice: self.resolve_request(sid, what, choice))
 
     @session_action
     def ask(self, sid: str, what: str, compact: bool = False) -> None:
         if self.told(self.client.ask(sid, what, compact)).ok:
-            self.press(sid, what)   # Park or Forget, off while asked: pressed again past BUSY_FOR, Cancel or Force
+            self.press(sid, what)   # Park or Forget, off while asked: pressed again past BUSY_FOR, Cancel
         self.keep_current(sid, what)
         self.refresh_data()
 
@@ -8578,13 +8582,6 @@ class WheelhouseApp(App):
         if choice == "cancel":
             self.told(self.client.cancel_request(sid, what))
             self.refresh_data()
-        elif choice == "force":
-            n = len(self.client.drafts(sid)) if what == "end" else 0
-            warning = ("Stops it now and deletes its wheelhouse data, without its session-end steps." if what == "end"
-                       else "Stops it now and parks it, without its handoff notes.")
-            warning += f" {n} queued answer(s) will be discarded." if n else ""
-            self.push_screen(Confirm(f"Force {VERBS[('active', what)][0]} {self.label(sid)}? {warning}"),
-                             lambda yes: yes and self.force(sid, what))
 
     @session_action
     def force(self, sid: str, what: str) -> None:

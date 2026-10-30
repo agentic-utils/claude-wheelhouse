@@ -315,13 +315,17 @@ FEATURES: tuple[Feature, ...] = (
             note="The ⓘ at the stats pane's top right shows the selected session's info: its id (C copies it), "
                  "user, machine, branch, model, transcript, and its MCP server's code, flagged when it needs a relaunch."),
     Feature("compaction-cycle", UNRELEASED, ADVANCED, when="sdk",
-            note="A compaction, however it starts, closes the session until /compact has ended: sends, queueing, Park "
+            note="A compaction, however it starts, closes the session until /compact has ended: sends, Park "
                  "and Relaunch wait, its eye stays blue throughout, and notes still being written after 2 minutes "
                  "bring a question: Keep waiting or Abort."),
     Feature("compaction-task", UNRELEASED, ADVANCED,
             note="Every compaction, in a tab too, is a task in the inbox that follows it to done, failed or "
                  "dropped, and the conversation shows its stages as the trash compactor's walls closing in, "
                  "with the crew and the droids panicking while it runs."),
+    Feature("ops-blue", UNRELEASED, ADVANCED,
+            note="Park and Stop & Forget keep the session blue from the press until it has parked or gone: sends and "
+                 "other operations wait, queueing stays open, Interrupt aborts it, and one not done within 15 "
+                 "minutes is called off with a warning."),
     Feature("dead-dim", UNRELEASED, ADVANCED,
             note="A dead session (not parked) keeps its red dot, and its rows dim everywhere: its session list row, "
                  "its inbox items and conversation, its PRs (their lights kept bright) and the decisions only it looks at."),
