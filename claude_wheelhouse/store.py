@@ -457,7 +457,8 @@ ADDED_COLUMNS = [("sessions", "end_requested_at", "TEXT"), ("sessions", "park_re
                  ("sessions", "compaction_origin", "TEXT"), ("sessions", "compaction_then", "TEXT"),
                  ("sessions", "compaction_at", "TEXT"), ("sessions", "compaction_item", "TEXT"),
                  # the operation under way (#249, OPS): its kind, state (OP_ACTIVE, OP_ENDS), id, who began it,
-                 # when the state was entered and its absolute deadline (both UTC). The last one stays till the next
+                 # when its last active state was entered and its absolute deadline (both UTC). The last one stays
+                 # till the next
                  ("sessions", "op", "TEXT"), ("sessions", "op_state", "TEXT"), ("sessions", "op_id", "TEXT"),
                  ("sessions", "op_origin", "TEXT"), ("sessions", "op_at", "TEXT"), ("sessions", "op_deadline", "TEXT"),
                  # when its host last ended a turn (set_activity, UTC): a call from the turn an op was told in, after
@@ -966,10 +967,12 @@ class Store:
         """The session's active op of this kind (and id, given one), in one of `since`, enters state;
         an active state with a new deadline (within), else the old one stands. Whether it moved."""
         assert state in OP_ACTIVE + OP_ENDS
-        return db.execute(f"UPDATE sessions SET op_state = ?, op_at = ?, op_deadline = coalesce(?, op_deadline) "
+        # op_at is when its last active state was entered: an end keeps it, so a told op's stays its tell (refuse_late)
+        return db.execute(f"UPDATE sessions SET op_state = ?, op_at = CASE WHEN ? IN {OP_ENDS} THEN op_at ELSE ? END, "
+                          f"op_deadline = coalesce(?, op_deadline) "
                           f"WHERE id = ? AND op = ? AND op_state IN ({', '.join('?' * len(since))}) "
                           f"AND (? IS NULL OR op_id = ?)",
-                          (state, stamp(), None if within is None else due(within), sid, kind, *since, oid, oid)
+                          (state, state, stamp(), None if within is None else due(within), sid, kind, *since, oid, oid)
                           ).rowcount == 1
 
     def op(self, sid: str) -> sqlite3.Row | None:
@@ -1004,7 +1007,7 @@ class Store:
         if s is None or s["op"] != what or s["op_state"] not in ("failed", "cancelled"):
             return
         if runner(s) == "sdk" and not s["shell"] and s["idle_at"]:
-            late = s["idle_at"] < s["op_at"]
+            late = s["idle_at"] < s["op_at"]   # no turn has ended since it was told (or asked, or parked)
         else:
             late = db.execute("SELECT 1 FROM messages WHERE session_id = ? AND body = ? AND delivered_at IS NULL",
                               (sid, CANCELLED.format(what=what))).fetchone() is not None

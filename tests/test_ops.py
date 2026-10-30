@@ -294,6 +294,20 @@ def test_a_called_off_op_cant_be_acted_on_from_the_turn_it_was_told_in(hub, stor
 
 
 @pytest.mark.parametrize("what", ["end", "park"])
+def test_a_turn_ended_since_the_tell_may_park_or_end_unprompted(hub, store, hosted, what):
+    """Review 3: the told turn ended without acting; the op fails later. The next turn's own call goes."""
+    sid = hosted
+    store.set_activity(sid, "idle")
+    into(store, sid, what, "told")
+    store.set_activity(sid, "idle")   # the told turn ended, nothing done
+    overdue(store, sid)
+    hub.refresh()
+    assert store.op(sid)["state"] == "failed"
+    store.set_activity(sid, "thinking")   # the next turn: the cancel message, and the work after it
+    {"end": lambda: store.end_session(sid), "park": lambda: store.park(sid, compact=False, reason="x")}[what]()
+
+
+@pytest.mark.parametrize("what", ["end", "park"])
 def test_with_no_turn_end_known_the_cancel_messages_handover_is_the_boundary(hub, store, hosted, what):
     """A tab, an older host, or a host with no turn ended yet (idle_at unknown)."""
     sid = hosted
