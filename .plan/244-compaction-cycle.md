@@ -42,7 +42,7 @@ New `sessions` columns (schema bump): `compaction` (state), `compaction_id`, `co
 | `completed` | | The host runs `then` (`send`, `compact` or `park`) | Terminal: the row keeps it until the next cycle |
 | `failed` / `cancelled` | Timeouts, errors, host or session death, Interrupt, Abort, Stop & Forget "Just stop it" | Queued drafts stay queued | Terminal: the row keeps it until the next cycle |
 
-Every active state also ends on: **Interrupt** (`cancelled`, the client is interrupted), **host exit** (the host's `finally` sets `failed`; the hub's liveness sweep does the same if the host died hard; a host started again fails a cycle past `requested` that the last one was driving, `lost_cycle`), and **session gone**. Only the host that holds the cycle's id moves it, and only while it is active, so an ended cycle stays ended.
+Every active state also ends on: **Interrupt** (`cancelled`, the client is interrupted), **host exit** (the host's `finally` sets `failed`; the hub's liveness sweep does the same if the host died hard, or has stalled (no heartbeat, so its own clocks and an Interrupt go unheard), which offers Relaunch again; a host started again fails a cycle past `requested` that the last one was driving, `lost_cycle`), and **session gone**. Only the host that holds the cycle's id moves it, and only while it is active, so an ended cycle stays ended.
 
 The `/compact` turn's end is matched by `compaction_id` and its `turn_key`, not by "the key is no longer in `sent`". With nothing else allowed in during the cycle, the only turns that can merge are Claude Code's own (agent hand-backs and task notifications, which do appear at 10:39:16), and those carry no key of ours.
 

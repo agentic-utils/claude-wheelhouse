@@ -335,11 +335,15 @@ class Hub:
 
     def sweep_compactions(self) -> None:
         """A compaction cycle whose session isn't running (its host died hard, or stopped before
-        its finally could end it) ends as failed, so nothing stays closed and blue (#244)."""
+        its finally could end it), or whose host has stalled (no heartbeat: wedged, so its own
+        clocks and an Interrupt go unheard), ends as failed, so nothing stays closed and blue and
+        Relaunch, the cure for a stalled host, is offered again (#244). A host that recovers finds
+        its cycle ended, and lets it go (cycle_due)."""
         for s in self.sessions:
-            if compacting_now(s) and self.statuses[s["id"]] == "dead" and s["compaction_id"]:
+            if compacting_now(s) and self.statuses[s["id"]] in ("dead", "stalled") and s["compaction_id"]:
                 if self.store.move_compaction(s["id"], s["compaction_id"], "failed"):
-                    print(f"wheelhouse: {display_name(s)}'s compaction failed: its host isn't running",
+                    print(f"wheelhouse: {display_name(s)}'s compaction failed: its host "
+                          f"{'stalled' if self.statuses[s['id']] == 'stalled' else 'is not running'}",
                           file=sys.stderr, flush=True)
             elif (within := requested_expired(s, PARK_COMPACT_WITHIN)) is not None:   # read first: no lock
                 if self.store.expire_requested(s["id"], s["compaction_id"], within):

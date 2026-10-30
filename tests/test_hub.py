@@ -1627,6 +1627,7 @@ def test_an_answer_to_a_waiting_permission_goes_at_once_whatever_the_mode(hub, s
     ("preparing", "dead", True, "its host died hard: failed by the sweep"),
     ("compacting", "dead", True, "dead mid-/compact: failed"),
     ("preparing", "live", False, "running: the host's to end"),
+    ("compacting", "stalled", True, "its host wedged (no heartbeat): failed, so Relaunch is offered again"),
 ])
 def test_the_sweep_ends_a_dead_sessions_cycle(hub, store, sid, monkeypatch, state, status, ended, desc):
     in_cycle(store, sid, state)
