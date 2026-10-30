@@ -224,6 +224,17 @@ def redacted(text: str) -> str:
     return re.sub(r"(https?://[^\s?]+)\?\S*(?:code|error)=\S*", r"\1?[redacted]", text)
 
 
+def compaction_title(s, tokens: int | None) -> str:
+    """A compaction's task item's title: "Compact {name}: {k}k context"."""
+    return f"Compact {session_name(s)}" + (f": {tokens // 1000}k context" if tokens else "")
+
+
+def compacted_note(before: int | None, after: int | None) -> str:
+    """A completed compaction's note: "{before}k → {after}k"."""
+    k = lambda n: f"{n // 1000}k" if n is not None else "?"   # noqa: E731
+    return f"{k(before)} → {k(after)}"
+
+
 def wheelhouse_item(answer: str | None) -> bool:
     """An item the wheelhouse posted for the person, never the session's: a question of its own
     (wheelhouse_question) or a compaction's task (COMPACTION_TASK)."""
@@ -875,7 +886,7 @@ class Store:
             self.refuse_compacting(db, sid, action)
 
     @staticmethod
-    def begin_cycle(db, sid: str, origin: str, state: str, then: str | None = None) -> str:
+    def begin_cycle(db, sid: str, origin: str, state: str, then: str | None = None, tokens: int | None = None) -> str:
         """A new compaction cycle, its cut-off taken (#150): its id."""
         assert origin in COMPACTION_ORIGINS and state in COMPACTION_ACTIVE
         cid = secrets.token_hex(4)
@@ -883,8 +894,8 @@ class Store:
                    "compaction_at = ?, compaction_item = NULL WHERE id = ?", (state, cid, origin, then, stamp(), sid))
         Store.compact_cut(db, sid, fresh=True)   # first: the task item, posted after, is never locked
         s = db.execute("SELECT * FROM sessions WHERE id = ?", (sid,)).fetchone()
-        k = f": {s['context_tokens'] // 1000}k context" if s["context_tokens"] else ""
-        ref = Store._insert_item(db, sid, "task", f"Compact {session_name(s)}{k}", "", "running")
+        tokens = tokens or s["context_tokens"]   # a tab's from its transcript (tokens), a host's as it reports
+        ref = Store._insert_item(db, sid, "task", compaction_title(s, tokens), "", "running")
         db.execute("UPDATE items SET answer = ? WHERE session_id = ? AND ref = ?", (COMPACTION_TASK, sid, ref))
         db.execute("UPDATE sessions SET compaction_item = ? WHERE id = ?", (ref, sid))
         Store.staged(db, sid, state)
@@ -913,16 +924,17 @@ class Store:
         return self._all("SELECT cycle_id, state, at, origin, note FROM compaction_stages WHERE session_id = ? "
                          "ORDER BY at, rowid", (sid,))
 
-    def start_compaction(self, sid: str, origin: str, state: str = "requested", then: str | None = None) -> str | None:
+    def start_compaction(self, sid: str, origin: str, state: str = "requested", then: str | None = None,
+                         tokens: int | None = None) -> str | None:
         """The host starts a cycle of its own (the quiet mark's, Park's Compact first, Claude Code's
         own): its id, or None if one is active already or the session has gone."""
         with self.tx() as db:
             s = db.execute("SELECT * FROM sessions WHERE id = ?", (sid,)).fetchone()
             if s is None or compacting_now(s):
                 return None
-            return self.begin_cycle(db, sid, origin, state, then)
+            return self.begin_cycle(db, sid, origin, state, then, tokens)
 
-    def move_compaction(self, sid: str, cid: str, state: str, why: str = "") -> bool:
+    def move_compaction(self, sid: str, cid: str, state: str, why: str = "", tokens: int | None = None) -> bool:
         """The host moves its cycle on: only the cycle it holds (cid), and only while active, so a
         cycle the hub's sweep has ended stays ended. Whether it moved. An end lets the cut-off go."""
         assert state in COMPACTION_ACTIVE + COMPACTION_ENDS
@@ -932,6 +944,10 @@ class Store:
                                f"AND compaction IN {COMPACTION_ACTIVE}", (state, stamp(), sid, cid)).rowcount
             if moved:
                 self.staged(db, sid, state, why)
+                if tokens:   # the size compaction began at, as its boundary says: the title's
+                    s = db.execute("SELECT * FROM sessions WHERE id = ?", (sid,)).fetchone()
+                    db.execute("UPDATE items SET title = ? WHERE session_id = ? AND ref = ?",
+                               (compaction_title(s, tokens), sid, s["compaction_item"]))
             if moved and state in COMPACTION_ENDS:
                 db.execute("DELETE FROM settings WHERE key = ?", (COMPACT_CUTOFF + sid,))
                 if was[0] == "requested":

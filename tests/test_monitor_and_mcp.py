@@ -564,3 +564,22 @@ def test_a_tabs_compaction_is_a_cycle_from_its_hooks(store, sid, monkeypatch, ca
     cli.open_items()
     assert store.compaction(sid)["state"] == "completed", desc
     assert "Compact" not in capsys.readouterr().out, f"{desc}: the reminder never lists its task"
+
+
+def test_a_tabs_compaction_says_its_sizes_from_its_transcript(store, sid, tmp_path, monkeypatch):
+    """#244: a tab's task title and note match a host's: its context from the last turn's usage,
+    then "{before}k → {after}k" from the compact_boundary the transcript records."""
+    import json
+    from claude_wheelhouse import cli
+    path = tmp_path / "t.jsonl"
+    usage = {"input_tokens": 2_000, "cache_read_input_tokens": 400_000, "cache_creation_input_tokens": 10_000}
+    path.write_text(json.dumps({"type": "assistant", "message": {"usage": usage}}) + "\n")
+    cli.tab_compaction(store, sid, hook={"trigger": "manual", "transcript_path": str(path)})
+    c = store.compaction(sid)
+    assert store.item(sid, c["item"])["title"] == "Compact demo: 412k context"
+    with path.open("a") as f:
+        f.write(json.dumps({"type": "system", "subtype": "compact_boundary",
+                            "compactMetadata": {"preTokens": 415_195, "postTokens": 10_838}}) + "\n")
+    cli.tab_compaction(store, sid, end=True, hook={"transcript_path": str(path)})
+    assert store.thread(sid, c["item"])[-1]["body"] == "415k → 10k"
+    assert store.item(sid, c["item"])["title"] == "Compact demo: 415k context"

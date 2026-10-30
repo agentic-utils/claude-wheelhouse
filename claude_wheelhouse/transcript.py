@@ -273,6 +273,44 @@ def hard_breaks(text: str) -> str:
     return re.sub(r"(?<!\n)\n(?!\n)", "  \n", text)
 
 
+def boundary_tokens(meta: dict) -> tuple[int | None, int | None]:
+    """A compact_boundary's sizes, before and after (its compactMetadata), in tokens."""
+    meta = meta or {}
+    pre = meta.get("preTokens", meta.get("pre_tokens"))
+    post = meta.get("postTokens", meta.get("post_tokens"))
+    return (pre if isinstance(pre, int) else None), (post if isinstance(post, int) else None)
+
+
+TAIL_BYTES = 1 << 20   # how much of a transcript's end tail_sizes reads: a turn's records, and some
+
+
+def tail_sizes(path: str | Path | None) -> dict:
+    """A tab's sizes from the end of its transcript, for the plugin's compaction hooks (#244):
+    "context", the last assistant turn's input (as the context bars count it), and "before" and
+    "after" from the last compact_boundary. Empty when unreadable: a hook never fails for it."""
+    out: dict = {}
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - TAIL_BYTES))
+            lines = f.read().decode("utf-8", "replace").splitlines()
+    except (OSError, TypeError):
+        return out
+    for line in reversed(lines):
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if "before" not in out and rec.get("type") == "system" and rec.get("subtype") == "compact_boundary":
+            out["before"], out["after"] = boundary_tokens(rec.get("compactMetadata") or rec.get("compact_metadata"))
+        if "context" not in out and rec.get("type") == "assistant" and (u := (rec.get("message") or {}).get("usage")):
+            out["context"] = sum(u.get(k) or 0 for k in ("input_tokens", "cache_read_input_tokens",
+                                                       "cache_creation_input_tokens"))
+        if "before" in out and "context" in out:
+            break
+    return out
+
+
 def _hhmm(at: str) -> str:
     return f" · {at[11:16]}Z" if len(at) >= 16 else ""
 

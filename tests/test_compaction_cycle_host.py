@@ -623,17 +623,20 @@ def test_interrupt_after_the_notes_came_never_compacts(host, store, sid):
 
 def test_claude_codes_own_compaction_says_its_size_on_its_task(streamed, store, sid):
     """PR 2 review: an auto cycle ends at its boundary, its task's note giving the size before."""
-    from test_host import boundary
+    from claude_agent_sdk import SystemMessage
     store.set_runner(sid, "sdk")
     h = streamed
+    boundary = SystemMessage(subtype="compact_boundary", data={"compact_metadata": {"preTokens": 950_000,
+                                                                                  "postTokens": 31_000}})
 
     async def go():
         await h.turn("work")
         await h.pre_compact({"trigger": "auto"}, None, None)
-        for m in (h.client.replay(0), boundary(), None):
+        for m in (h.client.replay(0), boundary, None):
             h.client.feed.put_nowait(m)
         await h.read()
     run(go())
     c = store.compaction(sid)
     assert c["state"] == "completed" and store.item(sid, c["item"])["status"] == "done"
-    assert store.thread(sid, c["item"])[-1]["body"].startswith("150k before")
+    assert store.thread(sid, c["item"])[-1]["body"] == "950k → 31k", "before and after, from its boundary"
+    assert store.item(sid, c["item"])["title"] == "Compact demo: 950k context"
