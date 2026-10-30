@@ -1,4 +1,4 @@
-<!-- fact sheet stamp: version 87, 2026-10-30T15:58:42Z, source d094c4e046d6efa3 (make facts restamps it: AGENTS.md) -->
+<!-- fact sheet stamp: version 88, 2026-10-30T16:11:26Z, source e737dfdbd46b9f4f (make facts restamps it: AGENTS.md) -->
 # Wheelhouse fact sheet
 
 What the helper chat knows before any question. The guide below is written by hand; the
@@ -249,9 +249,9 @@ The buttons under the session list act on the session highlighted there, and onl
 
 - Fork (Alt+K in the session list): a new session, "<name> (fork)", carrying on from this one's conversation so far, which carries on too. Ticked items move to it; in a linked git worktree, it works in a new one on a new branch from the last commit (uncommitted changes stay behind), or this one
 
-- Park (Alt+P in the session list): a running session writes its handoff notes into its items, then stops; it stays, dimmed, at the foot of the list, its items off the inbox, until Unpark. Off while it's asked; on again after 30 s, pressed again to cancel it (Interrupt aborts it too)
+- Park (Alt+P in the session list): a running session writes its handoff notes into its items, then stops; it stays, dimmed, at the foot of the list, its items off the inbox, until Unpark. Off while it's asked; on again after 30 s, pressed again to cancel it
 
-- Stop & Forget, or Forget (Delete or Backspace in the session list): a running session asks first, Let it know (Alt+L: it does its own end steps, then stops) or Just stop it (Alt+J: stopped now, told nothing), the first by default while its prompt cache is warm, the second once cold, as its end steps would re-read its whole context; its wheelhouse data is deleted either way, queued answers with it. One not running is deleted at once, once you confirm. Adopt brings a forgotten one back. Off while it's asked; on again after 30 s, pressed again to cancel it (Interrupt aborts it too)
+- Stop & Forget, or Forget (Delete or Backspace in the session list): a running session asks first, Let it know (Alt+L: it does its own end steps, then stops) or Just stop it (Alt+J: stopped now, told nothing), the first by default while its prompt cache is warm, the second once cold, as its end steps would re-read its whole context; its wheelhouse data is deleted either way, queued answers with it. One not running is deleted at once, once you confirm. Adopt brings a forgotten one back. Off while it's asked; on again after 30 s, pressed again to cancel it
 
 ### Sending
 

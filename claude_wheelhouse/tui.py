@@ -4122,13 +4122,13 @@ BUTTONS = {
              "works in a new one on a new branch from the last commit (uncommitted changes stay behind), or this one"),
     "park": ("Park (Alt+P in the session list): a running session writes its handoff notes into its items, then stops; "
              "it stays, dimmed, at the foot of the list, its items off the inbox, until Unpark. Off while it's "
-             f"asked; on again after {BUSY_FOR} s, pressed again to cancel it (Interrupt aborts it too)"),
+             f"asked; on again after {BUSY_FOR} s, pressed again to cancel it"),
     "end": ("Stop & Forget, or Forget (Delete or Backspace in the session list): a running session asks first, "
             "Let it know (Alt+L: it does its own end steps, then stops) or Just stop it (Alt+J: stopped now, told nothing), "
             "the first by default while its prompt cache is warm, the second once cold, as its end steps would "
             "re-read its whole context; its wheelhouse data is deleted either way, queued answers with it. One not "
             "running is deleted at once, once you confirm. Adopt brings a forgotten one back. Off while it's asked; "
-            f"on again after {BUSY_FOR} s, pressed again to cancel it (Interrupt aborts it too)"),
+            f"on again after {BUSY_FOR} s, pressed again to cancel it"),
 }
 # keys for the buttons that have no other: each presses its button on the screen in front,
 # from a text box too, so each has a modifier (#189). Alt and a digit can't stand in for
