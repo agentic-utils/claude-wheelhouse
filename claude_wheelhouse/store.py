@@ -1938,6 +1938,11 @@ class Store:
                 (sid, item_ref, body, now()),
             )
 
+    def check_sendable(self, sid: str, ref: str | None) -> None:
+        """Refused, before any other step, for a message on a compaction's task item."""
+        with self.tx() as db:
+            self.refuse_wheelhouse_item(db, sid, ref)
+
     @staticmethod
     def refuse_wheelhouse_item(db, sid: str, ref: str | None) -> None:
         """Refused: a message on a compaction's task item, which no session ever sees (#244)."""
@@ -2003,8 +2008,9 @@ class Store:
         notice its launch left first, then the person's words, oldest first, in the one batch
         the monitor or host claims. The drafts are sent as new rows, so their order follows the
         notice's; each keeps its text, item and time. Returns how many went. Refused during a
-        compaction cycle (Compacting)."""
+        compaction cycle (Compacting), and on a compaction's task item (Refused)."""
         with self.tx() as db:
+            self.refuse_wheelhouse_item(db, sid, item_ref)
             self.refuse_compacting(db, sid, "send", person=True)
             moved = db.execute("INSERT INTO messages (session_id, item_ref, author, body, created_at, kind) "
                                "SELECT session_id, item_ref, author, body, created_at, kind FROM messages "

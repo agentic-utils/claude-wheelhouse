@@ -486,6 +486,7 @@ class Hub:
             done.say("relaunching")
         return done
 
+    @refusable
     def wake_and_send(self, sid: str, item_ref: str | None = None, text: str | None = None,
                       may_tab: bool = True) -> Done:
         """Ctrl+S or Alt+S on a session that isn't running, confirmed (#221): Unpark or Relaunch
@@ -496,6 +497,7 @@ class Hub:
         started (a detached host, a tab's Claude), and the queue follows the notice within the
         same call, long before either can claim anything. Nothing is sent if it doesn't come back:
         the queue stays queued, and the text stays the person's."""
+        self.store.check_sendable(sid, item_ref if text is not None else None)   # before waking it
         s = self.row(sid)
         verb = waking(s)
         done = self.relaunch(sid, may_tab)
@@ -1379,7 +1381,7 @@ class Hub:
             sid = s["id"]
             follower = self.contexts.get(sid)
             snap = follower.snap if follower is not None and follower.ready else None
-            if snap is None or snap.last_at is None or runner(s) != "tab":
+            if snap is None or snap.last_at is None or runner(s) != "tab" or compacting_now(s):   # never mid-cycle (#244)
                 self.warmth.pop(sid, None)
                 continue
             w = self.warmth.setdefault(sid, Warmth(snap.last_at, snap.last_at))

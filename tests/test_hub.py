@@ -1763,3 +1763,13 @@ def test_nothing_is_sent_on_a_compaction_task_and_fork_never_moves_it(hub, store
     assert not done.ok and "the wheelhouse's own record of a compaction" in done.notices[0].text
     assert not store.pending(sid) and not store.drafts(sid)
     assert ref not in [r[0] for r in hub.fork_plan(sid).items], "Fork never offers it"
+
+
+def test_a_wake_never_sends_on_a_compaction_task(hub, store, sid, opened):
+    store.command(sid, "compact")
+    ref = store.compaction(sid)["item"]
+    store.move_compaction(sid, store.compaction(sid)["id"], "failed", "its host stopped")
+    done = hub.wake_and_send(sid, ref, "why did it fail?")
+    assert not done.ok and "own record of a compaction" in done.notices[0].text
+    assert not opened and not store.pending(sid), "not woken, nothing sent"
+
