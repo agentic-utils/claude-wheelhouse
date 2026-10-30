@@ -162,6 +162,7 @@ PARK_WITHIN = 15 * 60
 # seconds /compact may run before its cycle fails (host.py's clock); a park compacting first has that
 # besides PARK_WITHIN, as it parks before it compacts
 COMPACT_TIMEOUT = 600
+CANCELLED = "The person cancelled the {what} request: carry on as before."   # what a told session hears
 BUSY_REFUSED = "{name} is busy {doing}: {action} once it's done, or Interrupt to abort it."
 # said to the session itself, refusing its own call mid-operation
 SESSION_BUSY = "this session is busy {doing}: call {call} again once that has finished"
@@ -986,7 +987,16 @@ class Store:
                 Store.staged(db, sid, ends, why)
         if s[f"{what}_told_at"] or (what == "park" and s["op_state"] == "parking"):
             db.execute("INSERT INTO messages (session_id, author, body, created_at) VALUES (?, 'person', ?, ?)",
-                       (sid, f"The person cancelled the {what} request: carry on as before.", now()))
+                       (sid, CANCELLED.format(what=what), now()))
+
+    @staticmethod
+    def refuse_late(db, sid: str, what: str, call: str) -> None:
+        """A park or end the session was told of, called off (Interrupt, or past its deadline) before
+        it acted: its own late park_session or end_session is refused until it has taken the cancel
+        message, so it can't park or end after the person was told it carries on (#249)."""
+        if db.execute("SELECT 1 FROM messages WHERE session_id = ? AND body = ? "
+                      "AND delivered_at IS NULL", (sid, CANCELLED.format(what=what))).fetchone():
+            raise ValueError(f"the {what} request was called off: carry on as before, and don't call {call}")
 
     def fail_op(self, sid: str, oid: str, why: str) -> sqlite3.Row | None:
         """A park or end past its deadline, or whose host has died or stalled, fails (Hub.sweep_ops):
@@ -1442,6 +1452,8 @@ class Store:
                 raise ValueError(PARK_REFUSED)
             if op is not None and op[0] not in ("compact", "park"):
                 raise ValueError(SESSION_BUSY.format(doing=OP_DOING[op[0]], call="park_session"))
+            if op is None:
+                self.refuse_late(db, sid, "park", "park_session")
             asked = s["park_requested_at"] is not None
             if not hosted:
                 compact = False
@@ -1470,6 +1482,7 @@ class Store:
             s = db.execute("SELECT * FROM sessions WHERE id = ?", (sid,)).fetchone()
             if s is not None and (op := operating(s)) is not None and op[0] != "end":
                 raise ValueError(SESSION_BUSY.format(doing=OP_DOING[op[0]], call="end_session"))
+            self.refuse_late(db, sid, "end", "end_session")
         self.end(sid)
 
     def end(self, sid: str) -> None:

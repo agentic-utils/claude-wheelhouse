@@ -262,3 +262,42 @@ async def test_the_eye_is_blue_while_an_op_runs_running_or_not(store, hosted, mo
         app.client.host_command(hosted, "interrupt")
         await pilot.pause()
         assert not operating(store.session(hosted)), "aborted: not blue"
+
+
+@pytest.mark.parametrize("what, how, desc", [
+    ("end", "overdue", "Stop & Forget told, past its deadline: a late end_session is refused"),
+    ("park", "overdue", "Park told, past its deadline: a late park_session is refused"),
+    ("end", "interrupt", "Stop & Forget told, aborted: the same"),
+    ("park", "interrupt", "Park told, aborted: the same"),
+])
+def test_a_called_off_op_cant_be_acted_on_late(hub, store, hosted, what, how, desc):
+    """Review 1: the session's turn that was told outlives the op; until it has the cancel message, it can't act."""
+    sid = hosted
+    into(store, sid, what, "told")
+    if how == "overdue":
+        overdue(store, sid)
+        hub.refresh()
+    else:
+        hub.host_command(sid, "interrupt")
+    late = {"end": lambda: store.end_session(sid), "park": lambda: store.park(sid, compact=False, reason="x")}[what]
+    with pytest.raises(ValueError, match=f"the {what} request was called off"):
+        late()
+    s = store.session(sid)
+    assert s is not None and not s["parked"], desc
+    store.db.execute("UPDATE messages SET delivered_at = '2026-01-01' WHERE session_id = ?", (sid,))
+    late()   # once it has heard, a park or end of its own is its own
+
+
+def test_an_overdue_parking_is_said_as_parked(hub, store, hosted, monkeypatch):
+    from datetime import datetime, timedelta
+    into(store, hosted, "park", "parking", compact=True)
+    op = store.op(hosted)   # both clocks moved back past the deadline
+    back = [(datetime.fromisoformat(op[k]) - timedelta(minutes=30)).isoformat() for k in ("at", "deadline")]
+    store.db.execute("UPDATE sessions SET op_at = ?, op_deadline = ?", back)
+    heard = []
+    hub.listen(heard.append)
+    hub.refresh()
+    assert [e.text for e in heard if e.kind == "notice"] == [
+        "demo parked, but didn't stop within 25 minutes of parking: its compaction, if any, is called off, "
+        "and it stays parked."]
+    assert store.session(hosted)["parked"]

@@ -122,8 +122,13 @@ def refusable(method):
 
 
 def op_failed(s, kind: str, status: str, overdue: bool) -> str:
-    """The warning notice for a park or end that failed (Q246), naming it and why."""
+    """The warning notice for a park or end that failed (Q246), naming it and why. One already
+    parked (parking) stays parked: its turn or compaction ran past its own clock."""
     what = "parked" if kind == "park" else "stopped and forgotten"
+    if s["op_state"] == "parking":
+        minutes = round((epoch(s["op_deadline"]) - epoch(s["op_at"])) / 60)
+        return (f"{display_name(s)} parked, but didn't stop within {minutes} minutes of parking: "
+                "its compaction, if any, is called off, and it stays parked.")
     if overdue:
         return f"{display_name(s)} couldn't be {what} within {PARK_WITHIN // 60} minutes: it carries on as it was."
     why = "its host stalled" if status == "stalled" else "it isn't running"
