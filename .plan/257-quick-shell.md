@@ -1,199 +1,162 @@
-# Quick terminal, and run a suggested Bash excerpt from a button
+# Quick shell, and commands a session asks Doug to run
 
-Issue: #257. Status: design, for Doug's review.
+Issue: #257. Status: design, revised with Doug's answers (Q238 to Q241), for review.
 
 The ask, in Doug's words (30 Oct): "Add a way for me to launch a shell for a quick command;
 then, when a session suggests a Bash excerpt to me, let Wheelhouse display that with a
 button that I can press to just invoke it directly rather than having to open a shell and
 paste it in myself"
 
-Two parts, landing in this order: the terminal (small, no risk), then run buttons (the
-part with the safety design).
+Settled with Doug:
 
-The name: the session bar already has **Shell** (Alt+H), which hands an SDK session to a
-Claude Code tab. To keep the two apart, this feature is the **Terminal** everywhere in the UI.
+- Q238: "why not give me a modal with an editable text box and a run button? Keep it all in
+  one step?"
+- Q239: "a": refuse anything outside printable ASCII, newlines allowed.
+- Q240: "no, a for me, and it prompts a question: how are you designing this system to
+  detect an invokable bash excerpt? I think it should be explicit, requested by the model
+  similar to how questions are raised. Don't have wheelhouse regex'ing for expressions,
+  have the model respond something like user_tool_call("xxx")"
+- Q241: "I actually think, repurpose the existing "Shell" button for this. We don't need a
+  button for handing an SDK session over to a tab, it's a rare operation; rename it
+  "Handover to Claude Code in a shell" so it is no longer listed as "Shell" in the F1 help
+  box, then the name "Shell" can be repurposed for this."
 
-## 1. The quick terminal
+Two parts, landing in this order: the shell, then command items.
 
-**Recommendation: a new Windows Terminal tab (iTerm on macOS), opened the way session
-tabs are.** Alt+B (free today; B for bash) opens it from anywhere in the app.
+## 1. The quick shell
 
-- **Launch**: the hub opens it, as `launch.open_tab` does, so it lands in the same
-  `wheelhouse-<user>` window as the sessions, titled `⌁ <session name>`. The wt command
-  line is `wsl.exe -d <distro> -u <user> --cd <dir> -- $SHELL -li`: no text of ours in it
-  beyond the directory, which `wt_argv`'s `CMD_META` check already guards.
+**Shell** (the session bar's button, and Alt+H from anywhere) opens a new Windows Terminal
+tab (iTerm on macOS), the way session tabs open: the hub launches it, in the same
+`wheelhouse-<user>` window, titled `⌁ <session name>`. The wt command line is
+`wsl.exe -d <distro> -u <user> --cd <dir> -- $SHELL -li`: no text of ours beyond the
+directory, which `wt_argv`'s `CMD_META` check already guards.
+
 - **Directory**: the selected session's (or the selected item's session's) live directory:
   the `cwd` of the last record in its transcript, since a session that `cd`s into a
-  worktree works there, else `sessions.cwd`. With no session selected, or the directory
-  gone (a removed worktree), `~`, with a notice naming the missing directory.
-- **Environment**: nothing to strip. wt.exe starts `wsl.exe` from Windows, so the tab gets
-  a fresh login environment: no `WHEELHOUSE_*`, `VIRTUAL_ENV` or `CLAUDE*` from the daemon
-  reaches it. On macOS iTerm builds its own environment the same way. The launch still
-  passes `clean_env()` minus every `WHEELHOUSE_*`, so a future runner that does inherit
-  stays clean (a test pins it).
-- **Closing**: `exit` or Ctrl+D; Windows Terminal's default `closeOnExit` closes the tab.
-  The wheelhouse doesn't track terminals: no row, no liveness.
-- **With `--connect` to another machine** the tab would open on that machine, out of
-  sight: Alt+B says so in a notice and opens nothing.
+  worktree works there, else `sessions.cwd`. With no session selected, or that directory
+  gone, `~`, with a notice naming the missing directory.
+- **Environment**: wt.exe starts `wsl.exe` from Windows, so the tab gets a fresh login
+  environment: no `WHEELHOUSE_*`, `VIRTUAL_ENV` or `CLAUDE*` reaches it. iTerm builds its
+  own the same way. The launch still passes `clean_env()` minus every `WHEELHOUSE_*`, so a
+  runner that did inherit stays clean (a test pins it).
+- **Closing**: `exit` or Ctrl+D. The wheelhouse doesn't track shells: no row, no liveness.
+- **With `--connect` to another machine** the tab would open there, out of sight: Shell
+  says so in a notice and opens nothing.
+- The button shows for every session now, not only SDK ones, and works for parked and
+  ended sessions (their directory is still on disk).
 
-Passed over:
+**Handover** (today's Shell: an SDK session handed to a Claude Code tab) becomes "Handover
+to Claude Code in a shell", in the session menu (right-click) only, with no key: it's rare,
+and a mistaken press costs a relaunch. F1 lists it under the menu's entries, not the keys.
+The internal button id becomes `handover`; the hub's verb and the `sessions.shell` column
+keep their names, which older hosts read.
 
-- **An embedded terminal widget.** Textual has none. `textual-terminal` (pyte under it) is
-  unmaintained since 2023 and predates Textual 8; a pty in the TUI fights the app for keys
-  (Ctrl+C, Alt+ chords, Escape), runs in the app's process (so it dies with the app, and
-  under the daemon it would run on the wrong side), and redraws slowly. A lot of new
-  surface for a worse terminal than the one next door.
-- **A one-line prompt with output in a drawer.** No pty, so nothing interactive works:
-  `sudo`, `git push` asking for credentials, `less`, a confirm prompt. Output would stream
-  through the daemon's SSE. Doug asked for a shell, and half of quick commands are
-  interactive.
+Passed over: an embedded terminal widget (Textual has none; `textual-terminal` is
+unmaintained and fights the app for keys) and a one-line prompt with output in a drawer
+(no pty, so `sudo`, `git push` credentials and `less` don't work).
 
-## 2. Run buttons on Bash excerpts
+## 2. Command items
 
-**Which blocks**: fenced blocks whose info string is `bash`, `sh`, `shell`, `zsh` or
-`console`, in a session's replies (its `claude` blocks in the conversation) and in item
-bodies and replies from the session (Detail, the thread view). Not in: unlabelled fences
-(could be anything), the session's own tool lines, Doug's own messages, PR item bodies
-(GitHub text), docs (examples, often quoted from elsewhere; revisit if missed).
+No detection: the session asks, as it asks a question. A new MCP tool:
 
-**What runs**, derived once per block into `cmd`, the one string both the confirm and the
-run use:
+```
+suggest_command(command: str, why: str) -> str   # "C4: shown to the person"
+```
 
-- `bash`/`sh`/`shell`/`zsh`: the block's text as written, `#` comment lines included.
-- `console`: only the lines starting `$ `, without it; the rest is output and dropped. No
-  `$ ` lines, no button.
-- Placeholders (`<pr>`, `<ticket>`, matched as `<[a-z][a-z0-9_-]*>`) don't stop the button:
-  the run is edited before Enter (below), and the tab says which placeholders are left.
+**A new kind, `command`, ref `C<n>`** (C is free). Not a task: a task's statuses are the
+session's (todo, running, done) and a command's are the person's, as a decision's are.
+Not a question: a question waits for an answer the session reads, and a command's point is
+that nothing comes back unless Doug sends it.
 
-**Refused** (no button, a dim `can't run: <reason>` line instead): any character outside
-printable ASCII (0x20 to 0x7E) and newline. That one rule shuts out escape sequences, CR,
-tabs, zero-width and bidi characters (Trojan Source), non-breaking spaces and homoglyphs:
-whatever is left is exactly what the terminal draws. Also refused: more than 20 lines or
-2000 characters (too long to read before running).
+**Validated at post time**, each refusal an error the session can act on: `command` empty,
+holding anything but printable ASCII (0x20 to 0x7E) and newline (`"command holds U+2019 at
+line 2, column 14: only printable ASCII and newlines can be run"`), over 20 lines or 2000
+characters; `why` empty or over one line. The rule shuts out escape sequences, CR, tabs,
+zero-width and bidi characters and homoglyphs: what's shown is exactly what runs.
 
-**The button**: one line under the block, inside the conversation's text, so it scrolls
-with it:
+**Statuses**, the person's: `new` (posted, not run), `run` (run at least once), `closed`
+(Doug dismissed it unrun, Delete as for a question). Reposting the same command from the
+same session updates the item back to `new` rather than adding one.
+
+**Shown** in the inbox like any item (`C4  Check the deployed ref  wheelhouse-ui  new`),
+and in the conversation and Detail as its `why`, the command in a code block, and a Run
+button: a real Button under the item's detail, as the question's Answer box is, not a
+segment in the text, so no session text ever reaches markup.
+
+**Run opens the modal**, the one step:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ claude · 14:02                                                               │
-│                                                                              │
-│ The PR is green. To check the deployed ref yourself:                         │
-│                                                                              │
-│  gh pr view 263 --json mergeStateStatus,headRefOid                           │
-│                                                                              │
-│  ▶ Run in a terminal                                           bash · 1 line │
-│                                                                              │
-│ Or the full log:                                                             │
-│                                                                              │
-│  gh run view --log | grep -n "error"                                         │
-│                                                                              │
-│  ▶ Run in a terminal                                           bash · 1 line │
+│ Run C4 from wheelhouse-ui                                                    │
+│ Check the deployed ref after the merge                                       │
+│ in ~/projects/claude-wheelhouse/.worktrees/257-quick-shell                   │
+│ ┌──────────────────────────────────────────────────────────────────────────┐ │
+│ │gh pr view 263 --json mergeStateStatus,headRefOid                         │ │
+│ │                                                                          │ │
+│ └──────────────────────────────────────────────────────────────────────────┘ │
+│                                                     [ Run  Ctrl+Enter ]      │
+│                                                     [ Cancel  Escape ]       │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
-It is a segment with `Style.from_meta({"@click": "app.run_excerpt('<key>')"})`, as PR links
-are (`prs.link`). The key is a random id the app holds against `(session, cmd)`; no text
-from the block ever goes into markup or meta (#139's lesson). Keyboard: Alt+Shift+B lists
-the excerpts in the conversation shown, newest first, and Enter runs the chosen one.
+- The box is a `TextArea` holding the command, editable (fill in `<pr>`, trim a line),
+  never soft-wrapped (a horizontal scrollbar instead) so line breaks are the real ones,
+  and tall enough for all 20 lines it can hold.
+- Run checks the box against the same ASCII rule (a paste can bring in anything) and
+  refuses with the position, as the tool does. It then opens a fresh shell tab in the
+  directory part 1 picks, refusing (never falling back to `~`) if that directory is gone:
+  `git reset` in the wrong repo is the failure to avoid.
+- Focus starts in the box, not on Run, so a stray Enter edits rather than runs. Nothing
+  runs on posting, selection or a double click.
 
-**A press**: opens a fresh terminal tab (as part 1, same directory rule), titled
-`▶ <session name>`, with the command **at the prompt, not run**. Doug reads it, edits a
-placeholder if there is one, and presses Enter; Ctrl+C drops it. The tab stays a normal
-shell afterwards. A button never reuses an open terminal: there's no way to type into
-another Windows Terminal tab.
+**How the text reaches the tab**: the app writes the box's text to `shell/<key>` beside
+the database (mode 0600, a random key), and the tab's command line carries only the key:
+`python -m claude_wheelhouse shell <key>`. That reads and deletes the file and execs bash
+with a generated rc that sources `~/.bashrc`, prints `C4 from wheelhouse-ui:` and the
+command, puts it in history and `eval`s it, leaving an ordinary shell at the prompt after.
+The text travels in that process's environment, never on a command line, so nothing passes
+through cmd.exe or wt.exe quoting. (macOS zsh: the same through a `ZDOTDIR` rc.)
 
-```
-┌──────────────────────────────────────────────────────────────────────────────┐
-│ From wheelhouse-ui, 14:02. Read it, then Enter runs it; Ctrl+C drops it.     │
-│ Fill in before running: <pr>                                                 │
-│ ~/projects/claude-wheelhouse/.worktrees/257-quick-shell                      │
-│ $ gh pr checks <pr> --watch█                                                 │
-└──────────────────────────────────────────────────────────────────────────────┘
-```
+**After a run**: the item goes to `run` and its detail gains a dim line `ran 14:05` (with
+`, edited` if the box changed), kept as an item note (a `messages` row the session isn't
+sent). `launch.log` gets the time, session, ref, directory and the exact text run. The
+output stays in the tab: the session never sees it, though `list_items` shows the status.
 
-How the text gets there: the app writes `cmd` to `shell/<key>` beside the database (mode
-0600), and the tab's command line carries only the key, as `run` carries only the session
-id: `python -m claude_wheelhouse terminal <key>`. That reads and deletes the file, then
-execs `bash --rcfile` on a generated rc that sources `~/.bashrc`, puts `cmd` in history
-(`history -s`) and on the line with `read -e -i`, then `eval`s what Doug submits in that
-same shell. No quoting through cmd.exe or wt.exe, so nothing to escape and nothing to get
-wrong. Multi-line blocks: to verify in building whether `read -e -i` holds newlines; if
-not, the tab prints the block numbered and Enter runs it all, with the block in history
-(Up recalls it whole) for editing instead. Every run is logged to `launch.log`: time,
-session, key, `cmd`.
+## 3. Compatibility and the protocol
 
-## 3. Safety
+- **Store**: `command` in `KINDS`, `STATUSES` and `INITIAL_STATUS`; no new column (the
+  item note is a `messages` row). Items are per session, so a session on older code never
+  meets a command item: only a new session can post one.
+- **`PROTOCOL_VERSION` 24**: a new tool and a protocol rule sessions must follow. Older
+  sessions show as needing a relaunch; until then they just don't suggest commands.
+- **protocol.md** gains one rule: "When you want the person to run a shell command
+  themselves (one that needs their credentials, their eyes, or their machine outside your
+  sandbox), post it with `suggest_command`, not as a code block to copy: `why` says in one
+  line what it does or shows. Plain ASCII only; write a placeholder as `<name>`. They may
+  edit it before running. You won't see its output: ask for what you need back."
+- The tool's docstring, `launch.JOINED_TEXT` if it lists tools, and the helper facts move
+  in step; the daemon gains a `shell` route (additive; the fingerprint restarts an older
+  daemon).
 
-A button runs model-written text on Doug's machine, and that text can come from anywhere a
-session read: a PR body, a web page, a doc. Defences, in order:
+## 4. Staging
 
-1. **Never run anything without Enter in the terminal.** Recommended over a confirm modal
-   in the TUI, and over one-press run. The prompt is the confirm: it shows the exact bytes
-   (the ASCII rule makes the terminal's drawing faithful), in the place Doug would have
-   pasted it, and it lets him edit, which a modal doesn't. One-press saves one keystroke
-   and loses the last look at what a prompt-injected session wrote. A modal in the TUI as
-   well would be two confirms for one action.
-2. **What's shown is what runs.** `cmd` is derived once; the prompt shows it; Enter runs
-   what's on the prompt. The ASCII rule leaves nothing invisible, and the length cap
-   leaves nothing past the fold.
-3. **Nothing automatic.** No run on arrival, on selection or on a double click (a click
-   with `chain > 1` does nothing).
-4. **Untrusted quotes.** The wheelhouse can't tell a command the session wrote from one it
-   copied off a web page. The tab's header names the session and time so Doug knows whose
-   suggestion it is; beyond that, defence 1 is the answer.
-
-## 4. Where the run goes
-
-- **Directory**: the session's live directory, as part 1. If it's gone, the button refuses
-  (a notice naming it), never falls back to `~`: `git reset` in the wrong repo is the
-  failure to avoid.
-- **Output**: in the tab only. The session never sees it; Doug can paste it back if he
-  wants. (Feeding it to the session is a later feature, if ever.)
-- **Parked or ended sessions**: the button still works, the directory being on disk; a
-  conversation you can read is one whose suggestions you may still want.
-
-## 5. Compatibility and the protocol
-
-No store change: the command goes through a file, the terminal has no row, so no
-`ADDED_COLUMNS`, trigger or `PROTOCOL_VERSION` bump. One new daemon route (`terminal`,
-with optional session and key) is additive; the fingerprint restarts an older daemon.
-
-Protocol: a line in `protocol.md` telling sessions that a command meant for the person goes
-in its own fenced `bash` block, one command per block where it can, no `$ ` prompt,
-placeholders written `<name>`. Recommended without a `PROTOCOL_VERSION` bump: an older
-session that doesn't follow it only gets fewer buttons, not wrong behaviour, and a bump
-would mark every running session for relaunch.
-
-## 6. Staging
-
-1. The terminal: Alt+B, the hub's `open_terminal`, wt and iTerm argv, the directory rule,
-   README, F1 `DESCRIBE`, a `whatsnew.FEATURES` entry.
-2. Run buttons: excerpt extraction and the ASCII rule (a table-driven test of what passes
-   and what's refused), the button segment, Alt+Shift+B, the `terminal <key>` entry point
-   and rc, the protocol line, README, a feature and tour tip.
+1. The shell: Shell and Alt+H repurposed, Handover renamed into the session menu, the
+   hub's `open_shell`, wt and iTerm argv, the directory rule; README, F1 `DESCRIBE` and
+   `BUTTONS`, a `whatsnew.FEATURES` entry.
+2. Command items: the kind, `suggest_command` with a table-driven validation test, the
+   protocol rule and version bump, the Run button and modal, `shell <key>` and its rc,
+   the run note; README, a feature and tour tip.
 
 ## Open questions for Doug
 
-**Q1. Confirm where?** (Decides the run's last step.)
+**Q1. Tell the session when a command has run?** (Decides whether a run interrupts it.)
 
-- (a) At the terminal prompt, editable, Enter runs (recommended).
-- (b) A modal in the TUI showing the command, then the tab runs it at once: one place to
-  read, but no editing, so placeholders can't be filled.
-- (c) Both.
+- (a) No: the status changes, which `list_items` shows; Doug says more if he wants
+  (recommended: a run often has nothing for the session, and a message starts a turn).
+- (b) Yes: a short message "ran C4 (edited)" goes to the session, starting a turn.
+- (c) A checkbox in the modal, "tell the session", off by default.
 
-**Q2. Non-ASCII in a command.** (Decides whether `echo "naïve"` or an emoji commit message
-gets a button.)
+**Q2. Handover's place.** (Decides whether SDK sessions keep a visible way back to a tab.)
 
-- (a) Refuse anything outside printable ASCII (recommended: no homoglyphs or hidden
-  characters, at the cost of the odd harmless command).
-- (b) Allow printable non-ASCII letters, refusing only control, format and space
-  characters other than the plain space: more buttons, homoglyphs back in play.
-
-**Q3. Docs.** (Decides whether `.plan/` docs and other doc items get buttons.)
-
-- (a) No, only session replies and item bodies (recommended).
-- (b) Yes, everywhere a fenced bash block shows.
-
-**Q4. Keys.** Alt+B for the terminal and Alt+Shift+B for the excerpt list, or others you'd
-rather keep free?
+- (a) Session menu only, no key (recommended).
+- (b) Session menu, plus Alt+Shift+H.
