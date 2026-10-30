@@ -62,7 +62,7 @@ OVERSIZE = "wheelhouse-oversize"
 
 @dataclass
 class Entry:
-    who: str     # you | claude | tool | note
+    who: str     # you | claude | tool | note | stage | crew (a compaction's, #244)
     text: str
     at: str = ""  # ISO timestamp, UTC
 
@@ -273,19 +273,58 @@ def hard_breaks(text: str) -> str:
     return re.sub(r"(?<!\n)\n(?!\n)", "  \n", text)
 
 
+def boundary_tokens(meta: dict) -> tuple[int | None, int | None]:
+    """A compact_boundary's sizes, before and after (its compactMetadata), in tokens."""
+    meta = meta or {}
+    pre = meta.get("preTokens", meta.get("pre_tokens"))
+    post = meta.get("postTokens", meta.get("post_tokens"))
+    return (pre if isinstance(pre, int) else None), (post if isinstance(post, int) else None)
+
+
+TAIL_BYTES = 1 << 20   # how much of a transcript's end tail_sizes reads: a turn's records, and some
+
+
+def tail_sizes(path: str | Path | None) -> dict:
+    """A tab's sizes from the end of its transcript, for the plugin's compaction hooks (#244):
+    "context", the last assistant turn's input (as the context bars count it), and "before" and
+    "after" from the last compact_boundary. Empty when unreadable: a hook never fails for it."""
+    out: dict = {}
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - TAIL_BYTES))
+            lines = f.read().decode("utf-8", "replace").splitlines()
+    except (OSError, TypeError):
+        return out
+    for line in reversed(lines):
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if "before" not in out and rec.get("type") == "system" and rec.get("subtype") == "compact_boundary":
+            out["before"], out["after"] = boundary_tokens(rec.get("compactMetadata") or rec.get("compact_metadata"))
+        if "context" not in out and rec.get("type") == "assistant" and (u := (rec.get("message") or {}).get("usage")):
+            out["context"] = sum(u.get(k) or 0 for k in ("input_tokens", "cache_read_input_tokens",
+                                                       "cache_creation_input_tokens"))
+        if "before" in out and "context" in out:
+            break
+    return out
+
+
 def _hhmm(at: str) -> str:
     return f" · {at[11:16]}Z" if len(at) >= 16 else ""
 
 
 def blocks(name: str, tab: str | None, recs: list[dict] | None, queued=(), full=None,
-           sending=()) -> list[tuple[str, str]]:
+           sending=(), stages=()) -> list[tuple[str, str]]:
     """The conversation as (who, markdown) blocks, then the person's general messages on
     their way: sent, but not yet taken up by the session, Claude Code holding them (held)
     or the wheelhouse not yet passing them on (sending); then those still queued for it.
     who is head, warn, note, tool, you or claude: the app colours
     the person's words apart from Claude's. tab None: the session runs in the wheelhouse,
     where its permission prompts and questions are items, so there's no tab to wait in.
-    full: the person's message by id (entries)."""
+    full: the person's message by id (entries). stages: a compaction's stage lines and crew
+    excerpts (#244), as Entry("stage" or "crew", text, at), placed by time among the rest."""
     where = (f"_Tab: **{tab}**. Permission prompts and slash commands need that tab._" if tab else
              "_Runs in the wheelhouse: its permission prompts and questions come to the inbox. "
              "Shell opens it in a terminal tab._")
@@ -294,7 +333,15 @@ def blocks(name: str, tab: str | None, recs: list[dict] | None, queued=(), full=
         out.append(("note", "_No transcript found for this session yet._"))
     elif tab and (waiting := waiting_in_tab(recs)):
         out.append(("warn", f"> ⚠ **Waiting for you in its tab:** {waiting}."))
-    out += [entry_block(e) for e in entries(recs or [], full)]
+    said = entries(recs or [], full)
+    if stages:   # by time, a stage after anything said at the same moment; one with no time stays put
+        merged, todo = [], sorted(stages, key=lambda e: e.at)
+        for e in said:
+            while e.at and todo and todo[0].at[:26] < e.at[:26]:
+                merged.append(todo.pop(0))
+            merged.append(e)
+        said = merged + todo
+    out += [entry_block(e) for e in said]
     on_way = held(recs or [], full)
     shown = Counter(on_way)   # one passed on as these were read is Claude Code's already: shown once, two the same twice
     for body in sending:
@@ -313,6 +360,8 @@ def entry_block(e: Entry, label: str | None = None) -> tuple[str, str]:
         return "tool", "`⚙ " + e.text.replace("`", "'") + "`"
     if e.who == "note":
         return "note", f"_{e.text}{_hhmm(e.at)}_"
+    if e.who in ("stage", "crew"):   # plain Text, never Markdown (#244): the app renders it as is
+        return e.who, e.text
     text = hard_breaks(e.text) if e.who == "you" else e.text
     return e.who, f"**{label or e.who}**{_hhmm(e.at)}\n\n{text}"
 

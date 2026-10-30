@@ -25,7 +25,6 @@ from textual.visual import Visual, visualize
 from textual.widgets import Button, Checkbox, DataTable, Footer, Input, Label, Select, TextArea
 
 from claude_wheelhouse import emoji, features, launch, models, ordering, transcript, transcript_usage, tui, tutorial
-from claude_wheelhouse.host import NO_NOTES
 from claude_wheelhouse.hub import Done, Hub
 from claude_wheelhouse.store import PROTOCOL_VERSION
 
@@ -2564,7 +2563,7 @@ async def test_a_changed_transcript_keeps_a_scrolled_up_place(blocks, top, new, 
 
 
 class WordTranscript(OneTranscript):
-    on_click = WheelhouseApp.on_click
+    on_click, full_screen_click = WheelhouseApp.on_click, WheelhouseApp.full_screen_click
 
 
 @pytest.mark.anyio
@@ -2592,7 +2591,7 @@ async def test_a_double_click_selects_the_word_under_it(at, chain, selected, des
 
 
 class OneBox(App):
-    on_click = WheelhouseApp.on_click
+    on_click, full_screen_click = WheelhouseApp.on_click, WheelhouseApp.full_screen_click
 
     def compose(self) -> ComposeResult:
         yield TextArea("first line\nalpha beta-gamma  delta")
@@ -4807,6 +4806,7 @@ async def test_the_compact_question(store, tmp_path, monkeypatch, typed, then, p
     from claude_wheelhouse import liveness
     monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
     sid = store.create_session(str(tmp_path), name="hosted", runner="sdk")
+    store.mark_version(sid)   # on current code: an older host is never given a cycle (#244)
     ref = store.post_item(sid, "question", "context 220k: compact?")
     store.set_answer(sid, ref, COMPACT_QUESTION)
     app = WheelhouseApp(store)
@@ -4832,6 +4832,71 @@ async def test_the_compact_question(store, tmp_path, monkeypatch, typed, then, p
     assert store.item(sid, ref)["status"] == status, desc
     assert store.drafts(sid) == [] and store.pending(sid) == [], f"{desc}: nothing queued or sent to the session"
     assert left == ("" if command and typed else typed), f"{desc}: the instructions leave the box"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("press, abort, desc", [
+    ("#keep-waiting", False, "Keep waiting: closed, nothing interrupted"),
+    ("#abort-compaction", True, "Abort: the notes turn interrupted, which cancels the compaction"),
+    ("keys:alt+y", False, "Alt+Y: Keep waiting"),
+    ("keys:alt+d", True, "Alt+D: Abort"),
+])
+@pytest.mark.both
+async def test_the_notes_wait_question(store, tmp_path, monkeypatch, press, abort, desc):
+    """#244: past NOTES_TIMEOUT the host asks whether to keep waiting for a compaction's notes;
+    its buttons over the answer box, in place of the question suggesting Compact's."""
+    from claude_wheelhouse import liveness
+    from claude_wheelhouse.store import NOTES_WAIT
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
+    sid = store.create_session(str(tmp_path), name="hosted", runner="sdk")
+    store.command(sid, "compact")
+    store.take_command(sid)
+    ref = store.post_marked_question(sid, "notes: keep waiting?", "", NOTES_WAIT)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(180, 40)) as pilot:
+        await pilot.pause()
+        await to_first_item(app, pilot)
+        await pilot.pause()
+        assert app.query_one(CompactButtons).display, desc
+        assert [b.id for b in app.query_one(CompactButtons).query(Button) if b.display] == \
+            ["keep-waiting", "abort-compaction"], f"{desc}: only its own buttons"
+        if press.startswith("#"):
+            await pilot.click(press)
+        else:
+            app.items_table.focus()
+            await pilot.press(press[5:])
+        await pilot.pause()
+    assert store.item(sid, ref)["status"] == "closed", desc
+    assert store.session(sid)["host_command"] == ("interrupt" if abort else None), desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("mode_, desc", [("queued", "queued mode"), ("immediate", "Immediate mode")])
+async def test_a_refused_send_keeps_the_text_and_says_why(store, tmp_path, monkeypatch, mode_, desc):
+    """#244: during a compaction cycle a submit is refused, said in the one wording, and the
+    box keeps what was typed."""
+    from claude_wheelhouse import liveness
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
+    sid = store.create_session(str(tmp_path), name="hosted", runner="sdk")
+    store.set_mode(sid, mode_)
+    store.post_item(sid, "question", "which db?")
+    store.command(sid, "compact")
+    store.db.execute("DELETE FROM items WHERE answer = '{\"from\": \"compaction\"}'")   # its task: refused apart
+    app = WheelhouseApp(store)
+    toasts = []
+    monkeypatch.setattr(app, "notify", lambda text, **kw: toasts.append(text))
+    async with app.run_test(size=(180, 40)) as pilot:
+        await pilot.pause()
+        await to_first_item(app, pilot)
+        app.answer.text = "use Postgres"
+        app.answer.focus()
+        await pilot.press("ctrl+enter")
+        await pilot.pause()
+        left = app.answer.text
+    assert left == "use Postgres", f"{desc}: the box keeps the text"
+    assert "hosted is compacting: send once it's done, or Interrupt to cancel the compaction." in toasts, \
+        f"{desc}: {toasts}"
+    assert not store.drafts(sid) and not store.pending(sid), desc
 
 
 @pytest.mark.anyio
@@ -4865,6 +4930,7 @@ async def test_the_compact_button_asks_how(store, tmp_path, monkeypatch, typed, 
     from claude_wheelhouse import liveness
     monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
     sid = store.create_session(str(tmp_path), name="hosted", runner="sdk")
+    store.mark_version(sid)   # on current code: an older host is never given a cycle (#244)
     store.post_item(sid, "task", "work")
     app = WheelhouseApp(store)
     async with app.run_test(size=(180, 40)) as pilot:
@@ -6125,6 +6191,71 @@ async def test_parked_sessions_stay_in_the_list_after_the_rest(store, sid, tmp_p
         parked_q, active_q = str(t.get_row(sid)[3].style), str(t.get_row(first)[3].style)
         assert "dim" in parked_q and "blink" not in parked_q, parked_q
         assert "blink" in active_q and "dim" not in active_q, active_q
+
+
+def dimmed_cell(cell) -> bool:
+    """Whether a table cell is drawn dim, by its own style or a span over it."""
+    return isinstance(cell, Text) and ("dim" in str(cell.style) or any("dim" in str(sp.style) for sp in cell.spans))
+
+
+@pytest.mark.anyio
+@pytest.mark.both
+@pytest.mark.parametrize("row, life, dim, desc", [
+    ("session", "dead", True, "a dead session's row dims, its dot kept red"),
+    ("session", "live", False, "a live session's row stays bright"),
+    ("session", "parked", True, "a parked session's name dims, as it did before"),
+    ("session", "revived", False, "relaunched: its row brightens at the next refresh"),
+    ("item", "dead", True, "a dead session's inbox item dims"),
+    ("item", "live", False, "a live session's inbox item stays bright"),
+    ("item", "parked", None, "a parked session's items are off the inbox"),
+    ("item", "revived", False, "relaunched: its items brighten at the next refresh"),
+    ("conversation", "dead", True, "a dead session's conversation row dims"),
+    ("conversation", "live", False, "a live session's conversation row stays bright"),
+    ("conversation", "parked", None, "a parked session's conversation is off the inbox"),
+    ("conversation", "revived", False, "relaunched: its conversation row brightens"),
+])
+async def test_a_dead_sessions_rows_are_dimmed(store, sid, monkeypatch, row, life, dim, desc):
+    """#252: a session dead and not parked keeps its red dot, and its rows dim in the session
+    list and the inbox; they stay selectable, and brighten once it runs again. A parked one
+    is dimmed as it was (#58, #210), its items off the inbox."""
+    from claude_wheelhouse import liveness
+    from claude_wheelhouse.tui import STATUS_STYLE
+    status = {"now": "live" if life == "live" else "dead"}
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: status["now"])
+    store.post_item(sid, "question", "which db?")
+    if life == "parked":
+        store.set_parked(sid, True)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        if life == "revived":
+            if row == "session":
+                assert dimmed_cell(app.query_one("#session-list", DataTable).get_row(sid)[1]), f"{desc}: dim first"
+            else:
+                t = app.query_one("#items", DataTable)
+                key = f"{sid}|" if row == "conversation" else next(k for k in t.keys() if k and k.endswith("Q1"))
+                assert dimmed_cell(t.get_row(key)[-1]), f"{desc}: dim first"
+            status["now"] = "live"
+            app.refresh_data()
+            await pilot.pause()
+        if row == "session":
+            t = app.query_one("#session-list", DataTable)
+            cells = t.get_row(sid)
+            assert not dimmed_cell(cells[0]), f"{desc}: the dot keeps its colour"
+            if life == "dead":
+                assert str(cells[0].style) == STATUS_STYLE["dead"], f"{desc}: the dot stays red"
+            assert dimmed_cell(cells[1]) == dim, desc
+            return
+        t = app.query_one("#items", DataTable)
+        key = f"{sid}|" if row == "conversation" else next((k for k in t.keys() if k and k.endswith("Q1")), None)
+        if dim is None:
+            assert key not in t.rows, desc
+            return
+        assert dimmed_cell(t.get_row(key)[-1]) == dim, desc
+        if row == "item":   # visual only: still picked by a click
+            await pilot.click(t, offset=(t.region.width // 2, t.get_row_index(key) + 1))
+            await pilot.pause()
+            assert app.selected == (sid, "Q1"), f"{desc}: selectable"
 
 
 def test_the_keys_overlay_has_relaunch_and_no_tabs():
@@ -8771,14 +8902,13 @@ class Presses:
 
 BUSY_ROW = {"id": "s1", "name": "demo", "host_command": None, "activity": "idle", "model": "opus",
             "applied_model": "opus", "park_requested_at": None, "end_requested_at": None, "interrupted_at": None,
-            "shell": None}
+            "shell": None, "compaction": None}
 
 
 @pytest.mark.parametrize("button, status, starts, lands, desc", [
     ("interrupt", "live", {"host_command": "interrupt"}, {"host_command": None, "interrupted_at": "9999"}, "Interrupt: until the host stamps it"),
     ("interrupt", "live", {}, {"interrupted_at": "9999"}, "Interrupt taken before a refresh saw it: its stamp lands it"),
     ("compact", "live", {"host_command": "compact"}, {"host_command": None, "activity": "idle · compacted 300k → 40k tokens"}, "Compact: until compacted"),
-    ("compact", "live", {"activity": "compacting: collecting notes"}, {"activity": NO_NOTES}, "Compact: through the notes, until it stops"),
     ("compact", "live", {"host_command": "compact"}, {"_status": "dead"}, "Compact: the host dying ends it"),
     ("shell", "live", {"host_command": "shell"}, {"host_command": None, "activity": "", "shell": "tab"}, "Shell: until handed over"),
     ("model", "live", {"model": "sonnet"}, {"applied_model": "sonnet"}, "Model: until applied"),
@@ -8787,7 +8917,7 @@ BUSY_ROW = {"id": "s1", "name": "demo", "host_command": None, "activity": "idle"
     ("relaunch", "live", {"_relaunching": True}, {"_relaunching": False}, "Relaunch a running one: until it's back"),
     ("relaunch", "dead", {"_status": "starting"}, {"_status": "live"}, "Relaunch or Unpark a dead one: until it runs"),
     ("fork", "live", {}, {"_notice": True}, "Fork: until the hub's word of it, with the parent's id"),
-    ("compact-now", "live", {"host_command": "compact"}, {"host_command": None, "activity": NO_NOTES, "_closed": True}, "the question's Compact: until it closes"),
+    ("compact-now", "live", {"host_command": "compact"}, {"host_command": None, "compaction": "cancelled", "_closed": True}, "the question's Compact: until it closes"),
 ])
 def test_a_pressed_button_stays_off_until_its_action_lands(monkeypatch, button, status, starts, lands, desc):
     now = [100.0]
@@ -9230,7 +9360,7 @@ async def test_ctrl_delete_leaves_a_compacting_sessions_rows(store, tmp_path, mo
     locked = store.post_item(busy, "task", "done", status="done")
     free = store.create_session(str(tmp_path), name="other")
     other = store.post_item(free, "task", "done", status="done")
-    store.set_activity(busy, "compacting: collecting notes")
+    store.command(busy, "compact")   # its compaction cycle (#244)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
@@ -9308,7 +9438,7 @@ async def test_show_item_leaves_a_hidden_row_of_a_compacting_session_unpicked(st
     busy = store.create_session(str(tmp_path), name="hosted", runner="sdk")
     ref = store.post_item(busy, "task", "done a while ago", status="done")
     aged(store, busy, ref, 30)
-    store.set_activity(busy, "compacting: collecting notes")
+    store.command(busy, "compact")   # its compaction cycle (#244)
     app = WheelhouseApp(store)
     app.autocleanse = 5
     async with app.run_test(size=(160, 40)) as pilot:
@@ -9444,7 +9574,7 @@ async def test_a_compacting_session_shows_it(store, tmp_path, monkeypatch, size)
     """#150: while its host records a compaction (the question's Compact now, say), Compact is
     off, the session's inbox rows dim and ignore clicks and keys, Detail dims on one of them,
     and its eye in the session list is blue; an item it posts meanwhile is never locked; all
-    back once the host says it's compacted, and never while it only waits for notes."""
+    back once the cycle ends (#244), and blue throughout it, from the press to /compact's end."""
     from claude_wheelhouse import host as host_mod, liveness
     from claude_wheelhouse.tui import EYE_BLUE, ItemList, SessionList
     monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
@@ -9468,7 +9598,16 @@ async def test_a_compacting_session_shows_it(store, tmp_path, monkeypatch, size)
         await click(t1)
         assert app.selected == (sid, "T1"), f"{size}: picked by a click"
 
-        store.set_activity(sid, "compacting: collecting notes")   # as the host writes it
+        store.command(sid, "compact")   # pressed: blue from here, before the host takes it
+        await again()
+        assert sid in app.query_one(SessionList).blue, f"{size}: blue at the press"
+        store.take_command(sid)
+        cid = store.compaction(sid)["id"]
+        store.move_compaction(sid, cid, "preparing")   # as the host writes it
+        store.set_activity(sid, "compacting: collecting notes")
+        # its task item (#244 PR 2), posted after the cut-off, is never locked: put aside here, so
+        # the keys below are about the session's own rows
+        store.db.execute("DELETE FROM items WHERE answer = '{\"from\": \"compaction\"}'")
         await again()
         compact = app.query_one("#compact", Button)
         assert compact.disabled, f"{size}: Compact off while compacting"
@@ -9496,12 +9635,14 @@ async def test_a_compacting_session_shows_it(store, tmp_path, monkeypatch, size)
         await click(q2)
         assert app.selected == (sid, "Q2"), f"{size}: and can be picked"
 
-        store.set_activity(sid, host_mod.AWAITING_NOTES)   # its notes' turn ended without them
+        store.set_activity(sid, "idle")   # a line between turns: the cycle, not the line, says compacting
         await again()
-        assert not table.locked and sid not in sessions.blue, f"{size}: waiting for notes isn't compacting"
+        assert sid in sessions.blue and q1 in table.locked, f"{size}: still blue between the notes and /compact"
 
+        store.move_compaction(sid, cid, "compacting")
         store.set_activity(sid, "compacting")
         await again()
+        store.move_compaction(sid, cid, "completed")
         store.set_activity(sid, "idle · compacted")
         await again()
         assert not compact.disabled and not table.locked, f"{size}: Compact and the rows back"
@@ -9750,3 +9891,86 @@ async def test_mcp_servers_dialog_without_a_running_host(store, tmp_path, monkey
         assert says in str(dialog.query_one("#mcp-when", Label).content), desc
         assert list(dialog.query(".mcp-row Button")) == [], desc
         assert store.take_mcp_asks(sid) == [], f"{desc}: no host to ask"
+
+
+@pytest.mark.parametrize("kind, status, mark, locked, desc", [
+    ("task", "running", {}, True, "an item before the press: locked while compacting (#150)"),
+    ("permission", "open", {}, False, "a permission the turn waits on: answerable, or the cycle never moves (#244)"),
+    ("permission", "allowed", {}, True, "a permission already answered: locked as any other"),
+    ("question", "open", {"answer": '{"from": "AskUserQuestion"}'}, False, "the host's AskUserQuestion, in process"),
+    ("question", "open", {"host_question": True}, False, "the same through the daemon, which serves no answers"),
+    ("question", "open", {"answer": None}, True, "the session's own question: locked"),
+])
+def test_a_call_the_turn_waits_on_is_never_locked_by_a_compaction(kind, status, mark, locked, desc):
+    it = {"session_id": "s1", "id": 3, "kind": kind, "status": status, **mark}
+    assert WheelhouseApp.locks(it, {"s1": 5}) == locked, desc
+
+
+@pytest.mark.parametrize("width", [36, 76])
+@pytest.mark.parametrize("who, text", [
+    ("stage", "▐█          █▌ walls closing in\nasked for by you (Compact) · 10:39Z"),
+    ("stage", "▐████████████▌ compacted\n220k → 40k · 10:41Z"),
+    ("crew", "Han: I've got a bad feeling about these walls.\nC-3PO: Sir, the odds of survival are rather poor!"),
+])
+def test_stage_blocks_render_as_plain_text_never_markdown(width, who, text):
+    """#244: Markdown would turn the art into rules and bullets; each line is cut, never wrapped."""
+    from rich.console import Console
+    from rich.segment import Segment
+    console = Console(width=width, color_system=None)   # rendered as the app renders a block (_block_lines)
+    rendered = console.render(tui.stage_text(who, text), console.options.update_width(width))
+    shown = ["".join(seg.text for seg in line) for line in Segment.split_lines(rendered)]
+    assert len(shown) == len(text.split("\n")), shown
+    for line, want in zip(shown, text.split("\n")):
+        assert line.rstrip() == want or (line.rstrip().endswith("…") and want.startswith(line.rstrip()[:-1])), (line, want)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("kind, layout, row, times, full, desc", [
+    ("question", "split", 3, 1, None, "a question, one click: stays in Detail"),
+    ("question", "split", 3, 2, "ThreadView", "a question, double-click: full screen"),
+    ("task", "split", 3, 1, None, "a task, one click: stays in Detail"),
+    ("task", "split", 3, 2, "ThreadView", "a task, double-click: full screen"),
+    ("doc", "split", 3, 1, None, "a doc, one click: its editor, in Detail"),
+    ("doc", "split", 3, 2, "DocView", "a doc, double-click: full screen, not its editor"),
+    ("doc", "split", 20, 2, "DocView", "a doc's lower rows, where the editor opens: full screen all the same"),
+    ("doc", "tabbed", 3, 1, None, "a doc tabbed, one click: its editor's tab"),
+    ("doc", "tabbed", 3, 2, "DocView", "a doc tabbed, the editor's tab over it: full screen all the same"),
+    ("conversation", "split", 3, 2, None, "a conversation, double-click: no full screen to go to"),
+])
+async def test_double_click_on_detail_goes_full_screen_and_back(store, sid, tmp_path, kind, layout, row, times, full,
+                                                                desc):
+    """#253: a double-click on Detail opens what it shows full screen, documents included, and
+    one on the full screen goes back; a single click keeps its own job (a doc's editor). As the
+    terminal sends it (raw_click), where each press goes to what's under the pointer then."""
+    if kind == "doc":
+        (tmp_path / "plan.md").write_text("# The plan\n\n" + "".join(f"Step {i}, built well.\n\n" for i in range(30)))
+        ref = store.post_doc(sid, "plan", str(tmp_path / "plan.md"))
+    elif kind != "conversation":
+        ref = store.post_item(sid, kind, "which db?", "Postgres or SQLite? " * 20)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.doc_layout = tui.TABBED if layout == "tabbed" else tui.SPLIT
+        app.items_table.move_cursor(row=app.items_table.get_row_index(f"{sid}|" if kind == "conversation" else f"{sid}|{ref}"))
+        await pilot.pause()
+        at = app.detail.region.offset + (3, row)   # the same place twice, whatever opens under it
+        for _ in range(times):   # as a hand clicks: each click handled before the next
+            raw_click(app, app.screen, at)
+            await pilot.pause(0.05)
+        await pilot.pause(0.2)
+        assert type(app.screen).__name__ == (full or "Screen"), desc
+        opened = kind == "doc" and times == 1
+        assert (app.detail_editor.key is not None) == opened, f"{desc}: Detail's editor"
+        assert bool(app.doc_quotes) == opened, f"{desc}: a comment's quote, as the editor"
+        if full is None:
+            return
+        await pilot.pause(0.6)   # a new double-click, not more of the last one
+        at = app.screen.query_one("#docview" if full == "DocView" else "#thread").region.offset + (3, row)
+        for _ in range(2):
+            raw_click(app, app.screen, at)
+            await pilot.pause(0.05)
+        await pilot.pause(0.2)
+        assert len(app.screen_stack) == 1, f"{desc}: a double-click there goes back"
+        assert app.detail_editor.key is None and not app.screen.selections, f"{desc}: no editor, nothing selected"
+        if kind == "doc":
+            assert app.detail_panes.tab == tui.DOC_TAB, f"{desc}: the doc's tab, as before"

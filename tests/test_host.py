@@ -11,7 +11,7 @@ import pytest
 
 from claude_wheelhouse import features, host as host_mod, launch
 from claude_wheelhouse import store as store_mod
-from claude_wheelhouse.host import (AWAITING_NOTES, CANCELLED, compact_ask, HOST_QUESTION, NO_NOTES, Host, format_turn,
+from claude_wheelhouse.host import (CANCELLED, compact_ask, HOST_QUESTION, Cycle, Host, format_turn,
                                     keep_notes, question_answers, question_item, tool_summary)
 from claude_wheelhouse.store import COMPACT_QUESTION, COMPACT_QUESTION_DONE, SessionGone
 from claude_wheelhouse.monitor import REQUEST_TEXT, request_text
@@ -142,7 +142,7 @@ def test_question_item_lists_options():
     (lambda s, sid: s.queue(sid, "later", "Q1"), [], "a queued draft waits for Send"),
     (lambda s, sid: s.request_end(sid), [lambda h: request_text(h.store, "end")], "End is passed on as a turn"),
     (lambda s, sid: s.notice(sid, "hello"), ["[wheelhouse] hello"], "a notice"),
-    (lambda s, sid: s.command(sid, "compact"), [lambda h: compact_ask(h.store, h.compact_nonce)],
+    (lambda s, sid: s.command(sid, "compact"), [lambda h: compact_ask(h.store, h.cycle.nonce)],
      "Compact asks for the notes first, under its own id"),
 ])
 def test_poll_turns(host, store, sid, setup, expected, desc):
@@ -856,37 +856,46 @@ def streamed(store, sid, monkeypatch):
 
 NOTES = 'Saved.\n<keep id="{nonce}">\n- Q3 open\n- PR 17\n</keep>'
 COMPACTED = ["/compact - Q3 open\n- PR 17"]
+BARE = "compacting: no notes came back, so without them"   # the notes turn ended without its block
+AHEAD = "ahead"   # in a stream: a turn of ours sent before Compact, still to run
 
 
 REPLAY = "replay"   # in a stream: Claude Code taking up the turn last sent
+REPLAY0 = "replay0"   # in a stream: Claude Code taking up the first turn sent
 
 
 @pytest.mark.parametrize("stream, sent, activity, desc", [
     ([REPLAY, text(NOTES), result()], COMPACTED, "compacting", "the ask's reply carries the notes"),
     ([own("background task done"), REPLAY, text(NOTES), result()], COMPACTED, "compacting",
      "a turn Claude Code started itself ends first"),
-    ([result("overloaded", error=True), REPLAY, text(NOTES), result()], COMPACTED, "compacting",
+    ([AHEAD, REPLAY0, result("overloaded", error=True), REPLAY, text(NOTES), result()], COMPACTED, "compacting",
      "an error in a turn queued ahead doesn't cancel it"),
     ([REPLAY, result(NOTES)], COMPACTED, "compacting", "notes only in the turn's result"),
     ([REPLAY, text('Saved.\n<keep id="{nonce}">\n- Q3 open'), text("- PR 17\n</keep>"), result()], COMPACTED,
      "compacting", "a block split across text blocks"),
     ([REPLAY, text('<keep id="{nonce}">\n</keep>'), result()], ["/compact"], "compacting",
      "an empty block: compact with no instructions"),
-    ([REPLAY, text('I\'ll put them between <keep id="{nonce}"> and </keep>.'), result()], [], AWAITING_NOTES,
-     "the instruction quoted in prose isn't the notes"),
-    ([REPLAY, text("<keep>\n- Q3\n</keep>"), result()], [], AWAITING_NOTES, "a block without the id isn't the notes"),
-    ([REPLAY, text("I'll save first."), result()], [], AWAITING_NOTES, "no notes yet: it keeps waiting"),
+    ([REPLAY, text('I\'ll put them between <keep id="{nonce}"> and </keep>.'), result()], ["/compact"], BARE,
+     "the instruction quoted in prose isn't the notes: compacted bare, said"),
+    ([REPLAY, text("<keep>\n- Q3\n</keep>"), result()], ["/compact"], BARE, "a block without the id isn't the notes"),
+    ([REPLAY, text("I'll save first."), result()], ["/compact"], BARE, "the notes turn ends without them: bare"),
 ])
 def test_compact_by_id(streamed, store, sid, stream, sent, activity, desc):
     """Through the real read(): the notes go to /compact whichever turn they arrive in."""
     h = streamed
+    ahead = stream[0] == AHEAD
+    if ahead:
+        run(h.turn("earlier"))
+        stream = stream[1:]
     store.command(sid, "compact")
 
     async def go():
         await h.poll()
-        nonce = h.compact_nonce
+        nonce = h.cycle.nonce
         for m in stream:
-            if m == REPLAY:
+            if m == REPLAY0:
+                m = h.client.replay(0)
+            elif m == REPLAY:
                 m = h.client.replay()
             elif hasattr(m, "result") and m.result:
                 m.result = m.result.format(nonce=nonce)
@@ -898,10 +907,10 @@ def test_compact_by_id(streamed, store, sid, stream, sent, activity, desc):
         await h.read()
         return nonce
     nonce = run(go())
-    assert h.client.queries[1:] == sent, desc
-    assert (h.compact_nonce is None) == bool(sent), desc
+    assert h.client.queries[1 + ahead:] == sent, desc
+    assert h.cycle.state == store.compaction(sid)["state"] == "compacting", desc
     assert store.session(sid)["activity"] == activity, desc
-    assert nonce and h.client.queries[0] == compact_ask(h.store, nonce), desc
+    assert nonce and h.client.queries[ahead] == compact_ask(h.store, nonce), desc
 
 
 async def feed(h, *msgs):
@@ -918,48 +927,37 @@ def tool(command):
     return AssistantMessage(content=[ToolUseBlock(id=command, name="Bash", input={"command": command})], model="m")
 
 
-@pytest.mark.parametrize("running, desc", [
-    (1, "pressed during a long turn: the ask waits behind it"),
-    (0, "pressed while idle, then Claude Code starts a turn of its own"),
-])
-def test_compact_waits_out_a_long_turn(streamed, store, sid, monkeypatch, running, desc):
-    """Only quiet time counts towards Compact's timeout, so a turn of any length never times
-    it out, and never has its activity overwritten; the notes, when they come, compact."""
-    monkeypatch.setattr(host_mod, "COMPACT_TIMEOUT", 0)   # any quiet moment would time it out
+def test_compact_waits_out_a_long_turn(streamed, store, sid, monkeypatch):
+    """Pressed during a long turn, the ask waits behind it: the notes clock (NOTES_TIMEOUT)
+    starts only once the ask is taken up, so a long turn ahead never asks the person, and the
+    session stays compacting meanwhile (#233); the notes, when they come, compact."""
+    monkeypatch.setattr(host_mod, "NOTES_TIMEOUT", 0)   # any time at all once the notes turn runs
     h = streamed
 
     async def go():
         reader = asyncio.create_task(h.read())
-        if running:
-            await h.turn("a long one")
+        await h.turn("a long one")
         store.command(sid, "compact")
         await h.poll()
-        nonce = h.compact_nonce
-        if not running:   # the ask's turn ends without notes, then a turn Claude Code started itself
-            await feed(h, h.client.replay(), result())
-            await feed(h, tool("sleep 900"))
-        else:
-            await feed(h, h.client.replay(0), tool("sleep 900"))
+        nonce = h.cycle.nonce
+        await feed(h, h.client.replay(0), tool("sleep 900"))
         for _ in range(3):   # time passes while that turn runs
             await h.poll()
-            assert h.compact_nonce == nonce, desc
-            # queued behind the long turn, the ask keeps the session compacting (#233); its
-            # turn over without notes, the session is free
-            lead = "compacting: collecting notes · " if running else ""
-            assert store.session(sid)["activity"] == f"{lead}running Bash: sleep 900", desc
-        await feed(h, result() if running else own(), *([h.client.replay(1)] if running else []),
-                   text(NOTES.format(nonce=nonce)), result() if running else own())
+            assert h.cycle.nonce == nonce and h.cycle.question is None, "no question while the turn ahead runs"
+            assert store.session(sid)["activity"] == "compacting: collecting notes · running Bash: sleep 900"
+        await feed(h, result(), h.client.replay(1), text(NOTES.format(nonce=nonce)), result())
         await feed(h, None)
         await reader
     run(go())
-    assert h.client.queries[-1:] == COMPACTED, desc
+    assert h.client.queries[-1:] == COMPACTED
 
 
-@pytest.mark.parametrize("ending, activity, desc", [
-    ("interrupt", "interrupted", "Interrupt cancels Compact"),
-    ("timeout", NO_NOTES, "quiet for the whole timeout with no notes: give up and say so"),
+@pytest.mark.parametrize("ending, state, activity, desc", [
+    ("interrupt", "cancelled", "interrupted", "Interrupt during the bare /compact cancels the cycle"),
+    ("timeout", "failed", host_mod.NOT_COMPACTED.format(why=host_mod.TIMED_OUT),
+     "/compact past COMPACT_TIMEOUT: the cycle fails, and says so"),
 ])
-def test_compact_abandoned(streamed, store, sid, ending, activity, desc):
+def test_compact_abandoned(streamed, store, sid, ending, state, activity, desc):
     h = streamed
 
     async def go():
@@ -967,15 +965,16 @@ def test_compact_abandoned(streamed, store, sid, ending, activity, desc):
         store.command(sid, "compact")
         await h.poll()
         await feed(h, h.client.replay(), text("Nothing to keep."), result())   # the ask's turn ends without notes
+        assert h.client.queries[-1] == "/compact", f"{desc}: compacted bare"
         if ending == "interrupt":
             store.command(sid, "interrupt")
         else:
-            h.compact_idle -= host_mod.COMPACT_TIMEOUT + 1
+            h.cycle.waited = time.monotonic() - host_mod.COMPACT_TIMEOUT - 1   # taken up that long ago
         await h.poll()
         await feed(h, None)
         await reader
     run(go())
-    assert h.compact_nonce is None, desc
+    assert h.cycle is None and store.compaction(sid)["state"] == state, desc
     assert store.session(sid)["activity"] == activity, desc
 
 
@@ -994,7 +993,7 @@ COMPACT_STEPS = {
     "replay": lambda h, s: feed(h, h.client.replay()),
     "thinking": lambda h, s: feed(h, text("Saving the plan first.")),
     "tool": lambda h, s: feed(h, tool("git status")),
-    "notes": lambda h, s: feed(h, text(NOTES.format(nonce=h.compact_nonce))),
+    "notes": lambda h, s: feed(h, text(NOTES.format(nonce=h.cycle.nonce))),
     "boundary": lambda h, s: feed(h, boundary()),
     "end": lambda h, s: feed(h, result()),
     "error": lambda h, s: feed(h, result("overloaded", error=True)),
@@ -1010,7 +1009,8 @@ PREP = [("press", True), ("poll", True), ("replay", True), ("tool", True), ("thi
      "idle · compacted 150k → 1k tokens", "the person's Compact with instructions: /compact alone"),
     ([("request", False), ("poll", True), ("replay", True), ("thinking", True), ("boundary", True), ("end", False)],
      "idle · compacted 150k → 1k tokens", "the session's request_compact"),
-    (PREP + [("end", False)], AWAITING_NOTES, "the notes turn ends without notes: the session is free"),
+    (PREP + [("end", True), ("replay", True), ("boundary", True), ("end", False)],
+     "idle · compacted 150k → 1k tokens", "the notes turn ends without notes: compacted bare, compacting throughout"),
     (PREP + [("interrupt", False), ("tool", False), ("aborted", False)], "interrupted",
      "Interrupt mid notes turn: free at once, the turn's last lines included"),
     (PREP + [("notes", True), ("end", True), ("replay", True), ("error", False)], "error: overloaded",
@@ -1051,7 +1051,9 @@ def test_a_call_waiting_on_the_person_keeps_the_compaction_line(host, store, sid
     """A permission or question in a compaction's turn: its waiting line and the thinking
     after the answer stay led by the compaction's, so the session stays compacting (#233)."""
     line = "compacting: collecting notes"
-    run(host.turn("ask", compacting=line))
+    key = run(host.turn("ask", compacting=line))
+    host.cycle = Cycle(store.start_compaction(sid, "person", "preparing"), "person", None, state="preparing",
+                       line=line, ask=key)
     seen = []
 
     def answered(s, i, ref):
@@ -1655,15 +1657,15 @@ def test_a_compaction_the_session_asked_for(host, store, sid, busy, command, hel
     assert store.session(sid)["compact_request"] is None, f"{desc}: nothing left pending"
 
 
-@pytest.mark.parametrize("attr, value, desc", [
-    ("compact_nonce", "ab12", "the person's Compact waiting for its notes: theirs, not overridden"),
-    ("compact_then", "park", "a parking compaction under way"),
-    ("compact_key", "k1", "the wheelhouse's own /compact turn not yet ended"),
+@pytest.mark.parametrize("origin, state, then, desc", [
+    ("person", "preparing", None, "the person's Compact waiting for its notes: theirs, not overridden"),
+    ("park", "compacting", "park", "a parking compaction under way"),
+    ("auto", "compacting", None, "Claude Code's own compaction under way"),
 ])
-def test_a_compaction_the_session_asked_for_waits_for_one_under_way(host, store, sid, attr, value, desc):
+def test_a_compaction_the_session_asked_for_waits_for_one_under_way(host, store, sid, origin, state, then, desc):
     store.set_runner(sid, "sdk")
     store.request_compact(sid, "keep the plan")
-    setattr(host, attr, value)
+    host.cycle = Cycle(store.start_compaction(sid, origin, state, then), origin, then, state=state)
     run(host.poll())
     assert "/compact keep the plan" not in host.client.queries, desc
     assert store.session(sid)["compact_request"] == "keep the plan", f"{desc}: still pending"
@@ -1730,7 +1732,9 @@ def test_parking_compaction_holds_messages_and_requests(host, store, sid, then, 
         finish_at(host, 220_000)
     run(host.poll())
     host.client.queries.clear()
-    store.send(sid, "one more thing")
+    with pytest.raises(store_mod.Compacting):
+        store.send(sid, "one more thing")
+    store.notice(sid, "one more thing")   # not the person's: held all the same
     run(host.poll())
     assert host.client.queries == [], f"{desc}: nothing queued behind /compact"
     finish_at(host, 40_000, compacted=True)
@@ -1785,7 +1789,7 @@ def test_an_earlier_turn_compacting_by_itself_leaves_the_plan_for_the_compact_tu
     host.sent.pop(ahead)
     host.compacted_from = 300_000
     run(host.finished(SimpleNamespace(result="", is_error=False, subtype="success")))
-    assert not store.session(sid)["parked"] and host.compact_then == "park", "the auto-compacted turn: not yet"
+    assert not store.session(sid)["parked"] and host.cycle.then == "park", "the auto-compacted turn: not yet"
     finish_at(host, 40_000, compacted=True)
     assert store.session(sid)["parked"], "the /compact turn ended: parked"
 
@@ -1804,19 +1808,19 @@ def setup_parking(host, store, sid, how):
 
 
 @pytest.mark.parametrize("how, desc", [
-    ("park", "then park: Stop & Forget is told after the compaction, not parked"),
-    ("park-first", "Park's Compact first: the same, the session unparked for it"),
+    ("park", "then park: Stop & Forget's Let it know is refused while it compacts, and it parks"),
+    ("park-first", "Park's Compact first: the same"),
 ])
-def test_stop_and_forget_wins_over_parking(host, store, sid, how, desc):
-    store.post_item(sid, "question", "which db?")   # an open item: a reminder would be due
+def test_stop_and_forget_is_refused_while_parking_compacts(host, store, sid, how, desc):
+    """Q5: Let it know would send a turn, so it is refused during the cycle; Just stop it stays."""
+    store.post_item(sid, "question", "which db?")
     setup_parking(host, store, sid, how)
-    store.request(sid, "end")
-    assert run(host.poll()), desc
+    with pytest.raises(store_mod.Compacting, match="stop and forget once it's done"):
+        store.request(sid, "end")
     finish_at(host, 40_000, compacted=True)
-    assert run(host.poll()), desc
+    assert run(host.poll()) is False, f"{desc}: parked, the host stops"
     row = store.session(sid)
-    assert host.client.queries == [request_text(store, "end")], f"{desc}: the end request alone, no reminder"
-    assert not row["parked"] and not row["park_compact"], desc
+    assert host.client.queries == [] and row["parked"] and not row["end_requested_at"], desc
 
 
 def test_stop_and_forget_after_a_parking_compaction_parked_it_still_wins(host, store, sid):
@@ -1829,23 +1833,21 @@ def test_stop_and_forget_after_a_parking_compaction_parked_it_still_wins(host, s
 
 
 @pytest.mark.parametrize("how, desc", [
-    ("park", "then park: a hold past COMPACT_TIMEOUT lets messages go, and says so"),
-    ("park-first", "Park's Compact first: parked already, so the host waits the compaction out"),
+    ("park", "then park: past COMPACT_TIMEOUT the cycle fails, and a held message goes"),
+    ("park-first", "Park's Compact first: the cycle fails the same, the session parked already"),
 ])
-def test_a_parking_compaction_that_never_ends_lets_messages_go(host, store, sid, monkeypatch, how, desc):
+def test_a_parking_compaction_that_never_ends_fails(host, store, sid, how, desc):
     setup_parking(host, store, sid, how)
-    said = []
-    set_activity = store.set_activity
-    monkeypatch.setattr(store, "set_activity", lambda s, text: (said.append(text), set_activity(s, text)))
-    store.send(sid, "one more thing")
-    host.compact_sent -= host_mod.COMPACT_TIMEOUT + 1
-    going = run(host.poll())
-    if how == "park":
-        assert host.compact_then is None and host_mod.HOLD_EXPIRED in said, desc
-        assert going and host.client.queries == ["[wheelhouse] from doug (general):\none more thing"], desc
-    else:
-        assert going and host.compact_then == "park" and host.client.queries == [], desc
-        assert host_mod.HOLD_EXPIRED not in said and store.pending(sid), desc
+    with pytest.raises(store_mod.Compacting):
+        store.send(sid, "one more thing")
+    store.notice(sid, "one more thing")   # the wheelhouse's own: not refused, held while it compacts
+    assert run(host.poll()) and host.client.queries == [], f"{desc}: held"
+    host.cycle.waited = time.monotonic() - host_mod.COMPACT_TIMEOUT - 1   # taken up that long ago
+    assert run(host.poll()), desc
+    assert host.cycle is None and store.compaction(sid)["state"] == "failed", desc
+    run(host.poll())
+    sent = ["[wheelhouse] one more thing"] if how == "park" else []
+    assert host.client.queries == sent, desc
 
 
 def test_an_answer_to_a_waiting_call_goes_while_parking_holds(host, store, sid):
@@ -1854,10 +1856,11 @@ def test_an_answer_to_a_waiting_call_goes_while_parking_holds(host, store, sid):
     store.command(sid, "compact", None, "park")
     run(host.poll())
     ref = store.post_item(sid, "question", "save first?")
+    store.set_answer(sid, ref, HOST_QUESTION)
     fut = asyncio.new_event_loop().create_future()
     host.waiting[ref] = fut
     store.send(sid, "yes", ref)
-    store.send(sid, "and another thing")
+    store.notice(sid, "and another thing")
     run(host.poll())
     assert fut.result() == "yes" and len(host.client.queries) == 1, "the answer handed over, the rest held"
 
@@ -1892,7 +1895,7 @@ H = 3600
     ({"tokens": None}, False, "no turn has ended under this host: its cache may be cold already"),
     ({"last": 49 * 60}, False, "not 50 minutes since the last turn"),
     ({"pending": 1}, False, "a turn is running (or waits on a permission)"),
-    ({"compact_nonce": "ab12"}, False, "Compact is under way"),
+    ({"cycle": True}, False, "Compact is under way"),
     ({"quiet": None}, False, "a turn Claude Code started itself is running"),
     ({"quiet": 8 * H}, False, "quiet for 8 hours: abandoned, stop paying"),
     ({"quiet": 8 * H - 60}, True, "just inside the 8 hours"),
@@ -1943,7 +1946,7 @@ def test_keepalive_due(host, store, sid, monkeypatch, state, due, desc):
     quiet = state.get("quiet", 2 * H)
     host.quiet_since = None if quiet is None else at - quiet
     host.sent = {"k": host_mod.Sent({})} if state.get("pending") else {}
-    host.compact_nonce = state.get("compact_nonce")
+    host.cycle = Cycle("c1", "person", None, state="preparing") if state.get("cycle") else None
     assert host.keepalive_due(at) is due, desc
 
 
@@ -1954,7 +1957,7 @@ def test_no_keepalive_after_a_compaction(host, store, sid):
     at = host.last_turn + host_mod.KEEPALIVE_AFTER
     assert not host.keepalive_due(at), "the last turn compacted: nothing to keep warm"
     finish_at(host, 200_000)
-    assert host.keepalive_due(host.last_turn + host_mod.KEEPALIVE_AFTER), "a turn since: its cache is worth keeping"
+    assert host.keepalive_due(host.last_turn + host_mod.KEEPALIVE_AFTER + 1), "a turn since: its cache is worth keeping"
 
 
 def test_keepalive_turn(host, store, sid, monkeypatch):
@@ -2384,7 +2387,7 @@ def test_cold_due(host, store, sid, state, due, desc):
 
 
 def test_the_8_hour_mark_asks_then_compacts_bare_without_notes(host, store, sid, monkeypatch):
-    """The Before Compact step with the 8 hours as its reason; no notes in COMPACT_TIMEOUT,
+    """The Before Compact step with the 8 hours as its reason; its turn ending with no notes,
     a bare /compact, since the alternative is a cold cache."""
     store.post_item(sid, "question", "which?")
     host.keepalive_for = 8 * H
@@ -2392,33 +2395,31 @@ def test_the_8_hour_mark_asks_then_compacts_bare_without_notes(host, store, sid,
     t = time.monotonic()
     host.last_turn, host.quiet_since = t - 50 * 60, t - 8 * H
     run(host.poll())
-    assert "quiet 8 hours" in host.client.queries[-1] and host.compact_nonce, "asked, the 8 hours its reason"
+    assert "quiet 8 hours" in host.client.queries[-1] and host.cycle.origin == "quiet", "asked, the 8 hours its reason"
     finish_at(host, 200_000)   # its turn ends with no keep block
-    host.compact_idle = time.monotonic() - host_mod.COMPACT_TIMEOUT - 1
-    run(host.poll())
     assert host.client.queries[-1] == "/compact", "no notes: compacted bare"
 
 
-@pytest.mark.parametrize("spoke, compacted, desc", [
-    (False, True, "nobody came back: compacted bare once the notes' wait runs out"),
-    (True, False, "the person wrote meanwhile: called off, never a /compact on a session in use"),
+@pytest.mark.parametrize("spoke, compacted, state, desc", [
+    (False, True, "compacting", "nobody came back: compacted bare once the notes turn ends"),
+    (True, False, "cancelled", "the person answered the notes turn's question: called off, no /compact"),
 ])
-def test_the_8_hour_mark_is_called_off_when_the_person_is_back(host, store, sid, spoke, compacted, desc):
+def test_the_8_hour_mark_is_called_off_when_the_person_is_back(host, store, sid, spoke, compacted, state, desc):
     store.post_item(sid, "question", "which?")
     host.keepalive_for = 8 * H
     host.tokens = 200_000
     t = time.monotonic()
     host.last_turn, host.quiet_since = t - 50 * 60, t - 8 * H
     run(host.poll())
-    finish_at(host, 200_000)   # the step's turn ends with no keep block
-    if spoke:
-        store.send(sid, "back now")
+    if spoke:   # the notes turn asks (AskUserQuestion), and the person answers it
+        ref = store.post_item(sid, "question", "save first?")
+        store.set_answer(sid, ref, HOST_QUESTION)
+        host.waiting[ref] = asyncio.new_event_loop().create_future()
+        store.send(sid, "back now", ref)
         run(host.poll())
-        finish_at(host, 200_000)
-    host.compact_idle = time.monotonic() - host_mod.COMPACT_TIMEOUT - 1
-    run(host.poll())
+    finish_at(host, 200_000)   # the step's turn ends with no keep block
     assert ("/compact" in host.client.queries) is compacted, desc
-    assert host.compact_nonce is None, f"{desc}: nothing left waiting for notes"
+    assert store.compaction(sid)["state"] == state, desc
 
 
 @pytest.mark.parametrize("how, desc", [
