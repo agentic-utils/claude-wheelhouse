@@ -1102,9 +1102,10 @@ class Store:
             if op not in (("relaunch", "stopping"), ("relaunch", "starting"), ("start", "starting")):
                 return None
             db.execute("UPDATE sessions SET relaunch = NULL WHERE id = ?", (sid,))
-            if op[1] == "starting":
+            if op[1] == "starting" and (s["op_origin"] or "").startswith("wake:"):   # only the wake's own send
                 db.execute("UPDATE messages SET draft = 1 WHERE session_id = ? AND draft = 0 AND author = 'person' "
-                           "AND kind IS NULL AND claimed_at IS NULL AND delivered_at IS NULL", (sid,))
+                           "AND id >= ? AND claimed_at IS NULL AND delivered_at IS NULL",
+                           (sid, int(s["op_origin"].split(":")[1])))
             self.move_op(db, sid, op[0], "cancelled")
             if op[1] == "stopping":   # no process to stop: the mark is a deadline kept only by a starting one
                 db.execute("UPDATE sessions SET op_deadline = NULL WHERE id = ?", (sid,))
@@ -2315,8 +2316,10 @@ class Store:
             self.refuse_wheelhouse_item(db, sid, item_ref)
             s = db.execute("SELECT op, op_state FROM sessions WHERE id = ?", (sid,)).fetchone()
             # a wake's own send, as its launch starts (#249): the op's payload, never refused by it
-            if not (waking and s is not None and s["op"] in ("relaunch", "start") and s["op_state"] == "starting"):
+            own = waking and s is not None and s["op"] in ("relaunch", "start") and s["op_state"] == "starting"
+            if not own:
                 self.refuse_busy(db, sid, "send", person=True)
+            first = db.execute("SELECT coalesce(max(id), 0) + 1 FROM messages").fetchone()[0]
             moved = db.execute("INSERT INTO messages (session_id, item_ref, author, body, created_at, kind) "
                                "SELECT session_id, item_ref, author, body, created_at, kind FROM messages "
                                "WHERE session_id = ? AND draft = 1 ORDER BY id", (sid,)).rowcount
@@ -2325,6 +2328,8 @@ class Store:
                 self._mark_seen(db, sid, item_ref)
                 db.execute("INSERT INTO messages (session_id, item_ref, author, body, created_at) "
                            "VALUES (?, ?, 'person', ?, ?)", (sid, item_ref, body, now()))
+            if own:   # where the wake's send begins, so an Interrupt queues exactly it again (abort_launch)
+                db.execute("UPDATE sessions SET op_origin = ? WHERE id = ?", (f"wake:{first}", sid))
         return moved + (body is not None)
 
     def awaiting(self) -> set[tuple[str, str]]:

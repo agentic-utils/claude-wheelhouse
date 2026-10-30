@@ -267,3 +267,15 @@ def test_each_aborted_launch_is_stopped_once(hub, store, sid, monkeypatch, launc
         hub.refresh()
         hub.refresh()
     assert stopped == [5151, 6161]
+
+
+def test_interrupt_requeues_only_the_wakes_own_send(hub, store, sid, monkeypatch, launches):
+    """Review: messages sent before the wake, never claimed by a host that died, stay sent."""
+    hosted(store, sid)
+    monkeypatch.setattr(liveness, "is_alive", lambda pid, *a: False)
+    store.send(sid, "sent before the crash")
+    store.queue(sid, "queued for the wake")
+    assert hub.wake_and_send(sid, text="and this").ok
+    assert hub.host_command(sid, "interrupt").ok
+    assert [m["body"] for m in store.drafts(sid)] == ["queued for the wake", "and this"]
+    assert [m["body"] for m in store.pending(sid)] == ["sent before the crash"]
