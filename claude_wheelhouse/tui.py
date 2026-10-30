@@ -6550,9 +6550,10 @@ class WheelhouseApp(App):
         return busy | {"compact-now"} if "compact" in busy else busy
 
     def compacting(self) -> set[str]:
-        """The sessions being compacted (hub.compacting_now, from the store), running or not: every
-        active state has a deadline, so none stays (#249)."""
-        return {s["id"] for s in self.sessions if compacting_now(s)}
+        """The running sessions being compacted (hub.compacting_now, from the store): what locks and
+        dims their items. A stopped host's cycle locks nothing, though its eye stays blue (blue) until
+        the hub's sweep ends it (#165, #249)."""
+        return {s["id"] for s in self.sessions if compacting_now(s) and self.running(s["id"])}
 
     def blue(self) -> set[str]:
         """The sessions in an operation (hub.operating, #249): their eye is blue, running or not."""
