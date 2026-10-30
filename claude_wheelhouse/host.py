@@ -1228,7 +1228,8 @@ class Host:
             notes = c.notes
             if notes is None and not m.is_error:
                 notes = keep_notes(m.result, c.nonce)
-            if notes is not None or (c.ask not in self.sent and not m.is_error):
+            # never after an Interrupt or Abort, even with the notes in: that turn's end is the cycle's
+            if not interrupted and (notes is not None or (c.ask not in self.sent and not m.is_error)):
                 # the notes came back, or their turn ended without them: compacted bare, said
                 await self.send_compact(notes or "", "compacting" if notes is not None else
                                         "compacting: no notes came back, so without them")

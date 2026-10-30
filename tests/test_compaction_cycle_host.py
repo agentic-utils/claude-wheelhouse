@@ -597,3 +597,23 @@ def test_a_claim_locked_past_steady_is_owed_to_the_next_pass(host, store, sid, m
     monkeypatch.setattr(store, "move_compaction", real)
     run(host.poll())
     assert host.owed_move is None and store.compaction(sid)["state"] == "preparing"
+
+
+def test_interrupt_after_the_notes_came_never_compacts(host, store, sid):
+    """Round 10: the notes block written, the turn still running, then Interrupt (or Abort):
+    its aborted end, taken while the interrupt is awaited, sends no /compact."""
+    store.set_runner(sid, "sdk")
+    store.command(sid, "compact")
+    run(host.poll())
+    host.cycle.notes = "keep Q1"
+
+    async def interrupt():   # Claude Code ends the notes turn as aborted while poll awaits this
+        host.client.interrupts += 1
+        host.sent.clear()
+        await host.finished(SimpleNamespace(result="", is_error=True, subtype="error_during_execution",
+                                            terminal_reason="aborted_streaming"))
+    host.client.interrupt = interrupt
+    store.command(sid, "interrupt")
+    run(host.poll())
+    assert not any(q.startswith("/compact") for q in host.client.queries), host.client.queries
+    assert store.compaction(sid)["state"] == "cancelled" and host.cycle is None and host.late_key is None
