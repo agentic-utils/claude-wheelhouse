@@ -263,6 +263,11 @@ session.
   highlight, `Enter` or a click goes to the item: highlighted in the inbox and shown in Detail,
   as a click on its row; a hidden one in Detail alone, its header saying *Hidden from the
   inbox*, the inbox unchanged. `Esc` closes it, focus back on the inbox.
+- **Clickable ids.** In Detail, an item's id in a doc, a conversation or an item's thread
+  (`T3`, `Q25`, `PR276`, a whole word) is a link, in the colour of a doc's links: a click
+  goes to the item with that id in the session the text belongs to, as a search's pick does.
+  An id that session hasn't got stays plain, and so does `#273` (a GitHub issue), an id
+  inside a word or a path (`T2a`, `T206.md`), and anything in code.
 - **Pins.** The inbox's first column pins an item (📌): a click there, or `Alt+P` in the item
   list, pins the row or clears its pin. A doc comes pinned (a session can post a scratch
   report unpinned), anything else unpinned, and a doc posted again keeps the pin you set.

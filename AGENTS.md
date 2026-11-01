@@ -107,7 +107,9 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   Never imports Textual.
 - `search.py`: the inbox's search (#273): which items a query matches, best first (`find`),
   for the popover (`tui.SearchItems`, opened by `WheelhouseApp.action_search`); a pick goes
-  through `WheelhouseApp.go_to_item`. Never imports Textual.
+  through `WheelhouseApp.go_to_item`. And the ids in Detail's text that name the session's
+  items (#274, `linked`), made links to `LINK` that `tui.clickable_ids` turns into clicks
+  going there too. Never imports Textual.
 - `away.py`: the card of what happened while the person was away (#223,
   `.plan/since-you-were-away.md`): its groups read from the items (`card`), and the sessions
   that went quiet, which `Hub.note_quiet` notes as each refresh sees them (`observe`, the

@@ -1,16 +1,20 @@
-"""Finding an inbox item (#273, the search popover): which items a query matches, best first.
-Never imports Textual.
+"""Finding an inbox item: which items a query matches, best first (#273, the search popover),
+and the ids in a text that name a session's items (#274, linked). Never imports Textual.
 
 A query shaped like a ref (`T3`, `q25`, `PR276`) puts exact ref matches first. Otherwise, and
 after those, a case-insensitive substring match on ref and title, best first: the ref, then
 a title starting with the query, then one containing it, each group newest first."""
 
+import functools
 import re
+
+from markdown_it import MarkdownIt
 
 from .store import KINDS
 
 LIMIT = 50   # rows the popover lists; a line says how many more matched
-REF_SHAPED = re.compile(rf"(?:{'|'.join(sorted(KINDS.values(), key=len, reverse=True))})\d+", re.IGNORECASE)
+KIND_LETTERS = "|".join(sorted(KINDS.values(), key=len, reverse=True))   # PR before P
+REF_SHAPED = re.compile(rf"(?:{KIND_LETTERS})\d+", re.IGNORECASE)
 
 
 def ref_shaped(query: str) -> bool:
@@ -44,3 +48,53 @@ def find(items, query: str, limit: int = LIMIT) -> tuple[list, int]:
     ranked.sort(key=lambda pair: pair[1]["created_at"], reverse=True)   # stable: newest first in each group
     ranked.sort(key=lambda pair: pair[0])
     return [it for _, it in ranked[:limit]], max(0, len(ranked) - limit)
+
+
+# Clickable ids (#274): an item's id in a doc, a conversation or a thread, linking to that
+# session's item with the ref. A whole word: not after # (a GitHub issue), nor inside a longer
+# word or a path (T2a, T206.md, docs/T3); inline code and code blocks are left alone. The link
+# goes through the markdown as a link to LINK, which the renderer turns into a click (tui).
+LINK = "wheelhouse-item:"
+ITEM_ID = re.compile(rf"(?<![\w#/\\.\-])(?:{KIND_LETTERS})\d+(?![\w/\\\-]|\.\w)")   # any kind's (KINDS), as Doug asked
+# what's never linked into, in a line: inline code, a markdown link or image, an autolink
+KEEP = re.compile(r"(`+).*?\1|!?\[[^\]]*\]\([^)]*\)|<[^>\s]+>")
+PARSER = MarkdownIt().enable("strikethrough").enable("table")   # as Rich's Markdown parses
+
+
+def code_lines(md: str) -> set[int]:
+    """The lines of md in a code block, fenced or indented, wherever it nests (a list, a quote)."""
+    return {n for tok in PARSER.parse(md) if tok.type in ("fence", "code_block") and tok.map
+            for n in range(*tok.map)}
+
+
+@functools.lru_cache(maxsize=4096)   # a block each: a long conversation's every turn stays held
+def linked(md: str, sid: str, refs: frozenset) -> str:
+    """Markdown with each id the session has (refs) a link to its item, outside code: made once
+    for a text, however often it's painted."""
+    if not refs or not ITEM_ID.search(md):
+        return md
+    code, out = code_lines(md), []
+    for n, line in enumerate(md.split("\n")):
+        if n in code:
+            out.append(line)
+            continue
+        parts, at = [], 0
+        for kept in KEEP.finditer(line):
+            parts.append(link_ids(line[at:kept.start()], sid, refs))
+            parts.append(kept.group(0))
+            at = kept.end()
+        parts.append(link_ids(line[at:], sid, refs))
+        out.append("".join(parts))
+    return "\n".join(out)
+
+
+def link_ids(text: str, sid: str, refs) -> str:
+    return ITEM_ID.sub(lambda m: f"[{m.group(0)}]({LINK}{sid}/{m.group(0)})" if m.group(0) in refs else m.group(0), text)
+
+
+def target(link: str | None) -> tuple[str, str] | None:
+    """The (session, ref) a rendered link goes to, if it's an item's (linked); else None."""
+    if not link or not link.startswith(LINK):
+        return None
+    sid, _, ref = link[len(LINK):].rpartition("/")
+    return (sid, ref) if sid and ref else None

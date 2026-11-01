@@ -345,6 +345,9 @@ FEATURES: tuple[Feature, ...] = (
     Feature("inbox-search", UNRELEASED, ADVANCED,
             note="Search the inbox by id or title: click the 🔍 at its top right, or just type while it has focus. "
                  "Show hidden takes in the items off the inbox too; Enter or a click goes to the item."),
+    Feature("clickable-ids", UNRELEASED, ADVANCED,
+            note="An item's id in Detail (T3, Q25, PR276 in a doc, a conversation or a thread) is a link: a click "
+                 "goes to that item of the same session, as a search's pick does."),
 
 )
 
