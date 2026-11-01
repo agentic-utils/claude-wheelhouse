@@ -73,6 +73,8 @@ anything here seems to conflict with them, follow yours.
 - The wheelhouse lists ADR files named `NNNN-slug.md` (`NNNN-template.md` is skipped) and
   shows each one's status, upper-cased and cut to its first word. It reads the status from
   the first place that has one: a `status:` line in front matter, then a `Status:` line or a
-  `## Status` section in the body, then the filename (`0042-ACCEPTED-slug.md`). When you
-  change an ADR's status, change it in that place. A rename does nothing if the doc has a
-  status line. An ADR with no status anywhere shows `?`.
+  `## Status` section in the body (the status alone on its first non-empty line, no list
+  dash), then the filename: one upper-case word straight after the number
+  (`0042-ACCEPTED-slug.md`; `0042-accepted-slug.md` has none). When you change an ADR's
+  status, change it in that place. A rename does nothing if the doc has a status anywhere in
+  it. An ADR with no status anywhere shows `?`.
