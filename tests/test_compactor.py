@@ -160,3 +160,12 @@ def test_dock_text_and_state_of_round_trip(state):
     assert compactor.docked(text)[:2] == (state, 1761990000.5)
     assert compactor.state_of(compactor.stage_text(state, None, "", "23:30Z")) == state
     assert compactor.state_of("Han: hello") is None
+
+
+def test_failed_cheers_and_cancelled_is_caught_pulling_back():
+    """#287 review: a failure's crew all have their arms up; a cancelled still shows the walls
+    part way back out, not as open as preparing's."""
+    rows = compactor.scene("failed", 0.0, animate=False)[0]
+    assert sum(r.count("\\o/") for r in rows) == 2 and any("\\|/" in r for r in rows) and any("\\#/" in r for r in rows), rows
+    assert compactor.OPEN < compactor.walls("cancelled", compactor.STILL["cancelled"]) < compactor.walls("failed", 0), \
+        "the still caught retracting"

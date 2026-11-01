@@ -235,7 +235,7 @@ TICKS = 6
 ROLES = {"w": "wall", "s": "seam", "c": "crew", "g": "sludge", "k": "spark", "h": "hatch", "d": "dianoga", " ": "text"}
 CAPTIONS = {"preparing": "walls closing in", "compacting": "compaction initiated", "completed": "compacted",
             "failed": "3PO, shut them down!", "cancelled": "compaction called off"}
-STILL = {"preparing": 0.0, "compacting": 40.0, "completed": 0.0, "failed": 0.0, "cancelled": 30.0}
+STILL = {"preparing": 0.0, "compacting": 40.0, "completed": 0.0, "failed": 0.0, "cancelled": 1.5}   # cancelled: part way back out
 RIM, FLOOR, CHAMBER, SLUDGE = 0, 10, range(1, 8), (8, 9)   # the rows: hatch rim, floor, air and crew, sludge
 FEET = 7   # the row the crew stand on
 OPEN, SHUT = 3, 29   # wall thickness, each side, open and met (58 inner cells between the frame)
@@ -345,12 +345,12 @@ def scene(state: str, t: float, animate: bool = True) -> tuple[tuple[str, ...], 
         x = lo + gap
         for i, who in enumerate(ORDER):
             poses = CREW[who]
+            cheering = state == "failed"   # the droids stopped the walls: arms up, jumping for joy
             pose = (poses["grabbed"] if who == "luke" and grabbed else
-                    poses["panic"] if moving and (f // 2 + i) % 3 else
-                    poses["panic"] if state == "failed" and (f // 3 + i) % 2 else poses["stand"])
+                    poses["panic"] if moving and (f // 2 + i) % 3 or cheering else poses["stand"])
             dodge = ((f // 3 + i * 2) % 3 - 1) if moving else 0
             col = min(max(lo, x + dodge), hi - len(pose[0]))
-            top = FEET - len(pose) + 1 + (1 if who == "luke" and grabbed else 0)
+            top = FEET - len(pose) + 1 + (1 if who == "luke" and grabbed else 0) - (1 if cheering and (f // 2 + i) % 2 else 0)
             for r, line in enumerate(pose):
                 c.put(top + r, col, line, "c", lo, hi)
             if who == "luke" and grabbed:   # the tentacle, wriggling up out of the sludge round him

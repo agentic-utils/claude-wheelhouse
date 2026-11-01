@@ -1914,6 +1914,7 @@ class CompactorDock(Widget, can_focus=False):
     timer = None
     shown: tuple[str, float, str] | None = None
     drawn = None   # what the last frame drew (paint): the same again draws nothing
+    fps = 0.0   # its rate, read as it opens (dock)
 
     @staticmethod
     def now() -> float:
@@ -1933,7 +1934,9 @@ class CompactorDock(Widget, can_focus=False):
         if shown != self.shown:
             self.shown, self.drawn, self.display = shown, None, True
             self.paint()
-        fps = min(DOCK_FPS, features.animation_fps())
+        if self.timer is None:   # the rate read as it opens, never at each frame (it reads the .env files)
+            self.fps = min(DOCK_FPS, features.animation_fps())
+        fps = self.fps
         if fps and self.timer is None:
             self.timer = self.set_interval(1 / fps, self.paint)
 
@@ -1941,7 +1944,7 @@ class CompactorDock(Widget, can_focus=False):
         """What this moment draws: the stage, big or not, and its frame number (compactor.TICKS)."""
         state, since, _ = self.shown
         big = self.content_size.width >= compactor.BIG_WIDTH
-        moving = big and features.animation_fps() > 0
+        moving = big and self.fps > 0
         return state, big, int(max(0.0, self.now() - since) * compactor.TICKS) if moving else -1
 
     def paint(self) -> None:
