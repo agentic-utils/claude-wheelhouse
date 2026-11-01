@@ -6180,11 +6180,13 @@ class WheelhouseApp(App):
     def unselect(self, note: str) -> None:
         """A module's pick of something that isn't an item (api.Context.unselect, a PR no
         session made): nothing selected, the inbox's highlight hidden, and Detail saying why."""
-        self.shown_doc = None
+        doc, self.shown_doc = self.shown_doc, None
         self.items_table.show_cursor = False
         if self.selected is not None:
             self.selected = None
             self.retarget()
+            self.each_pane("showing", None, None)
+        elif doc is not None:   # a decision shown with nothing selected: its pane's highlight hidden too (#281)
             self.each_pane("showing", None, None)
         self.detail_note = note
         self.paint_detail()

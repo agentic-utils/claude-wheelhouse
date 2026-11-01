@@ -524,6 +524,7 @@ async def click_decision(app, pilot, n, times=1):
     ("adr inbox key-adr", "adr", None, "a key in the cleared Decisions: its pick back, shown"),
     ("inbox adr double-inbox", "inbox", "thread", "a real double-click on the inbox's row: full screen"),
     ("adr inbox double-adr", "adr", "doc", "a real double-click on a decision: full screen"),
+    ("unselect adr unselect", "note", None, "a PR no session made, picked over a decision with nothing selected"),
 ])
 async def test_a_pick_in_the_inbox_or_decisions_clears_the_others(store, sid, decisions, steps, shown, full, desc):
     """#281: a click on the other pane's previous pick showed nothing new, or went full screen."""
@@ -542,6 +543,11 @@ async def test_a_pick_in_the_inbox_or_decisions_clears_the_others(store, sid, de
                 await click_inbox(app, pilot, key, times=2)
             elif step == "double-adr":
                 await click_decision(app, pilot, "0003", times=2)
+            elif step == "unselect":   # as the PRs pane's pick of a PR no session made
+                app.unselect("PR7 isn't an item.")
+                await pilot.pause()
+                assert not app.items_table.show_cursor and not table.show_cursor, f"{desc}: neither lit"
+                continue
             else:
                 (app.items_table if step == "key-inbox" else table).focus()
                 await pilot.pause()
@@ -555,7 +561,9 @@ async def test_a_pick_in_the_inbox_or_decisions_clears_the_others(store, sid, de
             assert isinstance(app.screen, DocView) and "Write-ahead logging." in app.screen.text, f"{desc}: the doc"
             return
         assert app.screen is app.screen_stack[0], f"{desc}: nothing full screen"
-        if shown == "adr":
+        if shown == "note":
+            assert "PR7 isn't an item." in app._detail_text, f"{desc}: Detail says why"
+        elif shown == "adr":
             assert "Write-ahead logging." in app._detail_text, f"{desc}: the decision in Detail"
             assert table.show_cursor and not app.items_table.show_cursor, f"{desc}: the Decisions' lit alone"
             assert pane.Decisions.key_at(table).endswith("0003-ACCEPTED-wal.md"), f"{desc}: on the decision"
