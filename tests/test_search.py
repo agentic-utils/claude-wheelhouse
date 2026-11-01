@@ -245,12 +245,16 @@ REFS = {"T3", "Q252", "PR276", "M2"}
     ("`T3` and ``a T3``", [], "inline code"),
     ("```\nT3\n```", [], "a fenced block"),
     ("~~~\nT3\n~~~\nthen T3", ["T3"], "after a fenced block closes"),
+    ("- item\n\n    ```\n    T3\n    ```", [], "a fence in a list item"),
+    ("> ```\n> T3\n> ```", [], "a fence in a quote"),
+    ("text\n\n    T3 indented", [], "an indented code block"),
+    ("```\n```python\nT3\n```", [], "a fence's info line inside a fence doesn't close it"),
     ("T9 and D1", [], "an id the session doesn't have"),
     ("[T3](https://x) T3", ["T3"], "inside a link's text left alone"),
     ("t3", [], "lower case is not an id"),
 ])
 def test_linked(text, linked, desc):
-    out = search.linked(text, "S", REFS)
+    out = search.linked(text, "S", frozenset(REFS))
     assert [m for m in re.findall(r"\(wheelhouse-item:S/(\w+)\)", out)] == linked, f"{desc}: {out!r}"
 
 

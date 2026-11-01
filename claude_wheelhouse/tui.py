@@ -6591,9 +6591,9 @@ class WheelhouseApp(App):
         """Blocks with the ids of sid's items in them clickable (search.linked, #274): its
         people's and Claude's words, its notes and a doc's text, not a heading, a tool line or
         a PR's link. With no session, as they are."""
-        if not sid or not any(who in LINKED and search.ITEM_ID.search(md) for who, md in blocks):
+        if not sid:
             return blocks
-        refs = {it["ref"] for it in self.client.inbox(sid).items}
+        refs = frozenset(it["ref"] for it in self.client.inbox(sid).items)
         return [(who, search.linked(md, sid, refs) if who in LINKED else md) for who, md in blocks]
 
     def paint_doc_thread(self, doc) -> None:

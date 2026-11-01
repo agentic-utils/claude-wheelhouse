@@ -5,7 +5,10 @@ A query shaped like a ref (`T3`, `q25`, `PR276`) puts exact ref matches first. O
 after those, a case-insensitive substring match on ref and title, best first: the ref, then
 a title starting with the query, then one containing it, each group newest first."""
 
+import functools
 import re
+
+from markdown_it import MarkdownIt
 
 from .store import KINDS
 
@@ -48,29 +51,30 @@ def find(items, query: str, limit: int = LIMIT) -> tuple[list, int]:
 
 # Clickable ids (#274): an item's id in a doc, a conversation or a thread, linking to that
 # session's item with the ref. A whole word: not after # (a GitHub issue), nor inside a longer
-# word or a path (T2a, T206.md, docs/T3); inline code and fenced code are left alone. The link
+# word or a path (T2a, T206.md, docs/T3); inline code and code blocks are left alone. The link
 # goes through the markdown as a link to LINK, which the renderer turns into a click (tui).
 LINK = "wheelhouse-item:"
 ITEM_ID = re.compile(r"(?<![\w#/\\.\-])(?:PR|[TQDMAC])\d+(?![\w/\\\-]|\.\w)")
 # what's never linked into, in a line: inline code, a markdown link or image, an autolink
 KEEP = re.compile(r"(`+).*?\1|!?\[[^\]]*\]\([^)]*\)|<[^>\s]+>")
-FENCE = re.compile(r" {0,3}(`{3,}|~{3,})")
+PARSER = MarkdownIt().enable("strikethrough").enable("table")   # as Rich's Markdown parses
 
 
-def linked(md: str, sid: str, refs) -> str:
-    """Markdown with each id the session has (refs) a link to its item, outside code."""
+def code_lines(md: str) -> set[int]:
+    """The lines of md in a code block, fenced or indented, wherever it nests (a list, a quote)."""
+    return {n for tok in PARSER.parse(md) if tok.type in ("fence", "code_block") and tok.map
+            for n in range(*tok.map)}
+
+
+@functools.lru_cache(maxsize=256)
+def linked(md: str, sid: str, refs: frozenset) -> str:
+    """Markdown with each id the session has (refs) a link to its item, outside code: made once
+    for a text, however often it's painted."""
     if not refs or not ITEM_ID.search(md):
         return md
-    out, fence = [], None
-    for line in md.split("\n"):
-        opened = FENCE.match(line)
-        if fence is not None:   # inside a fenced block until its closing fence
-            if opened and opened.group(1)[0] == fence[0] and len(opened.group(1)) >= len(fence):
-                fence = None
-            out.append(line)
-            continue
-        if opened:
-            fence = opened.group(1)
+    code, out = code_lines(md), []
+    for n, line in enumerate(md.split("\n")):
+        if n in code:
             out.append(line)
             continue
         parts, at = [], 0
