@@ -149,25 +149,40 @@ class Excerpts:
         return EXCERPTS[self._order.pop()]
 
 
-# The cycle's stage lines (#244, art B, the detention-level trash compactor): the walls close as
-# it goes. Plain Text in the compaction blue, never Markdown; each line 36 cells or fewer
+# The cycle's art (#244, art B, the detention-level trash compactor; rows since #277): the walls
+# thicken inward as it goes, the crew standing, then panicking, and gone by the end; failed and
+# cancelled leave the walls open. Every row of every stage WIDTH cells, so it never shifts as one
+# stage replaces the last in place. Plain Text in the compaction blue, never Markdown
+WIDTH = 28
+STAND = (" o    o    o ", "/|\\  /|\\  /|\\", "/ \\  / \\  / \\")
+PANIC = ("\\o/\\o/\\o/", " |  |  | ", "/ \\/ \\/ \\")
+
+
+def frame(wall: str, crew: tuple[str, ...], caption: str) -> str:
+    """One stage's art: three rows of crew (or none) between the walls, the sludge, the caption."""
+    inner = WIDTH - 2 * len(wall) - 2
+    rows = ["▐" + wall + (crew[r] if r < len(crew) else "").center(inner) + wall[::-1] + "▌" for r in range(3)]
+    rows.append("▐" + wall + "~" * inner + wall[::-1] + "▌")
+    return "\n".join([*rows, caption.center(WIDTH)])
+
+
 WALLS = {
-    "preparing": "▐█          █▌ walls closing in",
-    "compacting": "▐████    ████▌ compaction initiated",
-    "completed": "▐████████████▌ compacted",
-    "failed": "▐█          █▌ 3PO, shut them down!",
-    "cancelled": "▐█          █▌ compaction called off",
+    "preparing": frame("█▓", STAND, "walls closing in"),
+    "compacting": frame("████▓", PANIC, "compaction initiated"),
+    "completed": frame("█████████▓", (), "compacted"),
+    "failed": frame("█▓", PANIC, "3PO, shut them down!"),
+    "cancelled": frame("█▓", STAND, "compaction called off"),
 }
 SHOWN = ("preparing", "compacting")   # the states the crew panic through
 
 
-def stage_text(state: str, origin: str | None, note: str) -> str | None:
-    """A stage's two lines: the art, then (dim) who asked or what came of it. None for a stage
-    with no line (requested: usually under a second, and the eye covers it)."""
+def stage_text(state: str, origin: str | None, note: str, stamp: str = "") -> str | None:
+    """A stage's art, then (dim) a line of who asked or what came of it, and when (stamp). None
+    for a stage with no art (requested: usually under a second, and the eye covers it)."""
     if state not in WALLS:
         return None
     detail = note or (f"asked for by {origin}" if state in SHOWN and origin else "")
-    return WALLS[state] + (f"\n{detail}" if detail else "")
+    return WALLS[state] + "\n" + " · ".join(filter(None, (detail, stamp)))
 
 
 def schedule(cycle_id: str, windows: list[tuple[float, float]]) -> list[tuple[float, tuple[str, ...]]]:

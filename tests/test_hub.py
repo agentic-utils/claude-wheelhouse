@@ -1726,6 +1726,7 @@ def test_compaction_entries_place_stage_lines_and_the_crew(store, sid):
     """#244: each stage's art and its dim detail, and while it runs the crew's excerpts, seeded by
     the cycle so every refresh shows the same, one at each stage change."""
     from datetime import datetime, timezone
+    from claude_wheelhouse import compactor
     from claude_wheelhouse.hub import compaction_entries
     store.command(sid, "compact")
     cid = store.compaction(sid)["id"]
@@ -1736,16 +1737,36 @@ def test_compaction_entries_place_stage_lines_and_the_crew(store, sid):
     assert later == compaction_entries(stages, True, t0 + 65), "the same at every refresh"
     whos = [e.who for e in later]
     assert whos.count("stage") == 1 and 3 <= whos.count("crew") <= 4, whos   # requested shows no line
-    assert later[0].text.startswith("▐█          █▌ walls closing in\n"), later[0].text
+    assert later[0].text.startswith(compactor.WALLS["preparing"] + "\n"), later[0].text
     assert all(e.at <= datetime.fromtimestamp(t0 + 65, timezone.utc).isoformat() for e in later)
     store.move_compaction(sid, cid, "compacting")
     store.move_compaction(sid, cid, "completed", "220k → 40k")
     ended = datetime.fromisoformat(store.stages(sid)[-1]["at"]).timestamp()
     done = compaction_entries(store.stages(sid), False, t0 + 3600)
     last = [e for e in done if e.who == "stage"][-1]
-    assert last.text.startswith("▐████████████▌ compacted\n220k → 40k · "), last
+    assert last.text.startswith(compactor.WALLS["completed"] + "\n220k → 40k · "), last
     assert all(datetime.fromisoformat(e.at).timestamp() <= ended for e in done if e.who == "crew"), \
         "no crew once it has ended, however long after"
+
+
+@pytest.mark.parametrize("moves, state, desc", [
+    (["preparing"], "preparing", "first drawn"),
+    (["preparing", "compacting"], "compacting", "a later stage replaces it"),
+    (["preparing", "compacting", "completed"], "completed", "its end too, where it was first drawn"),
+    (["preparing", "cancelled"], "cancelled", "called off: the same art, the walls open"),
+])
+def test_a_later_stage_redraws_the_art_in_place(store, sid, moves, state, desc):
+    """#277: one art per cycle, at its first stage's time, showing the latest stage."""
+    from claude_wheelhouse import compactor
+    from claude_wheelhouse.hub import compaction_entries
+    store.command(sid, "compact")
+    cid = store.compaction(sid)["id"]
+    for m in moves:
+        store.move_compaction(sid, cid, m)
+    first = next(st["at"] for st in store.stages(sid) if st["state"] in compactor.WALLS)
+    arts = [e for e in compaction_entries(store.stages(sid), False) if e.who == "stage"]
+    assert len(arts) == 1, f"{desc}: {len(arts)} drawn"
+    assert arts[0].at == first and arts[0].text.startswith(compactor.WALLS[state] + "\n"), desc
 
 
 @pytest.mark.parametrize("status, why", [("dead", "its host stopped"), ("stalled", "its host stalled")])
