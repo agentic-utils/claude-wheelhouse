@@ -66,7 +66,7 @@ from textual.widgets import (
     TextArea,
 )
 
-from . import api, away, callout, quickshell, columns, docblocks, docroots, emoji, features, helper, models, ordering, prs, steps, subagents, transcript, transcript_usage, tutorial, whatsnew
+from . import api, away, callout, quickshell, columns, docblocks, docroots, emoji, features, helper, models, ordering, prs, search, steps, subagents, transcript, transcript_usage, tutorial, whatsnew
 from .rows import KIND_COLOUR, KeepColours, RowTips, faded, marked, plain
 from .callout import TourCallout
 from .client import LocalClient, Unreachable
@@ -1490,6 +1490,30 @@ class AwayCard(OptionList):
                 Binding("escape", "app.dismiss_away", "Dismiss", show=False)]
 
 
+class SearchGlass(Static):
+    """The magnifying glass at the inbox's top right, on its border (#273): a click opens the
+    search popover (SearchItems). Its press is its own, never the pane's title drag (Slot)."""
+
+    def on_mount(self) -> None:
+        self.tooltip = "Search the inbox (or type while it has focus)"
+
+    def _on_mouse_down(self, event: events.MouseDown) -> None:
+        event.stop()
+
+    def on_click(self, event: events.Click) -> None:
+        event.stop()
+        self.app.action_search()
+
+
+class InboxPane(Vertical):
+    """The inbox's pane, keeping its magnifying glass (SearchGlass) on its top border at the
+    right whatever its width."""
+
+    def on_resize(self) -> None:
+        for glass in self.query(SearchGlass):
+            glass.styles.offset = (max(0, self.size.width - 5), -1)
+
+
 class ItemList(SinkList):
     """The inbox's items, with a multi-selection to close questions in one go, by row key
     so it survives refreshes. Ctrl+click toggles a row, Shift+click takes the range from the
@@ -1634,6 +1658,14 @@ class ItemList(SinkList):
     def _post_selected_message(self) -> None:
         # a double-click's selection, which opens the item, as the session list's click
         self.app.call_next(select_now, self)
+
+    def on_key(self, event: events.Key) -> None:
+        """A printable key no binding took (every inbox binding has a modifier, #189): the
+        search popover opened with it typed (#273). Not Space, which would search for nothing."""
+        if event.is_printable and event.character and not event.character.isspace():
+            event.stop()
+            event.prevent_default()
+            self.app.action_search(event.character)
 
     def action_toggle_mark(self) -> None:
         if self.show_cursor and self.cursor_key():
@@ -3198,6 +3230,90 @@ class Ask(Dialog):
         self.action_answer(None)
 
 
+class SearchItems(Dialog):
+    """The inbox's search popover (#273), over the inbox: a box, the Show hidden checkbox and
+    the matches (search.find), on ref and title, updated on every key. Up and Down in the box
+    move the highlight, Enter or a click picks; the answer is the item's (session, ref). The
+    items are the scope's (the selected session's, else every session's), each with whether
+    the inbox shows it now; hidden ones list only with Show hidden on, dimmed."""
+    BINDINGS = [Binding("down", "move(1)", show=False), Binding("up", "move(-1)", show=False)]
+
+    def __init__(self, title: str, pool: list[tuple], names: dict[str, str] | None, typed: str,
+                 hidden: bool, at: Region) -> None:
+        super().__init__()
+        self.heading, self.pool, self.names, self.typed, self.hidden, self.at = title, pool, names, typed, hidden, at
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label(Text(self.heading), classes="dialog-title")
+            yield Input(self.typed, id="search-text", placeholder="An id or words of a title",
+                        select_on_focus=False)   # the key that opened it kept, the next typed after it
+            yield Checkbox("Show hidden", self.hidden, id="search-hidden", compact=True)
+            yield OptionList(id="search-results")
+            yield Static(id="search-more")
+
+    def on_mount(self) -> None:
+        box = self.query_one("#dialog")
+        box.styles.offset = (self.at.x, self.at.y)
+        box.styles.width = max(40, self.at.width)
+        box.styles.max_height = max(12, self.at.height)
+        self.set_focus(self.query_one("#search-text", Input))
+        self.list_matches()
+
+    def list_matches(self) -> None:
+        """The matches for what's typed, from those the toggle lets in."""
+        hidden = {item_key(it) for it, gone in self.pool if gone}
+        items = [it for it, gone in self.pool if self.hidden or not gone]
+        found, more = search.find(items, self.query_one("#search-text", Input).value)
+        options = self.query_one("#search-results", OptionList)
+        options.clear_options()
+        options.add_options([Option(self.row(it, item_key(it) in hidden), id=item_key(it)) for it in found])
+        if found:
+            options.highlighted = 0
+        self.query_one("#search-more", Static).update(
+            f"{more} more matched" if more else "" if found else "Nothing matches")
+
+    def row(self, it, gone: bool) -> Text:
+        """A match's line: its ref in its kind's colour, title, status, and its session's name
+        when searching every session; dimmed if the inbox doesn't show it."""
+        parts = [ref_text(it), " ", it["title"], ("  " + it["status"], "dim")]
+        if self.names is not None:
+            parts.append(("  " + self.names.get(it["session_id"], ""), "italic"))
+        line = Text.assemble(*parts)
+        if gone:
+            line.stylize("dim")
+        return line
+
+    @on(Input.Changed, "#search-text")
+    def typed_more(self) -> None:
+        self.list_matches()
+
+    @on(Checkbox.Changed, "#search-hidden")
+    def toggled(self, event: Checkbox.Changed) -> None:
+        self.hidden = event.value
+        self.app.search_hidden = event.value   # for the run of the app, not saved
+        self.list_matches()
+
+    def action_move(self, step: int) -> None:
+        options = self.query_one("#search-results", OptionList)
+        if options.option_count:
+            options.highlighted = max(0, min(options.option_count - 1, (options.highlighted or 0) + step))
+
+    @on(Input.Submitted, "#search-text")
+    def enter(self) -> None:
+        options = self.query_one("#search-results", OptionList)
+        if options.highlighted is not None and options.option_count:
+            self.pick(options.get_option_at_index(options.highlighted).id)
+
+    @on(OptionList.OptionSelected, "#search-results")
+    def picked(self, event: OptionList.OptionSelected) -> None:
+        self.pick(event.option.id)
+
+    def pick(self, key: str) -> None:
+        sid, ref = key.split("|")
+        self.action_answer((sid, ref))
+
+
 MODEL_WARNING = ("Changing model drops the prompt cache: the session's next request re-reads the whole "
                  "conversation at the full input price (a change made mid-turn applies inside the running "
                  "turn). Effort stays as it is.")
@@ -4375,6 +4491,7 @@ MOUSE = ("Click selects a row; in the session list, a click on the selected sess
          "dismisses it. "
          "A click on a row's first column pins it (📌) or clears its pin, as Alt+P does. "
          "A click on an emoji suggestion under the answer box takes it in place of the code typed. "
+         "A click on the 🔍 at the inbox's top right opens its search, as typing in the inbox does. "
          "A click on the ⓘ at the stats pane's top right opens the selected session's info: its id (C copies it), "
          "user and machine, directory, branch, model, mode, start, transcript and its MCP server, flagged when stale. "
          "Double-click selects a word, but on what Detail shows (an item, a doc) it opens it full screen, as Enter on its "
@@ -4388,6 +4505,10 @@ TOUR_HELP = ("Esc ends the tour at any time, once you confirm, from any of its b
              "shows a badge, Alt+T, or a click on it, resumes a tour the wheelhouse quit in the middle of, or offers "
              "what's new since you last looked: a top-up showing only the new tips, pane by pane, with no demo session, "
              "then the release notes. {again} at the next start.")
+SEARCH = ("Any character typed in the item list (no modifier) opens the inbox's search with it typed, as the 🔍 at "
+          "the inbox's top right does: the selected session's items, or every session's with none selected, matched "
+          "on id and title as you type. Up and Down move the highlight, Enter or a click goes to the item; Tab reaches "
+          "Show hidden (Space flips it), which takes in the items off the inbox too. Esc closes it, back to the inbox.")
 DIALOGS = ("Esc, or a click outside the box, cancels a dialog (not the tutorial offer, which is all but outside). Enter presses the focused button; with focus on a "
            "one-line box or a checkbox, or nothing, it takes the dialog's one action (Launch, Rename, Fork, Park and "
            "the like), but in a list, a set of choices or a multi-line box it does what it does there. A dialog of "
@@ -4456,7 +4577,7 @@ def keys_help(sdk: bool = False, shown=(), panes=()) -> str:
     buttons = [text for id_, text in BUTTONS.items() if id_ not in SDK_BUTTONS or id_ in offered]
     out += ["## Tab order", TABS.format(slider=SLIDER_TAB if sdk else ""), "## Mouse", MOUSE, "## Buttons", whose,
             *[f"- {text}" for text in buttons],
-            "## Sending", SEND_RULES, "## Dialogs", DIALOGS,
+            "## Searching the inbox", SEARCH, "## Sending", SEND_RULES, "## Dialogs", DIALOGS,
             "## Tour", TOUR_HELP.format(again=tutorial.AGAIN),
             "Esc, Enter, F1 or a click outside closes this list."]
     return "\n\n".join(out)
@@ -4494,6 +4615,12 @@ class WheelhouseApp(App):
     PaneMenu #dialog {{ width: auto; min-width: 18; padding: 0 1; margin: 1 0 0 0; constrain: inside inflect; }}
     PaneMenu #dialog Button {{ width: 100%; }}
     Ask #ask-suggestions {{ height: auto; max-height: 8; margin: 1 0 0 0; }}
+    /* the inbox's search (#273): its glass on the pane's top border, its popover over the inbox */
+    #search-glass {{ position: absolute; overlay: screen; width: 2; height: 1; }}
+    SearchItems {{ align: left top; }}
+    SearchItems #dialog {{ padding: 0 1; constrain: inside inside; }}
+    SearchItems #search-results {{ height: auto; max-height: 1fr; }}
+    SearchItems #search-more {{ color: $text-muted; height: auto; }}
     #title-row {{ height: 1; background: #12122a; }}
     #title {{ width: 1fr; height: 1; background: #12122a; content-align: center middle; }}
     #tour-badge {{ width: auto; height: 1; padding: 0 1; color: #ffd300; display: none; }}
@@ -4738,6 +4865,8 @@ class WheelhouseApp(App):
         # then, kept here, not as updated_at, which places it among the settled (#70)
         self.brought_back: dict[str, datetime] = {}
         self.collapsed: set[str] = set()   # the parent rows whose children are hidden, for this run alone
+        self.search_hidden = False   # the search popover's Show hidden, for this run alone (#273)
+        self.peeked: str | None = None   # an item search showed in Detail though the inbox hides it: kept hidden (#273)
         # each list's sort (ordering.py), kept per TUI under layout.sort.*: read as the app starts
         self.item_sort, self.session_sort = ordering.ITEMS_DEFAULT, ordering.SESSIONS_DEFAULT
         # each list's rows that change sides (an item settling, a session parked) fall or rise
@@ -4817,8 +4946,9 @@ class WheelhouseApp(App):
             yield Splitter("sessions-pane", "#col-left", "#col-right", "x", default=self.column_width)
             with Vertical(id="col-middle", classes="column"):
                 with slot("middle.top"):
-                    with Vertical(id="items-pane", classes="panel") as pane:
+                    with InboxPane(id="items-pane", classes="panel") as pane:
                         pane.border_title = "Inbox"
+                        yield SearchGlass("🔍", id="search-glass")
                         with hidden(Vertical(id="away-card")):   # after a gap (away.py, #223)
                             with Horizontal(id="away-head"):
                                 yield Static(id="away-title")
@@ -5732,11 +5862,7 @@ class WheelhouseApp(App):
         names = self.session_names()
         found, processing, queued, awaiting = self.client.inbox(self.filter_sid)
         busy = queued | awaiting
-        if self.going:   # a Delete under way: its rows gone already (#234)
-            found = [it for it in found if item_key(it) not in self.going]
-        if self.autocleanse and not self.show_finished:   # completed a while ago: off until Alt+V (#235)
-            at, held = datetime.now(timezone.utc), under_way_parents(found, busy)
-            found = [it for it in found if item_key(it) in held or not self.completed_hidden(it, busy, at)]
+        found = self.listable(found, busy)   # a Delete's rows gone already (#234); autocleanse's hidden (#235)
         compacting, dead = self.compacting(), self.lifeless_sids()
         cuts = self.cutoffs()
         every = self.client.all_items() if self.item_sort == ordering.ITEMS_DEFAULT else None
@@ -5816,7 +5942,7 @@ class WheelhouseApp(App):
             self.deleted = set()
         if not pending:   # where the app put it; an arrow pending stays pending
             self.items_cursor = table.cursor_key()
-        if rebuilt and key not in table.rows and table.row_count:   # its item went: take the one now
+        if rebuilt and key not in table.rows and table.row_count and (key is None or key != self.peeked):   # its item went: take the one now
             # under the cursor, the list going with it: one current session (D22)
             self.select_row(table.coordinate_to_cell_key((table.cursor_row, 0)).row_key.value)
         if not table.row_count:   # its item (or followed session) went and none is left: nothing selected
@@ -5876,7 +6002,7 @@ class WheelhouseApp(App):
         with what it read from the hub, what tells a paint that would change nothing (#268)."""
         table = self.items_table
         return (self.filter_sid, self.item_sort, self.show_finished, self.autocleanse, self.selected, self.pin,
-                frozenset(self.collapsed), frozenset(self.going), frozenset(table.marked), frozenset(self.deleted),
+                self.peeked, frozenset(self.collapsed), frozenset(self.going), frozenset(table.marked), frozenset(self.deleted),
                 tuple(self.brought_back.items()), self.item_sink.sunk is None,
                 tuple(str(c.label) for c in table.ordered_columns), tuple(table.keys()), table.cursor_key(),
                 self.items_cursor)
@@ -5899,7 +6025,8 @@ class WheelhouseApp(App):
         stays under the cursor until the selection moves on."""
         if not completed(item, busy) or standing(item, busy) != "settled":   # a finished one: Alt+V's already
             return False
-        if self.selected and self.selected[1] and (item["session_id"], item["ref"]) == tuple(self.selected[:2]):
+        if self.selected and self.selected[1] and (item["session_id"], item["ref"]) == tuple(self.selected[:2]) \
+                and item_key(item) != self.peeked:   # one search showed hidden stays hidden (#273)
             return False
         since = max(datetime.fromisoformat(item["updated_at"]), self.brought_back.get(item_key(item), datetime.min.replace(tzinfo=timezone.utc)))
         return (at - since).total_seconds() >= self.autocleanse * 60
@@ -6153,6 +6280,84 @@ class WheelhouseApp(App):
         self.paint_sendbar()
         self.paint_detail()
 
+    def action_search(self, typed: str = "") -> None:
+        """The search popover over the inbox (SearchItems, #273), typed already holding what
+        opened it: the selected session's items, or every session's with none selected."""
+        if self.screen is not self.screen_stack[0]:
+            return
+        self.settle()
+        names = self.session_names()
+        title = f"Search {names.get(self.filter_sid, self.filter_sid)}" if self.filter_sid else "Search all sessions"
+        pane = self.query_one("#items-pane")
+        self.push_screen(SearchItems(title, self.search_pool(), None if self.filter_sid else names, typed,
+                                     self.search_hidden, pane.region), self.searched)
+
+    def search_pool(self) -> list[tuple]:
+        """What search looks through: the scope's items, each with whether the inbox hides it
+        now (inbox_shows): a finished one with F off, one autocleanse hid, a parked session's."""
+        sid = self.filter_sid
+        _, _, queued, awaiting = inbox = self.client.inbox(sid)
+        items = inbox.items if sid else self.client.all_items()
+        shows = self.inbox_shows(inbox.items, queued | awaiting)
+        return [(it, item_key(it) not in shows) for it in items]
+
+    def inbox_shows(self, found, busy) -> set[str]:
+        """The keys of the items the inbox lists now, a collapsed parent's children counted
+        (paint_items' filter): not being deleted, not hidden by autocleanse, and not finished
+        unless pinned or F shows the finished."""
+        found = self.listable(found, busy)
+        return {item_key(it) for it in found
+                if self.show_finished or pinned(it) or standing(it, busy) != "finished"}
+
+    def listable(self, found, busy) -> list:
+        """The items paint_items starts from: those of a Delete under way gone (#234), and, F
+        off, those autocleanse hides (#235)."""
+        if self.going:
+            found = [it for it in found if item_key(it) not in self.going]
+        if self.autocleanse and not self.show_finished:
+            at, held = datetime.now(timezone.utc), under_way_parents(found, busy)
+            found = [it for it in found if item_key(it) in held or not self.completed_hidden(it, busy, at)]
+        return found
+
+    def searched(self, picked: tuple[str, str] | None) -> None:
+        """The search popover closed: its pick gone to (go_to_item), and focus on the inbox."""
+        self.items_table.focus()
+        if picked is not None:
+            self.go_to_item(*picked)
+
+    def go_to_item(self, sid: str, ref: str) -> None:
+        """An item gone to (#273, #274): one the inbox shows highlighted there, scrolled to, and in
+        Detail, as a click on its row; its parents' children shown if they were hidden. One
+        it hides shown in Detail alone, the inbox unchanged, Detail saying it's hidden. One of
+        a compacting session isn't, as its row isn't picked (#150)."""
+        item = self.client.item(sid, ref)
+        if item is None:
+            self.notify(f"{ref} has gone", severity="warning")
+            return
+        key, table = item_key(item), self.items_table
+        if key in table.locked or self.locks(item, self.cutoffs()):
+            self.notify(COMPACTING_LOCKED, severity="warning")
+            return
+        _, _, queued, awaiting = inbox = self.client.inbox(self.filter_sid)
+        if key in self.inbox_shows(inbox.items, queued | awaiting):
+            parent, seen = parent_of(item), set()
+            while parent and (up := f"{sid}|{parent}") not in seen:   # under a collapsed parent: shown
+                seen.add(up)
+                self.collapsed.discard(up)
+                parent = parent_of(above) if (above := self.client.item(sid, parent)) is not None else None
+            self.paint_items()
+        if key in table.rows:
+            self.peeked = None
+            self.show_item(sid, ref)
+            self.paint_items()
+            return
+        self.shown_doc = None
+        self.peeked = key
+        table.show_cursor = False
+        self.select_row(key)
+        self.paint_items()
+        self.paint_sendbar()
+
     def show_item(self, sid: str, ref: str) -> bool:
         """A module's pick of an item (api.Context.show_item, the PRs pane's row that is one):
         shown in Detail with its thread and answer box, and highlighted in the inbox if listed
@@ -6165,6 +6370,7 @@ class WheelhouseApp(App):
             self.notify(COMPACTING_LOCKED, severity="warning")
             return False
         self.shown_doc = None
+        self.peeked = None
         if hidden:   # autocleanse hid it (a Landed line, a merged PR): selected, it's back (#235)
             self.select_row(key)
             self.paint_items()
@@ -6315,6 +6521,10 @@ class WheelhouseApp(App):
             blocks, agent = self.item_blocks(*self.selected)
         else:   # what was shown has gone (a followed session ended, say): not left standing
             blocks = [("note", self.detail_note or NOTHING_SELECTED)]
+        if not shown and not self.viewing and self.selected and self.selected[1] and blocks and blocks[0][0] == "head" \
+                and (table := getattr(self, "items_table", None)) is not None \
+                and f"{self.selected[0]}|{self.selected[1]}" not in table.rows:
+            blocks[0] = ("head", blocks[0][1] + " · *Hidden from the inbox*")   # picked by search, or a module (#273)
         if editor is not None:
             blocks = editor.shown_in(blocks, self.detail.doc_path, gone)
         for part in self.detail_boxes():   # a pane's parts go with an item, or a note: not a doc's
@@ -7555,6 +7765,8 @@ class WheelhouseApp(App):
 
     def select_row(self, key: str) -> None:
         sid, ref = key.split("|")
+        if key != self.peeked:
+            self.peeked = None
         if self.selected != (sid, ref or None):
             self.selected = (sid, ref or None)   # an unseen decision is seen once looked at (dwelt)
             self.detail_note = None

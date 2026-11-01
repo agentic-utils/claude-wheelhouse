@@ -105,6 +105,9 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   repo beside it, #191; `decision_dirs` pairs each with the repo that looks there). A session in no git repo
   may still name one, absolute or relative to its directory (#220), listed under the repo the directory is in.
   Never imports Textual.
+- `search.py`: the inbox's search (#273): which items a query matches, best first (`find`),
+  for the popover (`tui.SearchItems`, opened by `WheelhouseApp.action_search`); a pick goes
+  through `WheelhouseApp.go_to_item`. Never imports Textual.
 - `away.py`: the card of what happened while the person was away (#223,
   `.plan/since-you-were-away.md`): its groups read from the items (`card`), and the sessions
   that went quiet, which `Hub.note_quiet` notes as each refresh sees them (`observe`, the

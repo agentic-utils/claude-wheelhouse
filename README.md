@@ -252,6 +252,17 @@ session.
   its `✕`, dismisses it, and it goes by itself once every Needs-you line is dealt with.
   Seeing it marks nothing seen. A session going quiet is noticed by the daemon (or a
   `--local` app) as it happens; one that went while neither ran is noticed at the next start.
+- **Search.** The 🔍 at the inbox's top right, or any character typed while the inbox has
+  focus (that character starting the query), opens a search over it: the selected session's
+  items, or every session's (each row naming its session) with none selected. It matches ids
+  and titles as you type, case aside: an id (`T3`, `q25`, `PR276`) puts that item first, then
+  ids holding what's typed, titles starting with it and titles holding it, each newest first,
+  50 rows at most. **Show hidden** (`Tab` to it, `Space` or a click flips it, kept until you
+  quit) takes in the items off the inbox too, dimmed: finished ones `Alt+V` would show, those
+  autocleanse hid, the dismissed and deleted, and a parked session's. `Up` and `Down` move the
+  highlight, `Enter` or a click goes to the item: highlighted in the inbox and shown in Detail,
+  as a click on its row; a hidden one in Detail alone, its header saying *Hidden from the
+  inbox*, the inbox unchanged. `Esc` closes it, focus back on the inbox.
 - **Pins.** The inbox's first column pins an item (📌): a click there, or `Alt+P` in the item
   list, pins the row or clears its pin. A doc comes pinned (a session can post a scratch
   report unpinned), anything else unpinned, and a doc posted again keeps the pin you set.
@@ -586,7 +597,7 @@ along with the launch command.
 
 ## Using it
 
-Keys, shown in upper case as usual (Alt+V means Alt and the v key, not Shift+V). Every one has a modifier (or is `F1`), so each works from the answer box too: `Enter` open an item's thread (or follow a session's conversation, in the
+Keys, shown in upper case as usual (Alt+V means Alt and the v key, not Shift+V). Every one has a modifier (or is `F1`), so each works from the answer box too, and a plain character typed in the inbox opens its search (above): `Enter` open an item's thread (or follow a session's conversation, in the
 session list), `Alt+V` show or hide finished items and those autocleanse hid (the footer says which it will do), `Delete` or `Backspace` in the item list close the
 highlighted question or decision or dismiss a done task or subagent, or close a doc (asking first, as it does for an open question), `Ctrl+Delete` delete every completed item at once (`Ctrl+Z` brings them back), `Alt+N` new session, `Alt+A` adopt, `Alt+Shift+L` relaunch all, `Alt+Shift+M` the MCP servers of the session in context, `Alt+K` in the session list fork the highlighted session, `Esc` all sessions, unselecting the session (or clears a text
 selection first, or back from a thread), `Ctrl+Enter` submit an answer (queued or sent, by the session's mode), `Alt+S` send this one answer now (the queue and mode left as they are),

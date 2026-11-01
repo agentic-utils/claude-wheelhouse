@@ -342,6 +342,9 @@ FEATURES: tuple[Feature, ...] = (
     Feature("decisions-follow", UNRELEASED, ADVANCED,
             note="The Decisions pane follows the selected session, as the PRs pane does: its repo's decisions "
                  "alone, or a line saying it has none; with no session selected, every repo's."),
+    Feature("inbox-search", UNRELEASED, ADVANCED,
+            note="Search the inbox by id or title: click the 🔍 at its top right, or just type while it has focus. "
+                 "Show hidden takes in the items off the inbox too; Enter or a click goes to the item."),
 
 )
 
