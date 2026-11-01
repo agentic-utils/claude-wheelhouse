@@ -6277,6 +6277,7 @@ class WheelhouseApp(App):
         from under a doc root (/docs), in place of what's selected until the selection moves:
         as a doc item shows, with no answer box."""
         self.shown_doc = (path, title)
+        self.items_table.show_cursor = False   # picked elsewhere: a click on the inbox's row is a fresh pick (#281)
         self.paint_sendbar()
         self.paint_detail()
 
@@ -6386,11 +6387,13 @@ class WheelhouseApp(App):
     def unselect(self, note: str) -> None:
         """A module's pick of something that isn't an item (api.Context.unselect, a PR no
         session made): nothing selected, the inbox's highlight hidden, and Detail saying why."""
-        self.shown_doc = None
+        doc, self.shown_doc = self.shown_doc, None
         self.items_table.show_cursor = False
         if self.selected is not None:
             self.selected = None
             self.retarget()
+            self.each_pane("showing", None, None)
+        elif doc is not None:   # a decision shown with nothing selected: its pane's highlight hidden too (#281)
             self.each_pane("showing", None, None)
         self.detail_note = note
         self.paint_detail()
@@ -7767,7 +7770,8 @@ class WheelhouseApp(App):
         sid, ref = key.split("|")
         if key != self.peeked:
             self.peeked = None
-        if self.selected != (sid, ref or None):
+        if self.selected != (sid, ref or None) or self.shown_doc is not None:
+            self.shown_doc = None   # a module's doc gives way, even to the item it showed over (#281)
             self.selected = (sid, ref or None)   # an unseen decision is seen once looked at (dwelt)
             self.detail_note = None
             self.retarget()
