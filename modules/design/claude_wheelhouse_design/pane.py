@@ -122,7 +122,9 @@ class Decisions(Vertical):
         self.ctx = ctx
         self.rows: list[dict] = []           # as the route last gave them
         self.looked: list[str] = []          # the directories it looked in
-        self.scopes: dict[str, dict] = {}    # each session's repo name and decision dirs (route.scopes)
+        self.scopes: dict[str, dict] | None = {}   # each session's repo name and decision dirs (route
+                                             # scopes); None from a daemon on older code: no filter
+        self.held: list[dict] = []           # what listed() last gave, kept for a session not yet scoped
         self.error: str | None = None        # why the last ask failed
         self.sort = DEFAULT
         self.asked_at = 0.0                  # time.monotonic() at the last ask
@@ -183,7 +185,7 @@ class Decisions(Vertical):
         self.error = got.get("error")
         if self.error is None:
             self.rows, self.looked = got.get("decisions", []), got.get("dirs", [])
-            self.scopes = got.get("scopes", {})
+            self.scopes = got.get("scopes")
         self.settle()
 
     def settle(self) -> None:
@@ -248,18 +250,21 @@ class Decisions(Vertical):
 
     def listed(self) -> list[dict]:
         """The rows shown (#264): with a session selected, those in its repo's decision
-        directories alone (scopes; none until the route has seen the session); with none, every repo's."""
+        directories alone; with none, or from a daemon that gives no scopes, every repo's. A
+        session the route hasn't seen yet (just started): what was shown, until its ask lands."""
         sid = self.session()
-        if sid is None:
-            return self.rows
-        dirs = {Path(d) for d in self.scopes.get(sid, {}).get("dirs", ())}
-        return [r for r in self.rows if Path(r["path"]).parent in dirs]
+        if sid is None or self.scopes is None:
+            self.held = self.rows
+        elif sid in self.scopes:
+            dirs = {Path(d) for d in self.scopes[sid]["dirs"]}
+            self.held = [r for r in self.rows if Path(r["path"]).parent in dirs]
+        return self.held
 
     def note(self) -> str:
         if self.error:
             return f"Couldn't list decisions: {self.error}"
         if (sid := self.session()) is not None and not self.listed():
-            name = self.scopes.get(sid, {}).get("name") or next(
+            name = (self.scopes or {}).get(sid, {}).get("name") or next(
                 (s["name"] for s in self.ctx.sessions() if s["id"] == sid), sid)
             return f"No decisions in {name}: docs/adr or set_doc_dirs."
         if not self.rows:

@@ -239,8 +239,6 @@ def follow(tmp_path, selected):
      "electronics selected: none, and the note says so (Doug's report)"),
     ("v+", ["0002", "0007", "0001"], {"videography"}, "",
      "a declared sibling docs repo's decisions listed under the declaring repo, with its own"),
-    ("x", [], set(), "No decisions in x: docs/adr or set_doc_dirs.",
-     "a session the route hasn't seen yet: none until the next ask, never another repo's"),
 ])
 def test_the_pane_follows_the_selected_session(tmp_path, selected, numbers, repos, note, desc):
     p = follow(tmp_path, selected)
@@ -260,3 +258,16 @@ def test_the_route_scopes_a_repos_sessions_together_and_a_loose_one_alone(tmp_pa
     got = pane.scopes(rows)
     assert got["a1"] == got["a2"] == {"name": "app", "dirs": [str(d)]}, "one repo, one scope"
     assert got["l"] == {"name": tmp_path.name, "dirs": [str(other)]}, "no repo: its own declared dirs"
+
+
+@pytest.mark.parametrize("before, scopes, numbers, desc", [
+    ("v", "held", ["0002", "0001"], "a session the route hasn't seen yet: what was shown, until its ask lands"),
+    (None, None, ["0002", "0001"], "a daemon on older code, no scopes: every repo's, unfiltered"),
+])
+def test_the_pane_keeps_its_rows_when_it_cant_scope(tmp_path, before, scopes, numbers, desc):
+    p = follow(tmp_path, before)
+    p.listed()
+    if scopes is None:
+        p.scopes = None
+    p.ctx.focus = lambda: "new"
+    assert [r["number"] for r in p.listed()] == numbers and p.note() == "", desc
