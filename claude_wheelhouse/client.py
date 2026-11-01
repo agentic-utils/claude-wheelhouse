@@ -56,6 +56,9 @@ class LocalClient(Hub):
     elsewhere = False   # the sessions are on this machine
     connected = True
 
+    def land(self) -> None:
+        pass   # in process, every read is the store's own: nothing waits to be shown
+
     def background(self) -> None:
         """The hub's reading at each tick: context sizes, the tab sessions' keepalive,
         subagents, the account's usage."""
@@ -324,10 +327,13 @@ class RemoteClient:
             path = str(self.httpx.URL(path, params=params))
         return self.request("GET", path)
 
-    def command(self, path: str, body: dict | None = None):
+    def command(self, path: str, body: dict | None = None, refetch: str = "now"):
         """A command, sent with an Idempotency-Key of its own: sent again once with the same
         key if its answer was lost, so it's done once. Raises what the hub would (SessionGone,
-        KeyError, ValueError); otherwise the daemon's JSON. The next refresh fetches at once."""
+        KeyError, ValueError); otherwise the daemon's JSON. What it changed: with refetch "now",
+        fetched by the next read, at once; "later", by the fetching thread, shown at a refresh
+        once it lands; "none", by the caller (mark_seen). A client with no threads of its own
+        (synchronous) always fetches at the next read (#268)."""
         key = str(uuid.uuid4())
         sent = False   # once it may have reached the daemon, a failure is LOST, never "nothing was sent"
         try:
@@ -347,7 +353,11 @@ class RemoteClient:
             raise hub_error(e) from None
         finally:
             with self.lock:
-                self.forced = True
+                if refetch == "now" or not self.threads:
+                    self.forced = True
+                elif refetch == "later":
+                    self.dirty |= {("sessions",), ("inbox",)}
+                    self.lock.notify_all()
 
     def done(self, path: str, body: dict | None = None) -> Done:
         """A command answered as the hub's Done: one that couldn't reach the daemon, or
@@ -409,6 +419,33 @@ class RemoteClient:
                     self.forced = True
                 if e.status != 503:
                     self.refused(self.refusal_of(e))
+
+    def fetch_now(self) -> None:
+        """The sessions and the inbox fetched now, on the caller's thread (never the UI's: a
+        worker's), into waiting for land or the next refresh. One that fails is left to the
+        fetching thread."""
+        for key in (("sessions",), ("inbox",)):
+            seq = self.next_seq()
+            try:
+                data = self.fetch(key)
+            except (Unreachable, Refused, self.httpx.TransportError):
+                with self.lock:
+                    self.dirty.add(key)
+                    self.lock.notify_all()
+                continue
+            with self.lock:
+                if key not in self.waiting or self.waiting[key][0] < seq:
+                    self.waiting[key] = (seq, data)
+
+    def land(self) -> None:
+        """What fetch_now brought, shown now, on the UI thread: the sessions and the inbox
+        alone, the rest left for the next refresh."""
+        with self.lock:
+            for key in (("sessions",), ("inbox",)):
+                if key in self.waiting:
+                    seq, data = self.waiting.pop(key)
+                    if seq > self.shown_seq.get(key, -1):
+                        self.apply(key, data, seq)
 
     def next_seq(self) -> int:
         with self.lock:
@@ -732,11 +769,12 @@ class RemoteClient:
             self.tour_state()["at"] = at
         return ok
 
-    def quietly(self, path: str, body: dict) -> bool:
+    def quietly(self, path: str, body: dict, refetch: str = "later") -> bool:
         """A command nobody waits to hear about (a splitter's size, a feature the tour
-        showed, a decision seen by the dwell): one that can't reach the daemon is let go."""
+        showed, a decision seen by the dwell): one that can't reach the daemon is let go. What
+        it changed is fetched off the UI thread (command's refetch, #268)."""
         try:
-            return self.command(path, body).get("ok", True)
+            return self.command(path, body, refetch).get("ok", True)
         except (Unreachable, Refused, SessionGone, KeyError, ValueError):
             return False
 
@@ -855,7 +893,12 @@ class RemoteClient:
         return self.done(f"/sessions/{sid}/effort", {"effort": effort})
 
     def mark_seen(self, sid: str, ref: str) -> bool:
-        return self.quietly(f"/items/{sid}/{ref}/seen", {})
+        """Sent from a worker (WheelhouseApp.dwelt), never the UI thread, and what it changed
+        fetched there too, for land to show (#268)."""
+        if not (ok := self.quietly(f"/items/{sid}/{ref}/seen", {}, refetch="none")):
+            return False
+        self.fetch_now()
+        return ok
 
     def notes_wait(self, sid: str, ref: str, abort: bool) -> Done:
         return self.done(f"/items/{sid}/{ref}/notes-wait", {"abort": abort})

@@ -7,6 +7,7 @@ import collections
 import dataclasses
 import difflib
 import functools
+import itertools
 import gc
 import json
 import math
@@ -36,7 +37,9 @@ from textual.containers import Grid, Horizontal, Vertical, VerticalScroll
 from textual.coordinate import Coordinate
 from textual.errors import NoWidget
 from textual.content import Content
-from textual.geometry import Offset
+from textual._context import visible_screen_stack
+from textual.geometry import Offset, Region
+from textual.renderables.background_screen import BackgroundScreen
 from textual.screen import ModalScreen, Screen
 from textual.scrollbar import ScrollBar
 from textual.selection import SELECT_ALL, Selection
@@ -2884,6 +2887,8 @@ class Dialog(ModalScreen):
     RESPONSE = True
     GRACE = 0.4   # seconds
     now = staticmethod(time.monotonic)
+    shaded: dict[tuple, Strip] = {}   # each line beneath as tinted (shade), shared by every dialog
+    beneath: dict[int, Strip] | None = None   # the rows beneath being drawn (render_lines)
     opened = 0.0
     # priority: tried before the focus's own Enter, which check_action lets through
     BINDINGS = [Binding("escape", "cancel", show=False), Binding("enter", "enter", show=False, priority=True)]
@@ -2908,6 +2913,54 @@ class Dialog(ModalScreen):
 
     def on_mount(self) -> None:
         self.opened = self.now()
+
+    def render_lines(self, crop: Region) -> list[Strip]:
+        """The screen beneath, shaded, as Textual shades it (BackgroundScreen), but only the
+        lines a change beneath touched drawn again, and each line's tint made once for what it
+        shows (shade) (#268). Textual's drew and tinted the whole screen beneath again for any
+        change there, each frame of the animation: ~100 ms with a big inbox."""
+        cache = self._styles_cache   # the lines it draws again: those marked dirty, or not kept
+        fresh = cache._width != self.size.width
+        self.beneath = self.lines_beneath([y for y in crop.line_range
+                                           if fresh or y in cache._dirty_lines or y not in cache._cache])
+        self._dirty_regions.clear()   # Widget.render_line's whole render, never used while this draws
+        try:
+            return super().render_lines(crop)
+        finally:
+            self.beneath = None
+
+    def lines_beneath(self, rows: list[int]) -> dict[int, Strip] | None:
+        """The rows of the screen beneath, by y, as its compositor draws them, each run of
+        neighbouring rows in one pass; None when nothing shows through (an opaque dialog, or
+        none beneath)."""
+        stack = visible_screen_stack.get(None)
+        if not stack or stack[-1] is self or self.styles.background.a >= 1:
+            return None
+        compositor, width, out = stack[-1]._compositor, self.size.width, {}
+        for _, run in itertools.groupby(enumerate(sorted(rows)), lambda pair: pair[1] - pair[0]):
+            ys = [y for _, y in run]
+            chops = compositor._render_chops(Region(0, ys[0], width, len(ys)), lambda y: ys[0] <= y <= ys[-1])
+            out |= {y: Strip.join([c for c in chops[y].values() if c is not None]) for y in ys if y < len(chops)}
+        return out
+
+    def render_line(self, y: int) -> Strip:
+        beneath = self.beneath if self.beneath is not None else self.lines_beneath([y])
+        if beneath is None:
+            return super().render_line(y)
+        return self.shade(beneath.get(y) or Strip.blank(self.size.width), self.styles.background,
+                          self.visual_style.rich_style)
+
+    @staticmethod
+    def shade(line: Strip, colour, under: Style) -> Strip:
+        """A line beneath, tinted as BackgroundScreen tints it, on the dialog's own style as
+        Textual draws it (Visual.to_strips), kept for what it shows."""
+        key = (tuple(line), colour, under)
+        if (got := Dialog.shaded.get(key)) is None:
+            if len(Dialog.shaded) > 4096:   # lines no longer shown
+                Dialog.shaded.clear()
+            tinted = Strip(list(BackgroundScreen.process_segments(line, colour)), line.cell_length)
+            got = Dialog.shaded[key] = tinted.apply_style(under)
+        return got
 
     def on_click(self, event: events.Click) -> None:
         if event.widget is self:   # the shade around the box, not the box
@@ -5271,7 +5324,10 @@ class WheelhouseApp(App):
         self.last_input = at
         if self.input_kept is None or (at - self.input_kept).total_seconds() >= INPUT_KEPT:
             self.input_kept = at
-            self.client.note_input(away.stamp(at))
+            if self.client.remote:   # a request the person never waits on, off the UI thread (#268)
+                self.spawn(functools.partial(self.client.note_input, away.stamp(at)), "input")
+            else:
+                self.client.note_input(away.stamp(at))
 
     @property
     def main_screen(self) -> Screen:
@@ -5433,12 +5489,25 @@ class WheelhouseApp(App):
             return
         if self.selected == self.picked:
             self.saw(sid, ref)
-        if ref and self.client.mark_seen(sid, ref):   # a no-op unless it's an unseen decision
-            self.paint_sessions()   # its D count
-            self.paint_items()   # it keeps its place while selected (ranked), and sinks once left
-            self.paint_detail()
-            if isinstance(screen, (ThreadView, DocView)) and screen.is_mounted:
-                screen.paint()
+        if ref and self.client.remote:   # sent, and what it changed fetched, off the UI thread (#268)
+            self.spawn(lambda: self.client.mark_seen(sid, ref) and self.post(lambda: self.seen_landed(gen)), "seen")
+        elif ref and self.client.mark_seen(sid, ref):   # a no-op unless it's an unseen decision
+            self.seen_shown()
+
+    def seen_landed(self, gen: int) -> None:
+        """A seen mark sent through the daemon, and what it changed fetched: shown now, unless
+        the selection moved on meanwhile (dwell_gen), when the next refresh shows it instead."""
+        if gen != self.dwell_gen or not self.is_running or not self.screen_stack:
+            return
+        self.client.land()
+        self.seen_shown()
+
+    def seen_shown(self) -> None:
+        self.paint_sessions()   # its D count
+        self.paint_items()   # it keeps its place while selected (ranked), and sinks once left
+        self.paint_detail()
+        if isinstance(self.screen, (ThreadView, DocView)) and self.screen.is_mounted:
+            self.screen.paint()
 
     @property
     def viewing(self) -> str | None:
