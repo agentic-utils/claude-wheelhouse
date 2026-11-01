@@ -173,7 +173,9 @@ session.
   send?" (a parked one) or "Relaunch <session> and send?" (any other): Yes brings it back with its
   queue, and Alt+S's answer after it, as its first prompt, behind what the wheelhouse tells a
   session on resume; No sends nothing and leaves the box as it was. With nothing queued, Ctrl+S
-  says so. Send all skips it and doesn't count it. Ctrl+R takes a queued answer
+  says so. Ctrl+S with text in the focused box sends nothing at first: a toast asks "Did you
+  mean Ctrl+Enter? Hit Ctrl+S again if you meant to send the queue", and a second Ctrl+S while
+  it shows (about 5 seconds), the text unchanged, sends. Send all skips it and doesn't count it. Ctrl+R takes a queued answer
   back to edit or drop. A sent answer shows as `you · sending`, as a queued one shows as
   `you · queued`, until the session takes it up: in an item's thread until the wheelhouse
   has passed it on, and in the conversation until the session has it, which may wait for
@@ -404,7 +406,11 @@ session.
   named it, or the first by path when several did). A session started outside any git repo
   (a projects folder, say) may name one too, absolute or relative to that folder, listed under the repo it
   is in. Read again every 10
-  seconds and whenever a session starts in another repo or names its directories. A row is
+  seconds and whenever a session starts in another repo or names its directories. With a
+  session selected, the pane follows it, as the PRs pane does: only its repo's decisions (those
+  in the directories its repo's sessions named, else `docs/adr`), and with none, a line saying
+  so (`No decisions in electronics: docs/adr or set_doc_dirs.`); Esc, or a click on the
+  selected session, lists every repo's again. A row is
   its number, status and title, and its repo when the pane lists more than one. The status is the doc's front matter `status:`, else
   a `Status:` line or `## Status` section, else its file name's (`0042-ACCEPTED-slug.md`),
   else `?`. PROPOSED and UNRESOLVED come first, then the rest, newest first; a column's
@@ -584,7 +590,7 @@ Keys, shown in upper case as usual (Alt+V means Alt and the v key, not Shift+V).
 session list), `Alt+V` show or hide finished items and those autocleanse hid (the footer says which it will do), `Delete` or `Backspace` in the item list close the
 highlighted question or decision or dismiss a done task or subagent, or close a doc (asking first, as it does for an open question), `Ctrl+Delete` delete every completed item at once (`Ctrl+Z` brings them back), `Alt+N` new session, `Alt+A` adopt, `Alt+Shift+L` relaunch all, `Alt+Shift+M` the MCP servers of the session in context, `Alt+K` in the session list fork the highlighted session, `Esc` all sessions, unselecting the session (or clears a text
 selection first, or back from a thread), `Ctrl+Enter` submit an answer (queued or sent, by the session's mode), `Alt+S` send this one answer now (the queue and mode left as they are),
-`Ctrl+S` send the session's queue (one not running: Unpark or Relaunch it and send, asked first), `Ctrl+T` switch the session between Queued and
+`Ctrl+S` send the session's queue (one not running: Unpark or Relaunch it and send, asked first; with text in the box, pressed twice), `Ctrl+T` switch the session between Queued and
 Immediate, `Ctrl+R` take a queued answer back (with none queued, in the item list, bring back a finished item: a question
 as answered, a decision as seen), `Ctrl+Z` undo the last delete, pin or reopen in the inbox (the rows back as they
 stood, an open question open again; in a text box, its own undo), `F1` list every key and button, `Alt+Q` ask the wheelhouse how to do something (the helper, below), `Ctrl+Q` quit, `Alt+T` resume the tour while the title bar's badge shows. `Alt+Shift+A` is Send all (every running session's queue). A key whose button doesn't apply says so.

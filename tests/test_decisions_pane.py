@@ -462,3 +462,40 @@ async def test_a_decision_a_live_session_shares_stays_bright(store, sid, decisio
         await settled(app, pilot)
         table = app.query_one("#decision-list")
         assert table.row_count == 3 and not any(dimmed(c) for i in range(3) for c in table.get_row_at(i)), desc
+
+
+@pytest.mark.anyio
+@pytest.mark.both
+@pytest.mark.parametrize("size", [(160, 40), (80, 24)])
+async def test_the_pane_follows_the_selected_session(store, tmp_path, monkeypatch, size):
+    """#264, Doug: "Regardless of which session is selected, I see the ADRs for autonomous
+    videography." A selected session lists its repo's decisions alone, an electronics one with
+    none says so, and with none selected every repo's, the Repo column back."""
+    repo(tmp_path / "videography", {"0001-ACCEPTED-a.md": "# A\n", "0002-PROPOSED-b.md": "# B\n"})
+    repo(tmp_path / "tools", {"0005-ACCEPTED-t.md": "# T\n"})
+    (tmp_path / "electronics" / ".git").mkdir(parents=True)
+    video = store.create_session(str(tmp_path / "videography"), name="video")
+    elec = store.create_session(str(tmp_path / "electronics"), name="elec")
+    store.create_session(str(tmp_path / "tools"), name="tools")
+    monkeypatch.setattr(api, "load", lambda: [api.Loaded("design", design.module)])
+    app = WheelhouseApp(store)
+    async with app.run_test(size=size) as pilot:
+        await settled(app, pilot)
+        p, table, note = app.query_one("#design"), app.query_one("#decision-list"), app.query_one("#decisions-note")
+        assert numbers(app) == ["0002", "0005", "0001"] and len(table.columns) == 4, "none selected: every repo's, Repo shown"
+        asked = p.asked_at
+        await pick(app, pilot, video)
+        p.tick()
+        await pilot.pause()
+        assert numbers(app) == ["0002", "0001"] and len(table.columns) == 3, "videography's alone, no Repo column"
+        assert p.asked_at == asked, "the rows held filtered: no ask for a selection"
+        await pick(app, pilot, elec)
+        p.tick()
+        await pilot.pause()
+        said = str(note.render())
+        assert p.compact and note.display and said == "No decisions in electronics: docs/adr or set_doc_dirs.", said
+        assert note.region.width > 0 and note.region.right <= size[0], "the note on screen"
+        app.unfilter()
+        p.tick()
+        await pilot.pause()
+        assert numbers(app) == ["0002", "0005", "0001"] and not p.compact, "unselected: every repo's again"

@@ -105,7 +105,7 @@ DIALOGS = (
     Stop("decisions", "design", "The Decisions pane",
          "Architecture decision records (ADRs): each design decision a repo keeps as a markdown file in its "
          "docs/adr directory (or wherever a session there says, set_doc_dirs).\n\n"
-         "This pane lists them for every repo your sessions work in, open ones first. Highlight one to read it "
+         "This pane lists them for every repo your sessions work in (the selected session's alone), open ones first. Highlight one to read it "
          "in Detail.", NEXT),
     Stop("prs", "prs", "The PRs pane",
          "The open pull requests your sessions made, each with a light: red for failing checks, changes asked or "
@@ -194,6 +194,8 @@ FEATURES: tuple[Feature, ...] = (
     Feature("send-wakes", UNRELEASED, ADVANCED,
             note="Ctrl+S or Alt+S on a session that isn't running asks to Unpark (a parked one) or Relaunch it "
                  "and send: it wakes with your message and its queue as its first prompt."),
+    Feature("ctrl-s-hint", UNRELEASED, ADVANCED,
+            note="Ctrl+S with text in the box asks whether you meant Ctrl+Enter; a second Ctrl+S sends the queue."),
     Feature("pr-actions", UNRELEASED, "prs",
             note="A PR in the PRs pane has Open, Merge and Request review buttons, and a right-click on its row gives "
                  "them as a menu: Merge asks first and says what stood in its way, and Request review asks the "
@@ -336,6 +338,9 @@ FEATURES: tuple[Feature, ...] = (
     Feature("command-items", UNRELEASED, ADVANCED,
             note="A session can suggest a shell command for you to run: a C item with a Run button that opens it "
                  "in an editable box and runs it in a new terminal tab, sending the output back if you tick it."),
+    Feature("decisions-follow", UNRELEASED, ADVANCED,
+            note="The Decisions pane follows the selected session, as the PRs pane does: its repo's decisions "
+                 "alone, or a line saying it has none; with no session selected, every repo's."),
 
 )
 

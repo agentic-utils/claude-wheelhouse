@@ -444,3 +444,65 @@ def test_wake_and_send_goes_through_the_daemon(store, sid, served, no_launch):
         assert store.session(sid)["parked"] == 0
     finally:
         c.disconnect()
+
+
+@pytest.mark.parametrize("synchronous, refetch, forced, desc", [
+    (False, "now", True, "a command the person waits on: fetched at the next read, as the hub in process read it"),
+    (False, "later", False, "a quiet one: fetched on the fetching thread, never at a read on the UI's"),
+    (False, "none", False, "the seen mark: its caller fetches (fetch_now), on its own worker"),
+    (True, "later", True, "a client with no threads of its own fetches at the next read, whatever the command"),
+])
+def test_what_a_command_changed_is_fetched_where_it_says(store, sid, served, heard, synchronous, refetch, forced,
+                                                         desc):
+    """#268: a quiet command (a seen mark, the last input, a setting) made the next read on
+    the UI thread fetch /sessions and /inbox, 200 ms and more with a big inbox."""
+    d = served(store.path)
+    c = d.client(synchronous=True) if synchronous else heard(d.client())
+    ref = store.post_item(sid, "decision", "chose", why="local")
+    try:
+        c.refresh()   # forced at the start: fetched here
+        c.forced = False
+        c.command(f"/items/{sid}/{ref}/seen", {}, refetch)
+        assert c.forced == forced, desc
+        if refetch == "later" and not synchronous:
+            until(lambda: (c.refresh(), c.item(sid, ref)["status"])[1] == "seen",
+                  desc=f"{desc}: fetched in the background, shown at a refresh")
+    finally:
+        c.disconnect()
+
+
+def test_a_seen_mark_fetches_what_it_changed_for_land(store, sid, served, heard):
+    """#268: the seen mark, sent from a worker, fetches what it changed there too, for land to
+    show on the UI thread, not before."""
+    d = served(store.path)
+    c = heard(d.client())
+    ref = store.post_item(sid, "decision", "chose", why="local")
+    try:
+        c.refresh()   # forced at the start: fetched here
+        until(lambda: not c.in_flight and not c.dirty, desc="the stream's first fetches done")
+        with c.lock:
+            c.waiting.clear()
+        assert c.mark_seen(sid, ref)
+        assert ("inbox",) in c.waiting and c.item(sid, ref)["status"] == "unseen", "fetched, not shown yet"
+        c.land()
+        assert c.item(sid, ref)["status"] == "seen", "shown by land"
+    finally:
+        c.disconnect()
+
+
+def test_a_seen_marks_failed_fetch_is_left_to_the_fetching_thread(store, sid, served, monkeypatch):
+    """#268: a fetch_now that fails marks what it couldn't fetch for the fetching thread
+    (dirty), on a client whose threads aren't started, so no stream event marks it instead."""
+    c = served(store.path).client()
+    ref = store.post_item(sid, "decision", "chose", why="local")
+    try:
+        c.refresh()
+        real = c.fetch
+        monkeypatch.setattr(c, "fetch", lambda key: (_ for _ in ()).throw(Unreachable("down"))
+                            if key == ("inbox",) else real(key))
+        c.dirty.clear()
+        assert c.mark_seen(sid, ref)
+        assert ("inbox",) not in c.waiting and ("inbox",) in c.dirty and ("sessions",) in c.waiting, \
+            "the inbox left to the fetching thread, the sessions fetched"
+    finally:
+        c.disconnect()

@@ -1,4 +1,4 @@
-<!-- fact sheet stamp: version 104, 2026-10-30T22:23:33Z, source 3a52fd1ed505e0c8 (make facts restamps it: AGENTS.md) -->
+<!-- fact sheet stamp: version 121, 2026-11-01T12:47:04Z, source 4f1b153eee51440b (make facts restamps it: AGENTS.md) -->
 # Wheelhouse fact sheet
 
 What the helper chat knows before any question. The guide below is written by hand; the
@@ -20,7 +20,9 @@ daemon running.
   under it the buttons that act on the highlighted session.
 - Middle: the inbox (the item list: tasks, questions, decisions, subagents, PRs, docs), the
   conversation pane and the answer box with its send bar (Mode, Send).
-- Right and the other slots: the modules' panes (stats, PRs, Decisions) when installed. A
+- Right and the other slots: the modules' panes (stats, PRs, Decisions) when installed. With a
+  session selected, the PRs pane shows its PRs alone and the Decisions pane its repo's decisions
+  alone (with none, a line saying so: docs/adr or set_doc_dirs); with none selected, every repo's. A
   pane dragged by its title swaps places with another; Reset layout puts them back.
 - Session info: with a session selected, the ⓘ at the stats pane's top right opens its id
   (C copies it), user, machine, directory, branch, model, mode, start, transcript, and its
@@ -89,7 +91,7 @@ This fact sheet describes claude-wheelhouse 0.2.0.dev0.
 
 - **Alt+S**: Send what's typed at once, whatever the mode, leaving the mode and the rest of the queue as they are (one not running: Unpark or Relaunch it and send it with the queue, asked first)
 
-- **Ctrl+S**: Send the current session's queue (one not running: Unpark or Relaunch it and send, asked first)
+- **Ctrl+S**: Send the current session's queue (one not running: Unpark or Relaunch it and send, asked first); with text in the box, the first press asks whether you meant Ctrl+Enter, and a second sends
 
 - **Ctrl+T**: Switch the session between Queued and Immediate
 
@@ -263,7 +265,7 @@ The buttons under the session list act on the session highlighted there, and onl
 
 ### Sending
 
-**Queued** (the default): Ctrl+Enter holds each answer until Ctrl+S (or Send) sends the session's queue as one message, so related answers arrive together; ✉ counts what's queued. A session not running: Ctrl+S or Alt+S asks to Unpark (a parked one) or Relaunch it and send, its queue and the box's answer its first prompt; Send all leaves its queue. Alt+S sends just the answer in the box at once, leaving the queue and the mode as they are. **Immediate**: Ctrl+Enter (or Alt+S) sends at once. Ctrl+T switches the session's mode; Ctrl+R takes a queued answer back to edit.
+**Queued** (the default): Ctrl+Enter holds each answer until Ctrl+S (or Send) sends the session's queue as one message, so related answers arrive together; ✉ counts what's queued. A session not running: Ctrl+S or Alt+S asks to Unpark (a parked one) or Relaunch it and send, its queue and the box's answer its first prompt; Send all leaves its queue. Ctrl+S with text in the box first asks "Did you mean Ctrl+Enter?": a second Ctrl+S within a few seconds, the text unchanged, sends the queue. Alt+S sends just the answer in the box at once, leaving the queue and the mode as they are. **Immediate**: Ctrl+Enter (or Alt+S) sends at once. Ctrl+T switches the session's mode; Ctrl+R takes a queued answer back to edit.
 
 ### Dialogs
 
@@ -352,6 +354,7 @@ The app's command line args (make args). Give them to make run in ARGS, for exam
 - Right-click a session in the session list for a menu of its buttons, acting on that session.
 - Alt+S sends the answer in the box at once, even in Queued mode; the rest of the queue waits.
 - Ctrl+S or Alt+S on a session that isn't running asks to Unpark (a parked one) or Relaunch it and send: it wakes with your message and its queue as its first prompt.
+- Ctrl+S with text in the box asks whether you meant Ctrl+Enter; a second Ctrl+S sends the queue.
 - A PR in the PRs pane has Open, Merge and Request review buttons, and a right-click on its row gives them as a menu: Merge asks first and says what stood in its way, and Request review asks the session that made the PR to post the request on Slack.
 - Ctrl+Z in the inbox undoes the last delete, pin or reopen, an open question coming back open; Delete on an open question asks first.
 - Detail, showing a PR, has its Open, Merge, Request review and Close buttons, and its failing checks, description, history and comments.
@@ -383,3 +386,4 @@ The app's command line args (make args). Give them to make run in ARGS, for exam
 - A dead session (not parked) keeps its red dot, and its rows dim everywhere: its session list row, its inbox items and conversation, its PRs (their lights kept bright) and the decisions only it looks at.
 - Shell (Alt+H, from anywhere) opens a quick shell in a new terminal tab, in the directory the session in context works in now, or home. Handing a session run in the wheelhouse to a Claude Code tab is now Handover to Claude Code in a shell, in its right-click menu.
 - A session can suggest a shell command for you to run: a C item with a Run button that opens it in an editable box and runs it in a new terminal tab, sending the output back if you tick it.
+- The Decisions pane follows the selected session, as the PRs pane does: its repo's decisions alone, or a line saying it has none; with no session selected, every repo's.

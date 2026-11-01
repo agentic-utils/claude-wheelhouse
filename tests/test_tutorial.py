@@ -971,13 +971,13 @@ async def test_only_the_persons_own_selection_opens_a_question(store, sid, tut):
         items = app.query_one("#items", DataTable)
         items.move_cursor(row=items.get_row_index(f"{tut}|T1"))
         await pilot.pause()
-        dwell(app)
+        await dwell(app)
         await pilot.pause()
         assert shown(app)[0] == "inbox", "a task isn't a question"
         items.move_cursor(row=items.get_row_index(f"{tut}|{q1}"))
         await pilot.pause()
         assert shown(app)[0] == "inbox", "passing over a question doesn't count"
-        dwell(app)
+        await dwell(app)
         app.refresh_data()
         await pilot.pause()
         assert shown(app)[0] == "answer", "highlighting a question, and resting there, does"
@@ -999,7 +999,7 @@ async def test_closing_the_decision_moves_the_tour_on(store, sid, tut):
         app.answer_permission(tut, "P1", "allow")   # the person allows it: it goes at once
         app.refresh_data()
         await pilot.pause()
-        dwell(app)
+        await dwell(app)
         await pilot.pause()
         assert app.selected == (tut, "D1") and store.item(tut, "D1")["status"] == "seen", \
             "P1 went, so D1 under the cursor was selected automatically, and seen once rested on"

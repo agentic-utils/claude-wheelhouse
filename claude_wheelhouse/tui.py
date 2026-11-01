@@ -7,6 +7,7 @@ import collections
 import dataclasses
 import difflib
 import functools
+import itertools
 import gc
 import json
 import math
@@ -36,7 +37,9 @@ from textual.containers import Grid, Horizontal, Vertical, VerticalScroll
 from textual.coordinate import Coordinate
 from textual.errors import NoWidget
 from textual.content import Content
-from textual.geometry import Offset
+from textual._context import visible_screen_stack
+from textual.geometry import Offset, Region
+from textual.renderables.background_screen import BackgroundScreen
 from textual.screen import ModalScreen, Screen
 from textual.scrollbar import ScrollBar
 from textual.selection import SELECT_ALL, Selection
@@ -624,10 +627,22 @@ def render(blocks: list[tuple[str, str]]) -> Blocks:
     return Blocks(blocks)
 
 
+def row_values(row) -> tuple:
+    """A row's values as they are now, to compare with a later read: a row from the store or a
+    daemon's dict alike, and one changed in place counts as changed."""
+    return tuple(row.values()) if isinstance(row, dict) else tuple(row)
+
+
+def same_rows(rows, kept: list[tuple] | None) -> bool:
+    """Whether rows hold the values kept (row_values), compared one by one: nothing is kept
+    for a read that matches, so a quiet second leaves no garbage behind it."""
+    return kept is not None and len(rows) == len(kept) and all(row_values(r) == k for r, k in zip(rows, kept))
+
+
 def same(a, b) -> bool:
     """Whether a cell is unchanged. Rich's Text equality ignores the base style, so a cell
     that only changed colour (a context bar crossing a grade, a row marked) counts too."""
-    return a == b and getattr(a, "style", None) == getattr(b, "style", None)
+    return a is b or a == b and getattr(a, "style", None) == getattr(b, "style", None)
 
 
 def cell_width(cell) -> int:
@@ -2443,6 +2458,10 @@ def carried(old: str, new: str, line: int, added: int | None = -1) -> int | None
 
 
 SAVING_NEXT = "Saving comes next: the edits stay in the editor until it closes."
+# Ctrl+S with text in the focused box, likely a Ctrl+Enter missed (Doug, #271): the first press says so
+# and sends nothing; a second within CTRL_S_AGAIN seconds (the toast's life), the text unchanged, sends
+CTRL_S_HINT = "Did you mean Ctrl+Enter? Hit Ctrl+S again if you meant to send the queue"
+CTRL_S_AGAIN = 5.0
 
 
 class DocEditor(TextArea):
@@ -2872,6 +2891,8 @@ class Dialog(ModalScreen):
     RESPONSE = True
     GRACE = 0.4   # seconds
     now = staticmethod(time.monotonic)
+    shaded: dict[tuple, Strip] = {}   # each line beneath as tinted (shade), shared by every dialog
+    beneath: dict[int, Strip] | None = None   # the rows beneath being drawn (render_lines)
     opened = 0.0
     # priority: tried before the focus's own Enter, which check_action lets through
     BINDINGS = [Binding("escape", "cancel", show=False), Binding("enter", "enter", show=False, priority=True)]
@@ -2896,6 +2917,64 @@ class Dialog(ModalScreen):
 
     def on_mount(self) -> None:
         self.opened = self.now()
+
+    def render_lines(self, crop: Region) -> list[Strip]:
+        """The screen beneath, shaded, as Textual shades it (BackgroundScreen), but only the
+        lines a change beneath touched drawn again, and each line's tint made once for what it
+        shows (shade) (#268). Textual's drew and tinted the whole screen beneath again for any
+        change there, each frame of the animation: ~100 ms with a big inbox."""
+        cache = self._styles_cache   # the lines it draws again: those marked dirty, or not kept
+        fresh = cache._width != self.size.width
+        self.beneath = self.lines_beneath([y for y in crop.line_range
+                                           if fresh or y in cache._dirty_lines or y not in cache._cache])
+        if self.beneath is not None:
+            self._dirty_regions.clear()   # Widget.render_line's whole render, never used while this draws
+        try:
+            return super().render_lines(crop)
+        finally:
+            self.beneath = None
+
+    def lines_beneath(self, rows: list[int]) -> dict[int, Strip] | None:
+        """The rows of the screen just beneath this one, by y, as its compositor draws them,
+        each run of neighbouring rows in one pass; None when nothing shows through (an opaque
+        dialog, or none beneath). The screens visible (visible_screen_stack, bottom first) may
+        hold this one, when it is drawn as the shade of a dialog over it: the one beneath is
+        below it there, and is drawn with only those below it visible, as Textual's own shade
+        (Screen.render) pops them one by one."""
+        stack = list(visible_screen_stack.get(None) or ())
+        if self in stack:
+            stack = stack[:stack.index(self)]
+        if not stack or self.styles.background.a >= 1:
+            return None
+        compositor, width, out = stack[-1]._compositor, self.size.width, {}
+        below = visible_screen_stack.set(stack[:-1])
+        try:
+            for _, run in itertools.groupby(enumerate(sorted(rows)), lambda pair: pair[1] - pair[0]):
+                ys = [y for _, y in run]
+                chops = compositor._render_chops(Region(0, ys[0], width, len(ys)), lambda y: ys[0] <= y <= ys[-1])
+                out |= {y: Strip.join([c for c in chops[y].values() if c is not None]) for y in ys if y < len(chops)}
+        finally:
+            visible_screen_stack.reset(below)
+        return out
+
+    def render_line(self, y: int) -> Strip:
+        beneath = self.beneath if self.beneath is not None else self.lines_beneath([y])
+        if beneath is None:
+            return super().render_line(y)
+        return self.shade(beneath.get(y) or Strip.blank(self.size.width), self.styles.background,
+                          self.visual_style.rich_style)
+
+    @staticmethod
+    def shade(line: Strip, colour, under: Style) -> Strip:
+        """A line beneath, tinted as BackgroundScreen tints it, on the dialog's own style as
+        Textual draws it (Visual.to_strips), kept for what it shows."""
+        key = (tuple(line), colour, under)
+        if (got := Dialog.shaded.get(key)) is None:
+            if len(Dialog.shaded) > 4096:   # lines no longer shown
+                Dialog.shaded.clear()
+            tinted = Strip(list(BackgroundScreen.process_segments(line, colour)), line.cell_length)
+            got = Dialog.shaded[key] = tinted.apply_style(under)
+        return got
 
     def on_click(self, event: events.Click) -> None:
         if event.widget is self:   # the shade around the box, not the box
@@ -4113,7 +4192,8 @@ DESCRIBE = {
     "app.submit": "Submit what's typed: queued, or sent at once, by the session's mode",
     "submit(True)": ("Send what's typed at once, whatever the mode, leaving the mode and the rest of the queue as they "
                      "are (one not running: Unpark or Relaunch it and send it with the queue, asked first)"),
-    "send_session": "Send the current session's queue (one not running: Unpark or Relaunch it and send, asked first)",
+    "send_session": ("Send the current session's queue (one not running: Unpark or Relaunch it and send, asked first); "
+                     "with text in the box, the first press asks whether you meant Ctrl+Enter, and a second sends"),
     "toggle_mode": "Switch the session between Queued and Immediate",
     "recall": ("Take this item's latest queued answer back into the box; with none queued, in the item list, "
                "reopen the highlighted finished item (or every marked one)"),
@@ -4277,6 +4357,8 @@ SEND_RULES = (
     "session's queue as one message, so related answers arrive together; ✉ counts what's queued. "
     "A session not running: Ctrl+S or Alt+S asks to Unpark (a parked one) or Relaunch it and send, its queue "
     "and the box's answer its first prompt; Send all leaves its queue. "
+    "Ctrl+S with text in the box first asks \"Did you mean Ctrl+Enter?\": a second Ctrl+S within a few "
+    "seconds, the text unchanged, sends the queue. "
     "Alt+S sends just the answer in the box at once, leaving the queue and the mode as they are. "
     "**Immediate**: Ctrl+Enter (or Alt+S) sends at once. Ctrl+T switches the session's mode; Ctrl+R takes a "
     "queued answer back to edit.")
@@ -4640,6 +4722,11 @@ class WheelhouseApp(App):
         self.behind: list[Callable[[], None]] = []   # what waits, in the order asked
         self.undo: tuple[str, list] | None = None   # what Ctrl+Z undoes, said, and the rows as they stood (undoable)
         self.ranks: dict[str, tuple] = {}   # each item's rank as last shown
+        self.sort_keys: dict[tuple, tuple] = {}   # each item's sort key as it stands (sort_key)
+        self.compacting_drawn: bool | None = None   # whether Detail is drawn dimmed (paint_compacting)
+        self.detail_parts_found: list = []   # detail_boxes, once found
+        self.cells_kept: dict[tuple, tuple] = {}   # each inbox row's cells as last made (item_cells)
+        self.items_painted: tuple | None = None   # what the last paint_items read and left (items_state), its rows' values
         self.show_finished = False   # finished items (store.standing), after the rest
         # minutes a completed (settled) item stays in sight before it's hidden as the finished are
         # (completed_hidden, #235), read once: the setting comes from the flag or a .env
@@ -5256,7 +5343,10 @@ class WheelhouseApp(App):
         self.last_input = at
         if self.input_kept is None or (at - self.input_kept).total_seconds() >= INPUT_KEPT:
             self.input_kept = at
-            self.client.note_input(away.stamp(at))
+            if self.client.remote:   # a request the person never waits on, off the UI thread (#268)
+                self.spawn(functools.partial(self.client.note_input, away.stamp(at)), "input")
+            else:
+                self.client.note_input(away.stamp(at))
 
     @property
     def main_screen(self) -> Screen:
@@ -5418,12 +5508,25 @@ class WheelhouseApp(App):
             return
         if self.selected == self.picked:
             self.saw(sid, ref)
-        if ref and self.client.mark_seen(sid, ref):   # a no-op unless it's an unseen decision
-            self.paint_sessions()   # its D count
-            self.paint_items()   # it keeps its place while selected (ranked), and sinks once left
-            self.paint_detail()
-            if isinstance(screen, (ThreadView, DocView)) and screen.is_mounted:
-                screen.paint()
+        if ref and self.client.remote:   # sent, and what it changed fetched, off the UI thread (#268)
+            self.spawn(lambda: self.client.mark_seen(sid, ref) and self.post(lambda: self.seen_landed(gen)), "seen")
+        elif ref and self.client.mark_seen(sid, ref):   # a no-op unless it's an unseen decision
+            self.seen_shown()
+
+    def seen_landed(self, gen: int) -> None:
+        """A seen mark sent through the daemon, and what it changed fetched: shown now, unless
+        the selection moved on meanwhile (dwell_gen), when the next refresh shows it instead."""
+        if gen != self.dwell_gen or not self.is_running or not self.screen_stack:
+            return
+        self.client.land()
+        self.seen_shown()
+
+    def seen_shown(self) -> None:
+        self.paint_sessions()   # its D count
+        self.paint_items()   # it keeps its place while selected (ranked), and sinks once left
+        self.paint_detail()
+        if isinstance(self.screen, (ThreadView, DocView)) and self.screen.is_mounted:
+            self.screen.paint()
 
     @property
     def viewing(self) -> str | None:
@@ -5631,8 +5734,17 @@ class WheelhouseApp(App):
             at, held = datetime.now(timezone.utc), under_way_parents(found, busy)
             found = [it for it in found if item_key(it) in held or not self.completed_hidden(it, busy, at)]
         compacting, dead = self.compacting(), self.lifeless_sids()
-        keyed = self.ranked_keyed(found, processing, busy, names)
         cuts = self.cutoffs()
+        every = self.client.all_items() if self.item_sort == ordering.ITEMS_DEFAULT else None
+        # all it reads (#268): the same as at the last paint, and nothing moving, shows the same
+        read = (every is None, frozenset(processing), frozenset(queued), frozenset(awaiting), frozenset(compacting),
+                frozenset(dead), tuple(sorted(cuts.items())), tuple(names.items()), tuple(self.conversation_sids()))
+        if self.items_painted is not None and (read, self.items_state()) == self.items_painted[0] \
+                and same_rows(found, self.items_painted[1]) and (every is None or same_rows(every, self.items_painted[2])) \
+                and not self.repin and self.item_sink.move is None:
+            self.paint_detail()
+            return
+        keyed = self.ranked_keyed(found, processing, busy, names, every)
         table.locked = {key for key, it in keyed if self.locks(it, cuts)}
         key_of = {id(it): key for key, it in keyed}   # each item's row key, made once
         active, settled, finished = bands = ([], [], [])   # by their ranks as shown: a selected item's held
@@ -5664,39 +5776,12 @@ class WheelhouseApp(App):
         if self.filter_sid:
             rows_out += conversations
         for it, nested, _ in rows:
-            # an unfinished item of any kind with an answer waiting to be sent shows as queued, and one
-            # whose answer went with no reply since as processing (D28); neither is stored
-            key = (it["session_id"], it["ref"])
-            where = standing(it, busy)
-            status = it["status"] if where != "active" else "queued" if key in queued \
-                else "processing" if key in processing else it["status"]
-            style = "dim" if where != "active" else "bold #05d9e8" if status == "queued" \
-                else "bold #ffd300" if status == "open" and it["kind"] != "pr" else DECISION if status in UNREAD \
-                else "bold #ff2a6d" if status in ("blocked", "waiting") else MATRIX
-            name = names.get(it["session_id"], "")[:14]
-            if status == "processing" or key in awaiting and status != "queued":
-                # the person spoke last: the ball is in the session's court until it replies. A
-                # finished item keeps its status, with the hourglass
-                shown = Text(status if status == "processing" else f"⏳ {status}", style="dim")
-                title = titled(it, "dim")
-            else:
-                shown, title = Text(status, style=style), titled(it, "dim" if where != "active" else "")
-            if (fresh := ordering.field(it, "new_replies")) and status not in ("queued", "processing") \
-                    and key not in awaiting:   # a doc's replies the person hasn't seen (store._said)
-                shown = Text(f"{fresh} new", style=DECISION)
-            pin = Text(PIN) if pinned(it) else Text(UNPINNED, style="dim")
-            if nested is None:
-                cells = (pin, name, ref_text(it, dim=where != "active"), shown, title)
-            elif nested == CHILD:   # under its parent, as a subagent is under its session's name
-                cells = (pin, "", ref_text(it, child=True), shown, titled(it, "dim"))
-            else:   # a subagent, tucked under its session's name
-                cells = (pin, name if nested == 0 else "", ref_text(it, child=True), shown, titled(it, "dim"))
-            # dimmed, clicks and keys ignored, until it's compacted (#150); or dimmed alone, its
-            # session dead and not parked (#252)
-            if key_of[id(it)] in table.locked or it["session_id"] in dead:
-                cells = faded(cells)
-            rows_out.append((key_of[id(it)], cells))
-            tips[key_of[id(it)]] = item_tip(it)
+            row = key_of[id(it)]
+            rows_out.append((row, self.item_cells(it, nested, names, queued, processing, awaiting, busy,
+                                                  row in table.locked, it["session_id"] in dead)))
+            tips[row] = item_tip(it)
+        if len(self.cells_kept) > 2 * len(rows) + 100:   # the rows gone, kept no longer
+            self.cells_kept = {k: v for k, v in self.cells_kept.items() if f"{k[0]}|{k[1]}" in tips}
         if not self.filter_sid:   # under the inbox's own order, at the top (#236); else between the active and settled
             at = 0 if self.item_sort == ordering.ITEMS_DEFAULT else \
                 next((i for i, (_, _, band) in enumerate(rows) if band), len(rows))
@@ -5735,7 +5820,63 @@ class WheelhouseApp(App):
             self.selected = None
         if self.selected is None and self.box_target is not None:   # nor the box aimed at what went
             self.retarget(move_list=False)
+        self.items_painted = ((read, self.items_state()), [row_values(r) for r in found],
+                              None if every is None else [row_values(r) for r in every])
         self.paint_detail()
+
+    def item_cells(self, it, nested, names, queued, processing, awaiting, busy, locked: bool, dead: bool) -> tuple:
+        """An inbox row's cells (paint_items), made again only when something they show from
+        changes: the item, its place, its session's name, whether it is queued, processing or
+        awaiting a reply, locked, or its session dead (#268). Kept as the table holds them
+        (plain), so fill finds an unchanged row's cells the very ones it shows."""
+        key = (it["session_id"], it["ref"])
+        on = (row_values(it), nested, names.get(key[0], ""), key in queued, key in processing, key in awaiting,
+              locked, dead)
+        if (kept := self.cells_kept.get(key)) is not None and kept[0] == on:
+            return kept[1]
+        # an unfinished item of any kind with an answer waiting to be sent shows as queued, and one
+        # whose answer went with no reply since as processing (D28); neither is stored
+        where = standing(it, busy)
+        status = it["status"] if where != "active" else "queued" if key in queued \
+            else "processing" if key in processing else it["status"]
+        style = "dim" if where != "active" else "bold #05d9e8" if status == "queued" \
+            else "bold #ffd300" if status == "open" and it["kind"] != "pr" else DECISION if status in UNREAD \
+            else "bold #ff2a6d" if status in ("blocked", "waiting") else MATRIX
+        name = names.get(it["session_id"], "")[:14]
+        if status == "processing" or key in awaiting and status != "queued":
+            # the person spoke last: the ball is in the session's court until it replies. A
+            # finished item keeps its status, with the hourglass
+            shown = Text(status if status == "processing" else f"⏳ {status}", style="dim")
+            title = titled(it, "dim")
+        else:
+            shown, title = Text(status, style=style), titled(it, "dim" if where != "active" else "")
+        if (fresh := ordering.field(it, "new_replies")) and status not in ("queued", "processing") \
+                and key not in awaiting:   # a doc's replies the person hasn't seen (store._said)
+            shown = Text(f"{fresh} new", style=DECISION)
+        pin = Text(PIN) if pinned(it) else Text(UNPINNED, style="dim")
+        if nested is None:
+            cells = (pin, name, ref_text(it, dim=where != "active"), shown, title)
+        elif nested == CHILD:   # under its parent, as a subagent is under its session's name
+            cells = (pin, "", ref_text(it, child=True), shown, titled(it, "dim"))
+        else:   # a subagent, tucked under its session's name
+            cells = (pin, name if nested == 0 else "", ref_text(it, child=True), shown, titled(it, "dim"))
+        # dimmed, clicks and keys ignored, until it's compacted (#150); or dimmed alone, its
+        # session dead and not parked (#252)
+        if locked or dead:
+            cells = faded(cells)
+        cells = tuple(plain(c) for c in cells)
+        self.cells_kept[key] = (on, cells)
+        return cells
+
+    def items_state(self) -> tuple:
+        """The app's own state paint_items reads, or leaves behind it (the rows, the cursor):
+        with what it read from the hub, what tells a paint that would change nothing (#268)."""
+        table = self.items_table
+        return (self.filter_sid, self.item_sort, self.show_finished, self.autocleanse, self.selected, self.pin,
+                frozenset(self.collapsed), frozenset(self.going), frozenset(table.marked), frozenset(self.deleted),
+                tuple(self.brought_back.items()), self.item_sink.sunk is None,
+                tuple(str(c.label) for c in table.ordered_columns), tuple(table.keys()), table.cursor_key(),
+                self.items_cursor)
 
     def above_deleted(self, before: list[str]) -> int | None:
         """Delete took the highlighted row: the row the highlight goes to, the one immediately
@@ -5764,7 +5905,7 @@ class WheelhouseApp(App):
         """Items in inbox order (ranked_keyed)."""
         return [it for _, it in self.ranked_keyed(items, processing, busy)]
 
-    def ranked_keyed(self, items, processing, busy=frozenset(), names=None) -> list[tuple[str, dict]]:
+    def ranked_keyed(self, items, processing, busy=frozenset(), names=None, every=None) -> list[tuple[str, dict]]:
         """Items in the inbox's order (ordering.item_key: the sort in force, inbox_rank by
         default, the person's order inside it), but for the selected item, pinned: it keeps the
         rank it was shown with when it was selected, so its own change (a decision seen, a
@@ -5773,16 +5914,18 @@ class WheelhouseApp(App):
         own explicit acts, Delete closing or Ctrl+R reopening (close) and a permission answered
         (answer_permission): it goes at once (D33), and is pinned where it went. self.ranks keeps each item's rank as shown: the next pin's, and what has
         somewhere to go (paint_items). No two items share a rank (store.inbox_rank, ties by id), so
-        the order needs no tie-break of its own (#70)."""
+        the order needs no tie-break of its own (#70). every: client.all_items(), if read already."""
         key = self.selected and self.selected[1] and f"{self.selected[0]}|{self.selected[1]}"
         if self.pin is None or self.pin[0] != key:
             self.pin = (key, self.ranks[key], self.rank_tokens[key]) if key in self.ranks else None
         keyed = [(item_key(it), it) for it in items]   # (row key, item): each key made once
-        found = {key: ordering.item_key(self.item_sort, it, processing, busy, names) for key, it in keyed}
+        found = {key: self.sort_key(it, processing, busy, names) for key, it in keyed}
         everything = found
         if self.item_sort == ordering.ITEMS_DEFAULT:   # ranks from the whole list's placed rows (arrange)
-            everything = {item_key(it): ordering.item_key(self.item_sort, it, processing, busy, names)
-                          for it in self.client.all_items()} | found
+            everything = {item_key(it): self.sort_key(it, processing, busy, names)
+                          for it in (self.client.all_items() if every is None else every)} | found
+        if len(self.sort_keys) > 2 * len(everything) + 100:   # the items gone, or their old states
+            self.sort_keys = {}
         arranged = ordering.arrange(self.item_sort, everything)
         ranks = {key: arranged[key] for key in found}
         tokens = {key: token for key, (_, token) in found.items()}
@@ -5795,6 +5938,18 @@ class WheelhouseApp(App):
         self.repin = set()
         self.ranks, self.rank_tokens = ranks, tokens
         return sorted(keyed, key=lambda pair: ranks[pair[0]])
+
+    def sort_key(self, it, processing, busy, names) -> tuple[tuple, str]:
+        """ordering.item_key under the sort in force, made once for an item as it stands: kept
+        on all it reads (store.inbox_rank's and ordering.keyed's fields, whether the item is
+        processing or busy, its session's name), not made again for each item each second (#268)."""
+        at = (it["session_id"], it["ref"])
+        on = (self.item_sort, *at, it["id"], it["kind"], it["status"], it["dismissed"], it["updated_at"],
+              it["title"], ordering.field(it, "pos_group"), ordering.field(it, "pos"), at in processing,
+              at in busy, (names or {}).get(at[0]))
+        if (got := self.sort_keys.get(on)) is None:
+            got = self.sort_keys[on] = ordering.item_key(self.item_sort, it, processing, busy, names)
+        return got
 
     def conversation_sids(self) -> list[str]:
         """The sessions whose conversation rows the unfiltered inbox shows: the unparked, whose
@@ -6120,10 +6275,21 @@ class WheelhouseApp(App):
         key = f"{self.viewing}|" if self.viewing else "|".join((self.selected[0], self.selected[1] or "")) \
             if self.selected else None
         locked = not self.shown_doc and key in self.items_table.locked
+        if locked == self.compacting_drawn:   # each paint_detail and tick: drawn only when it changes (#268)
+            return
+        self.compacting_drawn = locked
         self.detail.set_class(locked, "compacting")
-        for part in self.query("#detail-more, #detail-bar"):
+        for part in self.detail_boxes():
             part.set_class(locked, "compacting")
             part.disabled = locked
+
+    def detail_boxes(self) -> list[Widget]:
+        """#detail-more and #detail-bar, where the modules' parts of Detail go: composed once
+        with the main screen, so found there once, not by a query of every widget at each
+        paint (#268)."""
+        if not self.detail_parts_found:
+            self.detail_parts_found = list(self.main_screen.query("#detail-more, #detail-bar"))
+        return self.detail_parts_found
 
     def paint_detail(self) -> None:
         self.paint_compacting()
@@ -6148,7 +6314,7 @@ class WheelhouseApp(App):
             blocks = [("note", self.detail_note or NOTHING_SELECTED)]
         if editor is not None:
             blocks = editor.shown_in(blocks, self.detail.doc_path, gone)
-        for part in self.query("#detail-more, #detail-bar"):   # a pane's parts go with an item, or a note: not a doc's
+        for part in self.detail_boxes():   # a pane's parts go with an item, or a note: not a doc's
             part.display = not (shown or self.viewing or doc)
         if not agent and not isinstance(self.screen, ThreadView):   # which may follow one itself
             self.client.unfollow_agent()
@@ -6758,13 +6924,14 @@ class WheelhouseApp(App):
         bar, hints, permission_rows, compact_rows, boxes, reasons, run_rows = self.bar_widgets(self.screen)
         if bar is None:
             return
-        asking = self.asking(self.bar_item(self.screen)) is not None   # first: it settles
+        item = self.bar_item(self.screen)   # first: it settles. Asked once, not at each use (#268)
+        asking = self.asking(item) is not None
         for r in reasons:   # Deny's reason, for the item in context while it still asks
-            if r.target is not None and not (asking and r.target == self.bar_item(self.screen)):
+            if r.target is not None and not (asking and r.target == item):
                 r.target = None
         denying = any(r.target for r in reasons)
-        waiting = self.notes_waiting(self.bar_item(self.screen))
-        nudged = waiting or self.nudged(self.bar_item(self.screen))
+        waiting = self.notes_waiting(item)
+        nudged = waiting or self.nudged(item)
         for row in compact_rows:
             row.waiting(waiting)
         sessions = {s["id"]: s for s in self.sessions}
@@ -6801,7 +6968,7 @@ class WheelhouseApp(App):
                     self.refit()   # a row more or less over the answer box
         if doc_gone and not self.focus_answer():
             self.screen.set_focus(self.items_table)
-        command = self.command_item(self.bar_item(self.screen))
+        command = self.command_item(item)
         for row in run_rows:
             if row.display != (command is not None):
                 row.display = command is not None
@@ -7038,8 +7205,8 @@ class WheelhouseApp(App):
             if not self.answer.text.strip():
                 self.answer.text = tutorial.ANSWER if stop.id == "answer" else tutorial.ASK
             self.action_submit(stop.id == "ask")
-        elif stop.id == "send":   # Ctrl+S's own path
-            self.action_send_session()
+        elif stop.id == "send":   # Ctrl+S's own path, less its Ctrl+Enter hint: this is the Send button's
+            self.action_send_session(hint=False)
         elif stop.id == "close":   # Delete in the inbox
             self.items_table.focus()
             self.action_close_question()
@@ -8133,17 +8300,35 @@ class WheelhouseApp(App):
             self.notify("select a session first", severity="warning")
         return sid
 
-    def action_send_session(self) -> None:
+    ctrl_s_hinted = None   # (box, text) the last CTRL_S_HINT was shown for, until CTRL_S_AGAIN has passed
+
+    def action_send_session(self, hint: bool = True) -> None:
         """Ctrl+S: the session's queue sent; one that isn't running is offered Unpark or
-        Relaunch first, the queue its first prompt on waking (#221)."""
+        Relaunch first, the queue its first prompt on waking (#221). With text in the focused
+        box, first asks whether Ctrl+Enter was meant (#271); hint False, the tour's Send, doesn't."""
         self.settle()
         if sid := self.context_session():
+            if hint and self.ctrl_s_meant_enter():
+                return
             focused = self.focused
             if self.dead(sid) and self.client.drafts(sid):
                 self.offer_wake(sid, lambda: (self.wake(sid), self.after_send(focused)))
                 return
             self.send_session(sid)
             self.after_send(focused)
+
+    def ctrl_s_meant_enter(self) -> bool:
+        """True, with CTRL_S_HINT shown, when the focused text box holds text and no hint for that
+        same box and text is still showing (#271): the next Ctrl+S then sends as ever."""
+        box = self.focused
+        text = box.text if isinstance(box, TextArea) else box.value if isinstance(box, Input) else ""
+        shown, self.ctrl_s_hinted = self.ctrl_s_hinted, None
+        if not text.strip() or shown == (box, text):
+            return False
+        self.ctrl_s_hinted = hinted = (box, text)
+        self.notify(CTRL_S_HINT, timeout=CTRL_S_AGAIN)
+        self.after(CTRL_S_AGAIN, lambda: self.ctrl_s_hinted is hinted and setattr(self, "ctrl_s_hinted", None))
+        return True
 
     @session_action
     def offer_wake(self, sid: str, then) -> None:

@@ -7,6 +7,7 @@ import json
 import re
 import time
 import random
+import threading
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest import mock
@@ -97,6 +98,44 @@ async def test_alt_s_sends_one_answer_now(store, sid, live, clock, send_mode, ke
     assert [m["body"] for m in store.drafts(sid)] == drafts, desc
     assert [m["body"] for m in store.pending(sid)] == sent, desc
     assert mode(store.session(sid)) == send_mode, f"{desc}: the session's mode left as it was"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("text, focus_box, steps, hints, sent, desc", [
+    ("", True, ["s"], 0, ["queued"], "an empty box: Ctrl+S sends at once, as ever"),
+    ("ship it", True, ["s"], 1, [], "text in the box: the first Ctrl+S asks, and sends nothing"),
+    ("ship it", True, ["s", "s"], 1, ["queued"], "a second Ctrl+S while the toast shows sends"),
+    ("ship it", True, ["s", "edit", "s"], 2, [], "an edit between the presses: the second asks again"),
+    ("ship it", False, ["s"], 0, ["queued"], "focus off the box: Ctrl+S sends at once, as ever"),
+    ("ship it", True, ["s", "wait", "s"], 2, [], "the toast timed out: the second asks again"),
+])
+async def test_ctrl_s_with_text_in_the_box_asks_first(store, sid, live, clock, monkeypatch, text, focus_box, steps,
+                                                       hints, sent, desc):
+    """#271 (Doug): "when wheelhouse receives Ctrl+S, check whether focus is on a non-empty text
+    input; if so, pop up a toast saying "Did you mean Ctrl+Enter? Hit Ctrl+S again if you meant
+    to send the queue""."""
+    store.db.execute("UPDATE sessions SET code_version = ?", (PROTOCOL_VERSION,))   # live, on code that queues
+    store.queue(sid, "queued")
+    store.post_item(sid, "question", "which db?")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.move_cursor(row=0)
+        await pilot.pause()
+        app.answer.text = text
+        (app.answer if focus_box else app.items_table).focus()
+        notes = []
+        monkeypatch.setattr(app, "notify", lambda note, **kw: notes.append(note))
+        for step in steps:
+            if step == "s":
+                await pilot.press("ctrl+s")
+            elif step == "edit":
+                app.answer.text += "!"
+            else:
+                clock.advance(tui.CTRL_S_AGAIN)
+            await pilot.pause()
+    assert notes.count(tui.CTRL_S_HINT) == hints, f"{desc}: the toast"
+    assert [m["body"] for m in store.pending(sid)] == sent, f"{desc}: the queue"
 
 
 @pytest.mark.parametrize("sends, shown, desc", [
@@ -829,8 +868,8 @@ async def test_sending_to_a_session_not_running_offers_to_wake_it(store, sid, mo
         app.answer.text = "ship it"
         if key == "alt+s":   # as a terminal sends it (ESC s)
             app.post_message(events.Key("alt+s", "s"))
-        else:
-            await pilot.press(key)
+        else:   # twice: with text in the box, the first asks whether Ctrl+Enter was meant (#271)
+            await pilot.press(key, key)
         await pilot.pause()
         assert isinstance(app.screen, Confirm) and app.screen.prompt == prompt, f"{desc}: the dialog"
         await pilot.press("alt+y" if yes else "alt+n")
@@ -1321,11 +1360,13 @@ async def test_one_current_session_whatever_happens(store, sid, tmp_path, monkey
                 f"{desc}: {drafts}"
 
 
-def dwell(app) -> None:
+async def dwell(app) -> None:
     """The dwell lapsing (tui.DWELL): the person rested on what they're looking at. Its timer
-    fired at once, rather than waited for."""
+    fired at once, rather than waited for; through a daemon, the seen mark it sends off the UI
+    thread waited for too (#268)."""
     assert app.dwell_timer is not None, "a dwell is running"
     app.dwelt(app.dwell_gen)
+    await app.workers.wait_for_complete([w for w in app.workers if w.group == "seen"])
 
 
 def terminal_character(key: str) -> str | None:
@@ -1520,7 +1561,7 @@ async def test_a_raw_burst_across_both_lists_follows_the_session(store, sid, tmp
             return sorted(f"{names[s]}:{it['title']}" for s in (sid, other) for it in store.items(s)
                           if it["status"] != "unseen")
         assert marked() == [], f"{desc}: passed over, nothing seen yet, got {marked()}"
-        dwell(app)
+        await dwell(app)
         await pilot.pause()
         assert marked() == dwelt, f"{desc}: seen once rested on, got {marked()}"
         assert_one_current(app, desc)
@@ -1602,7 +1643,7 @@ async def two_lists(clock, tmp_path, where, steps, slow, counts=(2, 2), tick=Fal
         for _ in range(4):
             await pilot.pause()
         if app.dwell_timer is not None:   # the same dwell, raw or slow: a rest at the end
-            dwell(app)
+            await dwell(app)
             await pilot.pause()
         names = {a: "A", b: "B"}
         title = {(s, it["ref"]): it["title"] for s in (a, b) for it in store.items(s)}
@@ -3117,7 +3158,7 @@ async def test_the_selected_item_keeps_its_place(store, sid, clock, kind, pick, 
             if age == pick and answer:
                 store.send(sid, "the cache", refs[age])
             elif age == pick:   # a decision seen once rested on
-                dwell(app)
+                await dwell(app)
             app.refresh_data()
             await pilot.pause()
             await clock.finish_moves(pilot, app)   # a settled item sinks to the foot (T71)
@@ -3481,6 +3522,11 @@ async def test_items_that_tie_to_the_second_keep_one_order(store, sid, clock, po
                 elif step == "down+lapse":   # the lapse fires before Down lands, either way
                     raw_keys(app, "down")
                     clock.advance(REST)
+                    # through the daemon its seen mark lands once the selection has moved on: the
+                    # next tick shows it (#268)
+                    await app.workers.wait_for_complete([w for w in app.workers if w.group == "seen"])
+                    await pilot.pause()
+                    app.refresh_data()
                 elif typing == "raw":
                     raw_keys(app, *step.split(" "))
                 else:
@@ -3518,7 +3564,7 @@ async def test_a_decision_is_seen_once_viewed_and_stays_until_closed(store, sid)
         items.move_cursor(row=items.get_row_index(f"{sid}|{d}"))
         await refresh(pilot, sid)
         assert store.item(sid, d)["status"] == "unseen", "not seen until the person has rested on it"
-        dwell(app)
+        await dwell(app)
         await refresh(pilot, sid)
         assert store.item(sid, d)["status"] == "seen", "viewing it for the dwell marks it seen"
         assert str(sessions.get_row_at(0)[4]) == ""
@@ -8003,7 +8049,7 @@ async def test_a_doc_sits_under_its_parent_and_opens_rendered(store, sid, tmp_pa
         assert app.query_one("#answer").display, "the answer box under a doc, for a comment (split)"
         assert str(doc) in app._detail_text and "Build it **well**" in app._detail_text, "its path, then the file"
         assert "Build it well" in "\n".join(app.detail.render_line(y).text for y in range(12)), "rendered"
-        dwell(app)
+        await dwell(app)
         assert store.item(sid, m)["status"] == "read", "in sight for the dwell: read"
         doc.write_text("# The plan\n\nBuild it twice.\n")
         app.refresh_data()
@@ -10114,3 +10160,248 @@ def test_a_command_items_thread_shows_the_command_and_the_run():
     blocks = tui.thread_blocks((item, msgs))
     assert blocks[1] == ("claude", "````bash\nls ```x\n````")
     assert blocks[2] == ("note", "_ran 14:05_")
+
+
+class Later(datetime):
+    """The clock two minutes on, as tui reads it."""
+    @classmethod
+    def now(cls, tz=None):
+        return datetime.now(tz) + timedelta(minutes=2)
+
+
+def inbox_row(app, sid, ref):
+    t = app.items_table
+    key = f"{sid}|{ref}"
+    return t.get_row(key) if key in t.rows else None
+
+
+REPAINTS = {   # what changes, and what the inbox shows once it has (#268)
+    "clock": (lambda app, store, sid, mp, life: mp.setattr(tui, "datetime", Later),
+              lambda app, sid: inbox_row(app, sid, "T1") is None),
+    "dies": (lambda app, store, sid, mp, life: life.update(now="dead"),
+             lambda app, sid: dimmed_cell(inbox_row(app, sid, "Q1")[-1])),
+    "parks": (lambda app, store, sid, mp, life: store.set_parked(sid, True),
+              lambda app, sid: inbox_row(app, sid, "Q1") is None),
+    "seen": (lambda app, store, sid, mp, life: store.mark_seen(sid, "D1"),
+             lambda app, sid: inbox_row(app, sid, "D1")[-2].plain == "seen"),
+    "filter": (lambda app, store, sid, mp, life: app.follow(sid),
+               lambda app, sid: app.items_table.get_row(f"{sid}|")[-1].plain == "Conversation"),
+    "selected": (lambda app, store, sid, mp, life: setattr(app, "_selected", (sid, "Q1")),
+                 lambda app, sid: app.items_table.cursor_key() == f"{sid}|Q1"),
+    "compacting": (lambda app, store, sid, mp, life: mp.setattr(app, "compacting", lambda: {sid}),
+                   lambda app, sid: dimmed_cell(inbox_row(app, sid, "Q1")[-1])
+                   and f"{sid}|Q1" in app.items_table.locked),
+    "queued": (lambda app, store, sid, mp, life: store.queue(sid, "and another thing"),
+               lambda app, sid: str(app.items_table.get_row(f"{sid}|")[-2]) == "queued"),
+    "posted": (lambda app, store, sid, mp, life: store.post_item(sid, "task", "new"),
+               lambda app, sid: inbox_row(app, sid, "T2") is not None),
+}
+
+
+@pytest.mark.anyio
+@pytest.mark.both
+@pytest.mark.parametrize("change, desc", [
+    ("clock", "the autocleanse clock passing an item's time hides it"),
+    ("dies", "a session dying dims its rows"),
+    ("parks", "a session parking takes its rows off"),
+    ("seen", "a decision marked seen elsewhere shows seen"),
+    ("filter", "following a session shows its conversation row"),
+    ("selected", "a selection made without the cursor takes it"),
+    ("compacting", "a compaction starting dims and locks its rows"),
+    ("queued", "a word queued on the conversation shows on its row"),
+    ("posted", "a new item shows"),
+])
+async def test_the_inbox_repaints_what_changed_and_only_then(store, sid, monkeypatch, change, desc):
+    """#268: the inbox isn't painted again at a refresh that would change nothing (it took
+    ~300 ms with 2,000 rows, each second), but anything it reads changing still shows."""
+    from claude_wheelhouse import liveness
+    life = {"now": "live"}
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: life["now"])
+    store.post_item(sid, "question", "which db?")
+    store.post_item(sid, "task", "built", status="done")
+    aged(store, sid, "T1", 4)
+    store.post_item(sid, "decision", "chose", why="local")
+    app = WheelhouseApp(store)
+    app.autocleanse = 5
+    act, shown = REPAINTS[change]
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.refresh_data()
+        await pilot.pause()
+        fills = []
+        real_fill = tui.fill
+        monkeypatch.setattr(tui, "fill", lambda table, rows, rebuild=False: (
+            fills.append(table is app.items_table), real_fill(table, rows, rebuild))[1])
+        app.refresh_data()
+        await pilot.pause()
+        assert not any(fills), f"{desc}: nothing changed, nothing painted"
+        assert not shown(app, sid), f"{desc}: not before"
+        act(app, store, sid, monkeypatch, life)
+        app.refresh_data()
+        await pilot.pause()
+        assert shown(app, sid), desc
+
+
+@pytest.mark.anyio
+@pytest.mark.both
+@pytest.mark.parametrize("moved, shown, desc", [
+    (False, "seen", "rested on: the mark shows as it lands, with no refresh"),
+    (True, "unseen", "moved on before it landed: dropped, the next refresh shows it"),
+])
+async def test_a_seen_mark_through_the_daemon_is_sent_off_the_ui_thread(store, sid, via, clock, moved, shown,
+                                                                       desc):
+    """#268: a decision marked seen by the dwell was sent, and the sessions and inbox fetched
+    again, on the UI thread, 300 ms and more with a big inbox. Now on a worker; what it fetched
+    shows as it lands, unless the selection has moved on, when the next refresh shows it. On
+    the clock: no tick of its own refreshes between."""
+    if via == "local":
+        pytest.skip("in process the mark is the store's own write, made at once")
+    store.post_item(sid, "question", "anchor")
+    store.post_item(sid, "decision", "chose", why="local")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        go, on_ui = threading.Event(), []
+        real = app.client.mark_seen
+        def held(s, r):
+            on_ui.append(threading.current_thread() is threading.main_thread())
+            go.wait(5)
+            return real(s, r)
+        app.client.mark_seen = held
+        assert app.show_item(sid, "D1"), desc
+        await pilot.pause()
+        app.dwelt(app.dwell_gen)
+        await pilot.pause()
+        assert app.selected == (sid, "D1"), f"{desc}: the selection is the person's at once"
+        if moved:
+            assert app.show_item(sid, "Q1"), desc
+            await pilot.pause()
+        go.set()
+        await app.workers.wait_for_complete([w for w in app.workers if w.group == "seen"])
+        await pilot.pause()
+        assert on_ui == [False], f"{desc}: sent off the UI thread"
+        assert store.item(sid, "D1")["status"] == "seen", f"{desc}: sent all the same"
+        assert inbox_row(app, sid, "D1")[-2].plain == shown, desc
+        app.refresh_data()
+        await pilot.pause()
+        assert inbox_row(app, sid, "D1")[-2].plain == "seen", f"{desc}: and the next refresh shows it"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("nested, desc", [
+    (False, "a dialog over the app"),
+    (True, "a dialog over a dialog (New session's directory picker): the app shows under both shades"),
+])
+async def test_a_dialogs_shade_is_textuals_drawn_a_line_at_a_time(store, sid, monkeypatch, clock, nested, desc):
+    """#268: a dialog's shade over the screen beneath is drawn line by line, each line's tint
+    kept, not the whole screen again for any change beneath (~100 ms a frame with a big inbox).
+    It looks exactly as Textual's own (BackgroundScreen) does, and follows a change beneath."""
+    from textual.screen import Screen
+    from textual.widget import Widget
+    from textual._context import visible_screen_stack
+    for i in range(12):
+        store.post_item(sid, "question", f"which db {i}?")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        if nested:
+            app.push_screen(tui.Confirm("Underneath?"))
+            await pilot.pause()
+        dialog = tui.Confirm("Delete it?")
+        app.push_screen(dialog)
+        await pilot.pause()
+        beneath = app.screen_stack[:-1]
+        rows = range(dialog.size.height)
+
+        def textuals() -> list:   # Textual's own shade, all the way down
+            with monkeypatch.context() as m:
+                m.setattr(tui.Dialog, "render_lines", Screen.render_lines)
+                m.setattr(tui.Dialog, "render_line", Screen.render_line)
+                for i, screen in enumerate(beneath[1:], 1):
+                    screen._styles_cache.clear()
+                    visible_screen_stack.set(list(beneath[:i]))
+                    screen._render_content()
+                visible_screen_stack.set(list(beneath))
+                dialog._render_content()
+                drawn = [Widget.render_line(dialog, y) for y in rows]
+            for screen in beneath[1:]:
+                screen._styles_cache.clear()
+            return drawn
+
+        def fresh() -> None:   # the dialogs beneath drawn again: Textual refreshes only the top one
+            for screen in beneath[1:]:   # for a change on the app (the title's animation, say)
+                screen._styles_cache.clear()
+
+        def ours() -> list:   # a frame's crop at once, as render_lines draws it
+            fresh()
+            visible_screen_stack.set(list(beneath))
+            dialog.beneath = dialog.lines_beneath(list(rows))
+            try:
+                return [dialog.render_line(y) for y in rows]
+            finally:
+                dialog.beneath = None
+
+        def by_line() -> list:   # a line asked for alone
+            fresh()
+            return [(visible_screen_stack.set(list(beneath)), dialog.render_line(y))[1] for y in rows]
+
+        def cells(strips) -> list:
+            return [[(seg.text, seg.style) for seg in s.simplify()] for s in strips]
+        assert any("which db" in s.text for s in ours()), f"{desc}: the app shows through"
+        assert cells(ours()) == cells(textuals()) == cells(by_line()), f"{desc}: drawn as Textual draws it"
+        store.post_item(sid, "question", "zebra")
+        app.refresh_data()
+        await pilot.pause()
+        live = app.export_screenshot()   # as drawn after the change: only the lines it touched again
+        assert any("zebra" in s.text for s in textuals()), f"{desc}: the change shows in Textual's"
+        assert any("zebra" in s.text for s in ours()), f"{desc}: a change beneath shows through"
+        assert cells(ours()) == cells(textuals()), f"{desc}: and still as Textual draws it"
+
+        def frame() -> str:   # the whole screen as the app draws it, through Dialog.render_lines
+            for screen in app.screen_stack:
+                screen._styles_cache.clear()
+                screen.refresh()
+            return app.export_screenshot()
+        drawn = frame()
+        with monkeypatch.context() as m:
+            m.setattr(tui.Dialog, "render_lines", Screen.render_lines)
+            m.setattr(tui.Dialog, "render_line", Screen.render_line)
+            theirs = frame()
+        assert "zebra" in drawn and drawn == theirs, f"{desc}: a real frame, as Textual draws it"
+        if not nested:   # nested, Textual's own leaves the middle dialog's shade as it was: so does ours
+            assert live == theirs, f"{desc}: the frame after a change beneath, redrawn where it changed"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("steps, dim, desc", [
+    ([], False, "a session not compacting: Detail as it is"),
+    (["start"], True, "compacting: Detail and the modules' parts dim, their buttons off"),
+    (["start", "end"], False, "compacted: back as they were"),
+    (["start", "end", "start"], True, "compacting again: dimmed again"),
+])
+async def test_detail_dims_with_a_compaction_and_finds_its_parts_once(store, sid, monkeypatch, steps, dim, desc):
+    """#268: paint_compacting ran at every tick and paint_detail, each time querying every
+    widget for Detail's two module boxes (~5 ms with a big inbox). It finds them once, and
+    draws only when the dimming changes."""
+    store.post_item(sid, "question", "which db?")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        assert app.show_item(sid, "Q1"), desc
+        await pilot.pause()
+        queried = []
+        from textual.dom import DOMNode
+        real_query = DOMNode.query
+        monkeypatch.setattr(DOMNode, "query",
+                            lambda self, selector=None: (queried.append(selector), real_query(self, selector))[1])
+        compacting = set()
+        monkeypatch.setattr(app, "compacting", lambda: compacting)
+        for step in steps:
+            compacting.clear() if step == "end" else compacting.add(sid)
+            app.refresh_data()
+            await pilot.pause()
+        parts = app.detail_boxes()
+        assert [p.id for p in parts] == ["detail-more", "detail-bar"], desc
+        assert app.detail.has_class("compacting") == dim, desc
+        assert all(p.has_class("compacting") == dim and p.disabled == dim for p in parts), f"{desc}: the parts"
+        assert "#detail-more, #detail-bar" not in queried, f"{desc}: found once, not at each paint"
