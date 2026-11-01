@@ -10114,3 +10114,83 @@ def test_a_command_items_thread_shows_the_command_and_the_run():
     blocks = tui.thread_blocks((item, msgs))
     assert blocks[1] == ("claude", "````bash\nls ```x\n````")
     assert blocks[2] == ("note", "_ran 14:05_")
+
+
+class Later(datetime):
+    """The clock two minutes on, as tui reads it."""
+    @classmethod
+    def now(cls, tz=None):
+        return datetime.now(tz) + timedelta(minutes=2)
+
+
+def inbox_row(app, sid, ref):
+    t = app.items_table
+    key = f"{sid}|{ref}"
+    return t.get_row(key) if key in t.rows else None
+
+
+REPAINTS = {   # what changes, and what the inbox shows once it has (#268)
+    "clock": (lambda app, store, sid, mp, life: mp.setattr(tui, "datetime", Later),
+              lambda app, sid: inbox_row(app, sid, "T1") is None),
+    "dies": (lambda app, store, sid, mp, life: life.update(now="dead"),
+             lambda app, sid: dimmed_cell(inbox_row(app, sid, "Q1")[-1])),
+    "parks": (lambda app, store, sid, mp, life: store.set_parked(sid, True),
+              lambda app, sid: inbox_row(app, sid, "Q1") is None),
+    "seen": (lambda app, store, sid, mp, life: store.mark_seen(sid, "D1"),
+             lambda app, sid: inbox_row(app, sid, "D1")[-2].plain == "seen"),
+    "filter": (lambda app, store, sid, mp, life: app.follow(sid),
+               lambda app, sid: app.items_table.get_row(f"{sid}|")[-1].plain == "Conversation"),
+    "selected": (lambda app, store, sid, mp, life: setattr(app, "_selected", (sid, "Q1")),
+                 lambda app, sid: app.items_table.cursor_key() == f"{sid}|Q1"),
+    "compacting": (lambda app, store, sid, mp, life: mp.setattr(app, "compacting", lambda: {sid}),
+                   lambda app, sid: dimmed_cell(inbox_row(app, sid, "Q1")[-1])
+                   and f"{sid}|Q1" in app.items_table.locked),
+    "queued": (lambda app, store, sid, mp, life: store.queue(sid, "and another thing"),
+               lambda app, sid: str(app.items_table.get_row(f"{sid}|")[-2]) == "queued"),
+    "posted": (lambda app, store, sid, mp, life: store.post_item(sid, "task", "new"),
+               lambda app, sid: inbox_row(app, sid, "T2") is not None),
+}
+
+
+@pytest.mark.anyio
+@pytest.mark.both
+@pytest.mark.parametrize("change, desc", [
+    ("clock", "the autocleanse clock passing an item's time hides it"),
+    ("dies", "a session dying dims its rows"),
+    ("parks", "a session parking takes its rows off"),
+    ("seen", "a decision marked seen elsewhere shows seen"),
+    ("filter", "following a session shows its conversation row"),
+    ("selected", "a selection made without the cursor takes it"),
+    ("compacting", "a compaction starting dims and locks its rows"),
+    ("queued", "a word queued on the conversation shows on its row"),
+    ("posted", "a new item shows"),
+])
+async def test_the_inbox_repaints_what_changed_and_only_then(store, sid, monkeypatch, change, desc):
+    """#268: the inbox isn't painted again at a refresh that would change nothing (it took
+    ~300 ms with 2,000 rows, each second), but anything it reads changing still shows."""
+    from claude_wheelhouse import liveness
+    life = {"now": "live"}
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: life["now"])
+    store.post_item(sid, "question", "which db?")
+    store.post_item(sid, "task", "built", status="done")
+    aged(store, sid, "T1", 4)
+    store.post_item(sid, "decision", "chose", why="local")
+    app = WheelhouseApp(store)
+    app.autocleanse = 5
+    act, shown = REPAINTS[change]
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.refresh_data()
+        await pilot.pause()
+        fills = []
+        real_fill = tui.fill
+        monkeypatch.setattr(tui, "fill", lambda table, rows, rebuild=False: (
+            fills.append(table is app.items_table), real_fill(table, rows, rebuild))[1])
+        app.refresh_data()
+        await pilot.pause()
+        assert not any(fills), f"{desc}: nothing changed, nothing painted"
+        assert not shown(app, sid), f"{desc}: not before"
+        act(app, store, sid, monkeypatch, life)
+        app.refresh_data()
+        await pilot.pause()
+        assert shown(app, sid), desc
