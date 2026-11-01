@@ -4723,6 +4723,8 @@ class WheelhouseApp(App):
         self.undo: tuple[str, list] | None = None   # what Ctrl+Z undoes, said, and the rows as they stood (undoable)
         self.ranks: dict[str, tuple] = {}   # each item's rank as last shown
         self.sort_keys: dict[tuple, tuple] = {}   # each item's sort key as it stands (sort_key)
+        self.compacting_drawn: bool | None = None   # whether Detail is drawn dimmed (paint_compacting)
+        self.detail_parts_found: list = []   # detail_boxes, once found
         self.cells_kept: dict[tuple, tuple] = {}   # each inbox row's cells as last made (item_cells)
         self.items_painted: tuple | None = None   # what the last paint_items read and left (items_state), its rows' values
         self.show_finished = False   # finished items (store.standing), after the rest
@@ -6273,10 +6275,21 @@ class WheelhouseApp(App):
         key = f"{self.viewing}|" if self.viewing else "|".join((self.selected[0], self.selected[1] or "")) \
             if self.selected else None
         locked = not self.shown_doc and key in self.items_table.locked
+        if locked == self.compacting_drawn:   # each paint_detail and tick: drawn only when it changes (#268)
+            return
+        self.compacting_drawn = locked
         self.detail.set_class(locked, "compacting")
-        for part in self.query("#detail-more, #detail-bar"):
+        for part in self.detail_boxes():
             part.set_class(locked, "compacting")
             part.disabled = locked
+
+    def detail_boxes(self) -> list[Widget]:
+        """#detail-more and #detail-bar, where the modules' parts of Detail go: composed once
+        with the main screen, so found there once, not by a query of every widget at each
+        paint (#268)."""
+        if not self.detail_parts_found:
+            self.detail_parts_found = list(self.main_screen.query("#detail-more, #detail-bar"))
+        return self.detail_parts_found
 
     def paint_detail(self) -> None:
         self.paint_compacting()
@@ -6301,7 +6314,7 @@ class WheelhouseApp(App):
             blocks = [("note", self.detail_note or NOTHING_SELECTED)]
         if editor is not None:
             blocks = editor.shown_in(blocks, self.detail.doc_path, gone)
-        for part in self.query("#detail-more, #detail-bar"):   # a pane's parts go with an item, or a note: not a doc's
+        for part in self.detail_boxes():   # a pane's parts go with an item, or a note: not a doc's
             part.display = not (shown or self.viewing or doc)
         if not agent and not isinstance(self.screen, ThreadView):   # which may follow one itself
             self.client.unfollow_agent()
@@ -6911,13 +6924,14 @@ class WheelhouseApp(App):
         bar, hints, permission_rows, compact_rows, boxes, reasons, run_rows = self.bar_widgets(self.screen)
         if bar is None:
             return
-        asking = self.asking(self.bar_item(self.screen)) is not None   # first: it settles
+        item = self.bar_item(self.screen)   # first: it settles. Asked once, not at each use (#268)
+        asking = self.asking(item) is not None
         for r in reasons:   # Deny's reason, for the item in context while it still asks
-            if r.target is not None and not (asking and r.target == self.bar_item(self.screen)):
+            if r.target is not None and not (asking and r.target == item):
                 r.target = None
         denying = any(r.target for r in reasons)
-        waiting = self.notes_waiting(self.bar_item(self.screen))
-        nudged = waiting or self.nudged(self.bar_item(self.screen))
+        waiting = self.notes_waiting(item)
+        nudged = waiting or self.nudged(item)
         for row in compact_rows:
             row.waiting(waiting)
         sessions = {s["id"]: s for s in self.sessions}
@@ -6954,7 +6968,7 @@ class WheelhouseApp(App):
                     self.refit()   # a row more or less over the answer box
         if doc_gone and not self.focus_answer():
             self.screen.set_focus(self.items_table)
-        command = self.command_item(self.bar_item(self.screen))
+        command = self.command_item(item)
         for row in run_rows:
             if row.display != (command is not None):
                 row.display = command is not None

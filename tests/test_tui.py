@@ -10370,3 +10370,38 @@ async def test_a_dialogs_shade_is_textuals_drawn_a_line_at_a_time(store, sid, mo
         assert "zebra" in drawn and drawn == theirs, f"{desc}: a real frame, as Textual draws it"
         if not nested:   # nested, Textual's own leaves the middle dialog's shade as it was: so does ours
             assert live == theirs, f"{desc}: the frame after a change beneath, redrawn where it changed"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("steps, dim, desc", [
+    ([], False, "a session not compacting: Detail as it is"),
+    (["start"], True, "compacting: Detail and the modules' parts dim, their buttons off"),
+    (["start", "end"], False, "compacted: back as they were"),
+    (["start", "end", "start"], True, "compacting again: dimmed again"),
+])
+async def test_detail_dims_with_a_compaction_and_finds_its_parts_once(store, sid, monkeypatch, steps, dim, desc):
+    """#268: paint_compacting ran at every tick and paint_detail, each time querying every
+    widget for Detail's two module boxes (~5 ms with a big inbox). It finds them once, and
+    draws only when the dimming changes."""
+    store.post_item(sid, "question", "which db?")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        assert app.show_item(sid, "Q1"), desc
+        await pilot.pause()
+        queried = []
+        from textual.dom import DOMNode
+        real_query = DOMNode.query
+        monkeypatch.setattr(DOMNode, "query",
+                            lambda self, selector=None: (queried.append(selector), real_query(self, selector))[1])
+        compacting = set()
+        monkeypatch.setattr(app, "compacting", lambda: compacting)
+        for step in steps:
+            compacting.clear() if step == "end" else compacting.add(sid)
+            app.refresh_data()
+            await pilot.pause()
+        parts = app.detail_boxes()
+        assert [p.id for p in parts] == ["detail-more", "detail-bar"], desc
+        assert app.detail.has_class("compacting") == dim, desc
+        assert all(p.has_class("compacting") == dim and p.disabled == dim for p in parts), f"{desc}: the parts"
+        assert "#detail-more, #detail-bar" not in queried, f"{desc}: found once, not at each paint"
