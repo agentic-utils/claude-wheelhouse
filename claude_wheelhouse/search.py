@@ -1,5 +1,5 @@
-"""Finding an inbox item (#273, the search popover): which items a query matches, best first.
-Never imports Textual.
+"""Finding an inbox item: which items a query matches, best first (#273, the search popover),
+and the ids in a text that name a session's items (#274, linked). Never imports Textual.
 
 A query shaped like a ref (`T3`, `q25`, `PR276`) puts exact ref matches first. Otherwise, and
 after those, a case-insensitive substring match on ref and title, best first: the ref, then
@@ -44,3 +44,52 @@ def find(items, query: str, limit: int = LIMIT) -> tuple[list, int]:
     ranked.sort(key=lambda pair: pair[1]["created_at"], reverse=True)   # stable: newest first in each group
     ranked.sort(key=lambda pair: pair[0])
     return [it for _, it in ranked[:limit]], max(0, len(ranked) - limit)
+
+
+# Clickable ids (#274): an item's id in a doc, a conversation or a thread, linking to that
+# session's item with the ref. A whole word: not after # (a GitHub issue), nor inside a longer
+# word or a path (T2a, T206.md, docs/T3); inline code and fenced code are left alone. The link
+# goes through the markdown as a link to LINK, which the renderer turns into a click (tui).
+LINK = "wheelhouse-item:"
+ITEM_ID = re.compile(r"(?<![\w#/\\.\-])(?:PR|[TQDMAC])\d+(?![\w/\\\-]|\.\w)")
+# what's never linked into, in a line: inline code, a markdown link or image, an autolink
+KEEP = re.compile(r"(`+).*?\1|!?\[[^\]]*\]\([^)]*\)|<[^>\s]+>")
+FENCE = re.compile(r" {0,3}(`{3,}|~{3,})")
+
+
+def linked(md: str, sid: str, refs) -> str:
+    """Markdown with each id the session has (refs) a link to its item, outside code."""
+    if not refs or not ITEM_ID.search(md):
+        return md
+    out, fence = [], None
+    for line in md.split("\n"):
+        opened = FENCE.match(line)
+        if fence is not None:   # inside a fenced block until its closing fence
+            if opened and opened.group(1)[0] == fence[0] and len(opened.group(1)) >= len(fence):
+                fence = None
+            out.append(line)
+            continue
+        if opened:
+            fence = opened.group(1)
+            out.append(line)
+            continue
+        parts, at = [], 0
+        for kept in KEEP.finditer(line):
+            parts.append(link_ids(line[at:kept.start()], sid, refs))
+            parts.append(kept.group(0))
+            at = kept.end()
+        parts.append(link_ids(line[at:], sid, refs))
+        out.append("".join(parts))
+    return "\n".join(out)
+
+
+def link_ids(text: str, sid: str, refs) -> str:
+    return ITEM_ID.sub(lambda m: f"[{m.group(0)}]({LINK}{sid}/{m.group(0)})" if m.group(0) in refs else m.group(0), text)
+
+
+def target(link: str | None) -> tuple[str, str] | None:
+    """The (session, ref) a rendered link goes to, if it's an item's (linked); else None."""
+    if not link or not link.startswith(LINK):
+        return None
+    sid, _, ref = link[len(LINK):].rpartition("/")
+    return (sid, ref) if sid and ref else None

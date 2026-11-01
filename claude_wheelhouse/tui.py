@@ -695,9 +695,28 @@ def _block_strips(who: str, md: str, width: int, console) -> tuple[tuple[Strip, 
         lines, doc_map = docblocks.render(md, VOICE[who], width, console)
     else:
         lines, doc_map = list(Segment.split_lines(_block_lines(who, md, width, console))), None
-    lines = lines + [[]]
+    lines = [clickable_ids(line) for line in lines] + [[]]
     return (tuple(Strip(line).crop_extend(0, width, None) for line in lines),
             tuple("".join(seg.text for seg in line).rstrip() for line in lines), doc_map)
+
+
+LINKED = ("claude", "you", "note", "doc")   # the blocks whose ids link (WheelhouseApp.link_ids, #274)
+
+
+def clickable_ids(line: list[Segment]) -> list[Segment]:
+    """A rendered line with each item's id linked by search.linked (a markdown link to
+    search.LINK) a click going to the item (WheelhouseApp.go_to_item, #274), not a link the
+    terminal would open; its look the markdown link's, as a doc's other links."""
+    if not any(seg.style is not None and search.target(seg.style.link) for seg in line):
+        return line
+    out, made = [], {}
+    for seg in line:
+        if seg.style is not None and (to := search.target(seg.style.link)):
+            if to not in made:   # one style for the id's every segment: hovered as one
+                made[to] = Style.from_meta({"@click": f"app.go_to_item({to[0]!r}, {to[1]!r})"})
+            seg = Segment(seg.text, seg.style.update_link(None) + made[to], seg.control)
+        out.append(seg)
+    return out
 
 
 def agreed(a: list, b: list) -> int:
@@ -828,7 +847,8 @@ class Transcript(Widget, can_focus=False):
     def on_click(self, event: events.Click) -> None:
         """A click on a doc (a left click, not one ending a drag, which leaves a selection)
         opens its editor there. The event goes on: a double click still selects a word."""
-        if self.doc_at is not None and event.button == 1 and event.chain == 1 and self.text_selection is None:
+        if self.doc_at is not None and event.button == 1 and event.chain == 1 and self.text_selection is None \
+                and "@click" not in event.style.meta:   # an item's id (#274): the item, not the editor
             self.post_message(self.DocClicked(self, event.y, event.screen_offset))
 
     def render_off_loop(self, key: tuple) -> None:
@@ -2327,6 +2347,8 @@ class DocPanes:
         it, or with none (doc None) the doc's widgets put away. Whether the layout changed."""
         found = app.client.thread(doc["session_id"], doc["ref"]) if doc is not None else None
         blocks = doc_thread_blocks(found)
+        if doc is not None and self.viewer is app.detail:   # Detail's: its ids clickable (#274)
+            blocks = app.link_ids(blocks, doc["session_id"])
         text = "\n\n".join(md for _, md in blocks)
         if text != self.text:
             scroll = self.thread_scroll
@@ -4492,6 +4514,7 @@ MOUSE = ("Click selects a row; in the session list, a click on the selected sess
          "A click on a row's first column pins it (📌) or clears its pin, as Alt+P does. "
          "A click on an emoji suggestion under the answer box takes it in place of the code typed. "
          "A click on the 🔍 at the inbox's top right opens its search, as typing in the inbox does. "
+         "A click on an item's id in Detail (a doc, a conversation, a thread) goes to that item of the same session. "
          "A click on the ⓘ at the stats pane's top right opens the selected session's info: its id (C copies it), "
          "user and machine, directory, branch, model, mode, start, transcript and its MCP server, flagged when stale. "
          "Double-click selects a word, but on what Detail shows (an item, a doc) it opens it full screen, as Enter on its "
@@ -6325,6 +6348,11 @@ class WheelhouseApp(App):
         if picked is not None:
             self.go_to_item(*picked)
 
+    def action_go_to_item(self, sid: str, ref: str) -> None:
+        """A click on an item's id in Detail (clickable_ids, #274): the item gone to, as a
+        search's pick goes."""
+        self.go_to_item(sid, ref)
+
     def go_to_item(self, sid: str, ref: str) -> None:
         """An item gone to (#273, #274): one the inbox shows highlighted there, scrolled to, and in
         Detail, as a click on its row; its parents' children shown if they were hidden. One
@@ -6544,18 +6572,29 @@ class WheelhouseApp(App):
         thread = None if shown or self.viewing or doc else self.selected
         same, self._detail_thread = thread is not None and thread == getattr(self, "_detail_thread", None), thread
         text = "\n\n".join(md for _, md in blocks)
+        # its items' ids clickable (#274): the session it belongs to, a module's doc none
+        blocks = self.link_ids(blocks, None if shown else self.viewing or (self.selected and self.selected[0]))
         # something else shown (another doc or item, a conversation): from its top (#177)
         shows = (shown[0] if shown else None, self.viewing, None if shown or self.viewing else self.selected)
         fresh, self._detail_shows = shows != getattr(self, "_detail_shows", None), shows
-        if fresh or text != getattr(self, "_detail_text", None):
+        if fresh or text != getattr(self, "_detail_text", None) or blocks != getattr(self, "_detail_linked", None):
             following = ((self.detail_follows or same)
                          and self.detail_scroll.scroll_y >= self.detail_scroll.max_scroll_y - 1)
-            self._detail_text = text
+            self._detail_text, self._detail_linked = text, blocks
             self.detail.update(render(blocks), top=fresh)   # a doc posted again: where it was scrolled to stays
             if following:   # stay at the newest turn or reply, unless the person has scrolled up to read
                 self.call_after_refresh(self.detail_scroll.scroll_end, animate=False)
         if hasattr(self, "detail_panes"):
             self.paint_doc_thread(doc if not shown and not self.viewing else None)
+
+    def link_ids(self, blocks: list[tuple[str, str]], sid: str | None) -> list[tuple[str, str]]:
+        """Blocks with the ids of sid's items in them clickable (search.linked, #274): its
+        people's and Claude's words, its notes and a doc's text, not a heading, a tool line or
+        a PR's link. With no session, as they are."""
+        if not sid or not any(who in LINKED and search.ITEM_ID.search(md) for who, md in blocks):
+            return blocks
+        refs = {it["ref"] for it in self.client.inbox(sid).items}
+        return [(who, search.linked(md, sid, refs) if who in LINKED else md) for who, md in blocks]
 
     def paint_doc_thread(self, doc) -> None:
         """Detail's doc item: its thread, and Detail laid out for it (DocPanes)."""

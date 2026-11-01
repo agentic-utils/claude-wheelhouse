@@ -1,5 +1,6 @@
 """#273: the inbox's search popover (search.py, tui.SearchItems, WheelhouseApp.go_to_item)."""
 
+import re
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -226,3 +227,108 @@ async def test_the_glass_opens_it_and_esc_puts_focus_on_the_inbox(store, sid):
         await pilot.press("escape")
         await pilot.pause()
         assert not isinstance(app.screen, SearchItems) and app.focused is app.items_table, "back on the inbox"
+
+
+# #274: ids in Detail's text link to their items
+
+
+REFS = {"T3", "Q252", "PR276", "M2"}
+
+
+@pytest.mark.parametrize("text, linked, desc", [
+    ("see T3 now", ["T3"], "a whole word"),
+    ("Q252. and PR276,", ["Q252", "PR276"], "before punctuation, and a PR's"),
+    ("(T3)", ["T3"], "in brackets"),
+    ("#273 and #T3", [], "a GitHub issue, and after #"),
+    ("T3a xT3 T3-ops", [], "inside a longer word"),
+    ("docs/T3 T3.md T206.md", [], "in a path or a file name"),
+    ("`T3` and ``a T3``", [], "inline code"),
+    ("```\nT3\n```", [], "a fenced block"),
+    ("~~~\nT3\n~~~\nthen T3", ["T3"], "after a fenced block closes"),
+    ("T9 and D1", [], "an id the session doesn't have"),
+    ("[T3](https://x) T3", ["T3"], "inside a link's text left alone"),
+    ("t3", [], "lower case is not an id"),
+])
+def test_linked(text, linked, desc):
+    out = search.linked(text, "S", REFS)
+    assert [m for m in re.findall(r"\(wheelhouse-item:S/(\w+)\)", out)] == linked, f"{desc}: {out!r}"
+
+
+def detail_link(app, word: str):
+    """Where `word` shows as a link in Detail: its screen offset, and its click action."""
+    view = app.detail
+    strips, texts, _ = view._layout(view.size.width)
+    for y, (strip, text) in enumerate(zip(strips, texts)):
+        x = 0
+        for seg in strip:
+            if seg.text.strip() == word and seg.style and "@click" in seg.style.meta:
+                return view.region.offset + (x, y - round(app.detail_scroll.scroll_y)), seg.style.meta["@click"]
+            x += seg.cell_length
+    return None, None
+
+
+@pytest.mark.anyio
+@pytest.mark.both
+@pytest.mark.parametrize("hidden, desc", [
+    (False, "an item the inbox shows: highlighted there, in Detail"),
+    (True, "a hidden one: in Detail alone"),
+])
+async def test_a_click_on_an_id_goes_to_the_item(store, sid, hidden, desc):
+    q = store.post_item(sid, "task", "choose the db", status="dropped")
+    if hidden:
+        store.dismiss(sid, q)
+    t = store.post_item(sid, "task", "pick a db", body=f"waiting on {q} and #12, `{q}` too")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.go_to_item(sid, t)
+        await pilot.pause()
+        at, action = detail_link(app, q)
+        assert at is not None, f"{desc}: {q} is a link"
+        assert action == f"app.go_to_item({sid!r}, {q!r})", desc
+        await pilot.click(offset=at)
+        await pilot.pause()
+        assert app.selected == (sid, q), desc
+        assert (app.items_table.show_cursor and app.items_table.cursor_key() == f"{sid}|{q}") is not hidden, desc
+
+
+@pytest.mark.anyio
+async def test_ids_link_to_the_texts_own_session(store, sid, tmp_path):
+    """Q253 a: an id links to that ref in the session the text belongs to; refs repeat across sessions."""
+    other = store.create_session(str(tmp_path), name="other")
+    store.post_item(other, "task", "other's T1")
+    store.post_item(other, "task", "mentions T1 and T2", body="see T1 and T2")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.go_to_item(other, "T2")
+        await pilot.pause()
+        _, action = detail_link(app, "T1")
+        assert action == f"app.go_to_item({other!r}, 'T1')", "the other session's T1, not demo's"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("where, desc", [
+    ("doc", "a doc's text"),
+    ("thread", "a doc's thread, a reply mentioning it"),
+])
+async def test_a_docs_ids_link(store, sid, tmp_path, where, desc):
+    store.post_item(sid, "task", "the task")
+    path = tmp_path / "plan.md"
+    path.write_text("# Plan\n\nDepends on T1.\n" if where == "doc" else "# Plan\n")
+    m = store.post_doc(sid, "the plan", str(path))
+    if where == "thread":
+        store.reply(sid, m, "T1 covers it")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.go_to_item(sid, m)
+        await pilot.pause()
+        if where == "doc":
+            _, action = detail_link(app, "T1")
+        else:
+            view = app.query_one("#detail-thread")
+            strips, _, _ = view._layout(view.size.width)
+            action = next((seg.style.meta["@click"] for strip in strips for seg in strip
+                           if seg.text.strip() == "T1" and seg.style and "@click" in seg.style.meta), None)
+        assert action == f"app.go_to_item({sid!r}, 'T1')", desc
