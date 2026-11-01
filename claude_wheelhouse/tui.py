@@ -6839,7 +6839,7 @@ class WheelhouseApp(App):
         taken from a text box with something typed in it (the row selected all the same, but for
         the answer box: selecting would swap its text under the person, retarget), nor from a
         dialog or full screen in front. Several at once: the last listed."""
-        if self.client.remote and ("sessions",) not in self.client.shown_seq:
+        if not self.client.sessions_loaded():
             return   # the daemon's list not fetched yet (unreachable, busy): no baseline from nothing
         cycles = {(s["id"], s["compaction_id"]) for s in self.sessions
                   if compacting_now(s) and self.running(s["id"])}
