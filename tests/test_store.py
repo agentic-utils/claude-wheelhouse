@@ -8,7 +8,7 @@ from unittest import mock
 import pytest
 
 from claude_wheelhouse import whatsnew
-from claude_wheelhouse.store import (TOUR_MIGRATED, TRIGGER_NAMES, TUTORIAL_OFFER, SessionGone, Store,
+from claude_wheelhouse.store import (AWAITING, PROCESSING, TOUR_MIGRATED, TRIGGER_NAMES, TUTORIAL_OFFER, SessionGone, Store,
                                      now, standing)
 
 
@@ -998,6 +998,34 @@ def test_sessions_subqueries_use_an_index(store, sid, sql, index, desc):
     """sessions() runs each tick: 1.9 s a call with 300k messages before these (T114 review)."""
     plan = " ".join(r[-1] for r in store.db.execute(f"EXPLAIN QUERY PLAN {sql}", (sid,)))
     assert index in plan, f"{desc}: {plan}"
+
+
+TICK_READS = [
+    (AWAITING, "the items awaiting the session's reply"),
+    (f"SELECT session_id, ref, status FROM items i WHERE {PROCESSING}", "the items processing"),
+]
+
+
+@pytest.mark.parametrize("sql, desc", TICK_READS)
+def test_the_tick_reads_group_messages_from_an_index(store, sql, desc):
+    """Each tick groups every item's messages: a scan of the table, ~250 ms with 20,000
+    messages, before messages_item (#268)."""
+    plan = " ".join(r[-1] for r in store.db.execute(f"EXPLAIN QUERY PLAN {sql}"))
+    assert "SCAN messages USING COVERING INDEX messages_item" in plan and "SCAN messages " not in plan.replace(
+        "SCAN messages USING COVERING INDEX messages_item", ""), f"{desc}: {plan}"
+
+
+@pytest.mark.parametrize("sql, desc", TICK_READS)
+def test_an_older_database_gains_the_messages_index(db_file, store, sid, sql, desc):
+    """A database made before messages_item gets it when this code opens it, and reads as before."""
+    ref = store.post_item(sid, "question", "which?")
+    store.send(sid, "this one", ref)
+    before = store._all(sql)
+    store.db.execute("DROP INDEX messages_item")
+    reopened = Store(db_file)
+    assert reopened.db.execute("SELECT 1 FROM sqlite_master WHERE name = 'messages_item'").fetchone(), desc
+    after = reopened._all(sql)
+    assert [tuple(r) for r in after] == [tuple(r) for r in before] != [], desc
 
 
 @pytest.mark.parametrize("group, status, kept, desc", [
