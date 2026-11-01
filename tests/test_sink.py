@@ -126,7 +126,7 @@ async def test_a_settled_item_holds_while_selected_and_sinks_after(store, sid, c
         table.move_cursor(row=table.get_row_index(f"{sid}|{top}"))
         await pilot.pause()
         if kind == "decision":
-            dwell(app)
+            await dwell(app)
         else:
             SETTLE[kind](store, sid, top)
         app.refresh_data()
