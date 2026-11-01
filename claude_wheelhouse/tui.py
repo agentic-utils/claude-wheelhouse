@@ -624,10 +624,22 @@ def render(blocks: list[tuple[str, str]]) -> Blocks:
     return Blocks(blocks)
 
 
+def row_values(row) -> tuple:
+    """A row's values as they are now, to compare with a later read: a row from the store or a
+    daemon's dict alike, and one changed in place counts as changed."""
+    return tuple(row.values()) if isinstance(row, dict) else tuple(row)
+
+
+def same_rows(rows, kept: list[tuple] | None) -> bool:
+    """Whether rows hold the values kept (row_values), compared one by one: nothing is kept
+    for a read that matches, so a quiet second leaves no garbage behind it."""
+    return kept is not None and len(rows) == len(kept) and all(row_values(r) == k for r, k in zip(rows, kept))
+
+
 def same(a, b) -> bool:
     """Whether a cell is unchanged. Rich's Text equality ignores the base style, so a cell
     that only changed colour (a context bar crossing a grade, a row marked) counts too."""
-    return a == b and getattr(a, "style", None) == getattr(b, "style", None)
+    return a is b or a == b and getattr(a, "style", None) == getattr(b, "style", None)
 
 
 def cell_width(cell) -> int:
@@ -4640,6 +4652,9 @@ class WheelhouseApp(App):
         self.behind: list[Callable[[], None]] = []   # what waits, in the order asked
         self.undo: tuple[str, list] | None = None   # what Ctrl+Z undoes, said, and the rows as they stood (undoable)
         self.ranks: dict[str, tuple] = {}   # each item's rank as last shown
+        self.sort_keys: dict[tuple, tuple] = {}   # each item's sort key as it stands (sort_key)
+        self.cells_kept: dict[tuple, tuple] = {}   # each inbox row's cells as last made (item_cells)
+        self.items_painted: tuple | None = None   # what the last paint_items read and left (items_state), its rows' values
         self.show_finished = False   # finished items (store.standing), after the rest
         # minutes a completed (settled) item stays in sight before it's hidden as the finished are
         # (completed_hidden, #235), read once: the setting comes from the flag or a .env
@@ -5631,8 +5646,17 @@ class WheelhouseApp(App):
             at, held = datetime.now(timezone.utc), under_way_parents(found, busy)
             found = [it for it in found if item_key(it) in held or not self.completed_hidden(it, busy, at)]
         compacting, dead = self.compacting(), self.lifeless_sids()
-        keyed = self.ranked_keyed(found, processing, busy, names)
         cuts = self.cutoffs()
+        every = self.client.all_items() if self.item_sort == ordering.ITEMS_DEFAULT else None
+        # all it reads (#268): the same as at the last paint, and nothing moving, shows the same
+        read = (every is None, frozenset(processing), frozenset(queued), frozenset(awaiting), frozenset(compacting),
+                frozenset(dead), tuple(sorted(cuts.items())), tuple(names.items()), tuple(self.conversation_sids()))
+        if self.items_painted is not None and (read, self.items_state()) == self.items_painted[0] \
+                and same_rows(found, self.items_painted[1]) and (every is None or same_rows(every, self.items_painted[2])) \
+                and not self.repin and self.item_sink.move is None:
+            self.paint_detail()
+            return
+        keyed = self.ranked_keyed(found, processing, busy, names, every)
         table.locked = {key for key, it in keyed if self.locks(it, cuts)}
         key_of = {id(it): key for key, it in keyed}   # each item's row key, made once
         active, settled, finished = bands = ([], [], [])   # by their ranks as shown: a selected item's held
@@ -5664,39 +5688,12 @@ class WheelhouseApp(App):
         if self.filter_sid:
             rows_out += conversations
         for it, nested, _ in rows:
-            # an unfinished item of any kind with an answer waiting to be sent shows as queued, and one
-            # whose answer went with no reply since as processing (D28); neither is stored
-            key = (it["session_id"], it["ref"])
-            where = standing(it, busy)
-            status = it["status"] if where != "active" else "queued" if key in queued \
-                else "processing" if key in processing else it["status"]
-            style = "dim" if where != "active" else "bold #05d9e8" if status == "queued" \
-                else "bold #ffd300" if status == "open" and it["kind"] != "pr" else DECISION if status in UNREAD \
-                else "bold #ff2a6d" if status in ("blocked", "waiting") else MATRIX
-            name = names.get(it["session_id"], "")[:14]
-            if status == "processing" or key in awaiting and status != "queued":
-                # the person spoke last: the ball is in the session's court until it replies. A
-                # finished item keeps its status, with the hourglass
-                shown = Text(status if status == "processing" else f"⏳ {status}", style="dim")
-                title = titled(it, "dim")
-            else:
-                shown, title = Text(status, style=style), titled(it, "dim" if where != "active" else "")
-            if (fresh := ordering.field(it, "new_replies")) and status not in ("queued", "processing") \
-                    and key not in awaiting:   # a doc's replies the person hasn't seen (store._said)
-                shown = Text(f"{fresh} new", style=DECISION)
-            pin = Text(PIN) if pinned(it) else Text(UNPINNED, style="dim")
-            if nested is None:
-                cells = (pin, name, ref_text(it, dim=where != "active"), shown, title)
-            elif nested == CHILD:   # under its parent, as a subagent is under its session's name
-                cells = (pin, "", ref_text(it, child=True), shown, titled(it, "dim"))
-            else:   # a subagent, tucked under its session's name
-                cells = (pin, name if nested == 0 else "", ref_text(it, child=True), shown, titled(it, "dim"))
-            # dimmed, clicks and keys ignored, until it's compacted (#150); or dimmed alone, its
-            # session dead and not parked (#252)
-            if key_of[id(it)] in table.locked or it["session_id"] in dead:
-                cells = faded(cells)
-            rows_out.append((key_of[id(it)], cells))
-            tips[key_of[id(it)]] = item_tip(it)
+            row = key_of[id(it)]
+            rows_out.append((row, self.item_cells(it, nested, names, queued, processing, awaiting, busy,
+                                                  row in table.locked, it["session_id"] in dead)))
+            tips[row] = item_tip(it)
+        if len(self.cells_kept) > 2 * len(rows) + 100:   # the rows gone, kept no longer
+            self.cells_kept = {k: v for k, v in self.cells_kept.items() if f"{k[0]}|{k[1]}" in tips}
         if not self.filter_sid:   # under the inbox's own order, at the top (#236); else between the active and settled
             at = 0 if self.item_sort == ordering.ITEMS_DEFAULT else \
                 next((i for i, (_, _, band) in enumerate(rows) if band), len(rows))
@@ -5735,7 +5732,63 @@ class WheelhouseApp(App):
             self.selected = None
         if self.selected is None and self.box_target is not None:   # nor the box aimed at what went
             self.retarget(move_list=False)
+        self.items_painted = ((read, self.items_state()), [row_values(r) for r in found],
+                              None if every is None else [row_values(r) for r in every])
         self.paint_detail()
+
+    def item_cells(self, it, nested, names, queued, processing, awaiting, busy, locked: bool, dead: bool) -> tuple:
+        """An inbox row's cells (paint_items), made again only when something they show from
+        changes: the item, its place, its session's name, whether it is queued, processing or
+        awaiting a reply, locked, or its session dead (#268). Kept as the table holds them
+        (plain), so fill finds an unchanged row's cells the very ones it shows."""
+        key = (it["session_id"], it["ref"])
+        on = (row_values(it), nested, names.get(key[0], ""), key in queued, key in processing, key in awaiting,
+              locked, dead)
+        if (kept := self.cells_kept.get(key)) is not None and kept[0] == on:
+            return kept[1]
+        # an unfinished item of any kind with an answer waiting to be sent shows as queued, and one
+        # whose answer went with no reply since as processing (D28); neither is stored
+        where = standing(it, busy)
+        status = it["status"] if where != "active" else "queued" if key in queued \
+            else "processing" if key in processing else it["status"]
+        style = "dim" if where != "active" else "bold #05d9e8" if status == "queued" \
+            else "bold #ffd300" if status == "open" and it["kind"] != "pr" else DECISION if status in UNREAD \
+            else "bold #ff2a6d" if status in ("blocked", "waiting") else MATRIX
+        name = names.get(it["session_id"], "")[:14]
+        if status == "processing" or key in awaiting and status != "queued":
+            # the person spoke last: the ball is in the session's court until it replies. A
+            # finished item keeps its status, with the hourglass
+            shown = Text(status if status == "processing" else f"⏳ {status}", style="dim")
+            title = titled(it, "dim")
+        else:
+            shown, title = Text(status, style=style), titled(it, "dim" if where != "active" else "")
+        if (fresh := ordering.field(it, "new_replies")) and status not in ("queued", "processing") \
+                and key not in awaiting:   # a doc's replies the person hasn't seen (store._said)
+            shown = Text(f"{fresh} new", style=DECISION)
+        pin = Text(PIN) if pinned(it) else Text(UNPINNED, style="dim")
+        if nested is None:
+            cells = (pin, name, ref_text(it, dim=where != "active"), shown, title)
+        elif nested == CHILD:   # under its parent, as a subagent is under its session's name
+            cells = (pin, "", ref_text(it, child=True), shown, titled(it, "dim"))
+        else:   # a subagent, tucked under its session's name
+            cells = (pin, name if nested == 0 else "", ref_text(it, child=True), shown, titled(it, "dim"))
+        # dimmed, clicks and keys ignored, until it's compacted (#150); or dimmed alone, its
+        # session dead and not parked (#252)
+        if locked or dead:
+            cells = faded(cells)
+        cells = tuple(plain(c) for c in cells)
+        self.cells_kept[key] = (on, cells)
+        return cells
+
+    def items_state(self) -> tuple:
+        """The app's own state paint_items reads, or leaves behind it (the rows, the cursor):
+        with what it read from the hub, what tells a paint that would change nothing (#268)."""
+        table = self.items_table
+        return (self.filter_sid, self.item_sort, self.show_finished, self.autocleanse, self.selected, self.pin,
+                frozenset(self.collapsed), frozenset(self.going), frozenset(table.marked), frozenset(self.deleted),
+                tuple(self.brought_back.items()), self.item_sink.sunk is None,
+                tuple(str(c.label) for c in table.ordered_columns), tuple(table.keys()), table.cursor_key(),
+                self.items_cursor)
 
     def above_deleted(self, before: list[str]) -> int | None:
         """Delete took the highlighted row: the row the highlight goes to, the one immediately
@@ -5764,7 +5817,7 @@ class WheelhouseApp(App):
         """Items in inbox order (ranked_keyed)."""
         return [it for _, it in self.ranked_keyed(items, processing, busy)]
 
-    def ranked_keyed(self, items, processing, busy=frozenset(), names=None) -> list[tuple[str, dict]]:
+    def ranked_keyed(self, items, processing, busy=frozenset(), names=None, every=None) -> list[tuple[str, dict]]:
         """Items in the inbox's order (ordering.item_key: the sort in force, inbox_rank by
         default, the person's order inside it), but for the selected item, pinned: it keeps the
         rank it was shown with when it was selected, so its own change (a decision seen, a
@@ -5773,16 +5826,18 @@ class WheelhouseApp(App):
         own explicit acts, Delete closing or Ctrl+R reopening (close) and a permission answered
         (answer_permission): it goes at once (D33), and is pinned where it went. self.ranks keeps each item's rank as shown: the next pin's, and what has
         somewhere to go (paint_items). No two items share a rank (store.inbox_rank, ties by id), so
-        the order needs no tie-break of its own (#70)."""
+        the order needs no tie-break of its own (#70). every: client.all_items(), if read already."""
         key = self.selected and self.selected[1] and f"{self.selected[0]}|{self.selected[1]}"
         if self.pin is None or self.pin[0] != key:
             self.pin = (key, self.ranks[key], self.rank_tokens[key]) if key in self.ranks else None
         keyed = [(item_key(it), it) for it in items]   # (row key, item): each key made once
-        found = {key: ordering.item_key(self.item_sort, it, processing, busy, names) for key, it in keyed}
+        found = {key: self.sort_key(it, processing, busy, names) for key, it in keyed}
         everything = found
         if self.item_sort == ordering.ITEMS_DEFAULT:   # ranks from the whole list's placed rows (arrange)
-            everything = {item_key(it): ordering.item_key(self.item_sort, it, processing, busy, names)
-                          for it in self.client.all_items()} | found
+            everything = {item_key(it): self.sort_key(it, processing, busy, names)
+                          for it in (self.client.all_items() if every is None else every)} | found
+        if len(self.sort_keys) > 2 * len(everything) + 100:   # the items gone, or their old states
+            self.sort_keys = {}
         arranged = ordering.arrange(self.item_sort, everything)
         ranks = {key: arranged[key] for key in found}
         tokens = {key: token for key, (_, token) in found.items()}
@@ -5795,6 +5850,18 @@ class WheelhouseApp(App):
         self.repin = set()
         self.ranks, self.rank_tokens = ranks, tokens
         return sorted(keyed, key=lambda pair: ranks[pair[0]])
+
+    def sort_key(self, it, processing, busy, names) -> tuple[tuple, str]:
+        """ordering.item_key under the sort in force, made once for an item as it stands: kept
+        on all it reads (store.inbox_rank's and ordering.keyed's fields, whether the item is
+        processing or busy, its session's name), not made again for each item each second (#268)."""
+        at = (it["session_id"], it["ref"])
+        on = (self.item_sort, *at, it["id"], it["kind"], it["status"], it["dismissed"], it["updated_at"],
+              it["title"], ordering.field(it, "pos_group"), ordering.field(it, "pos"), at in processing,
+              at in busy, (names or {}).get(at[0]))
+        if (got := self.sort_keys.get(on)) is None:
+            got = self.sort_keys[on] = ordering.item_key(self.item_sort, it, processing, busy, names)
+        return got
 
     def conversation_sids(self) -> list[str]:
         """The sessions whose conversation rows the unfiltered inbox shows: the unparked, whose

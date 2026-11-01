@@ -386,6 +386,10 @@ CREATE INDEX IF NOT EXISTS messages_session_author ON messages (session_id, auth
 CREATE INDEX IF NOT EXISTS items_session_at ON items (session_id, session_at);
 CREATE INDEX IF NOT EXISTS items_session_created ON items (session_id, created_at);
 CREATE INDEX IF NOT EXISTS messages_drafts ON messages (session_id) WHERE draft = 1;
+-- AWAITING and PROCESSING, each tick: every item's messages grouped by (session_id, item_ref),
+-- read from this index alone (#268)
+CREATE INDEX IF NOT EXISTS messages_item ON messages (session_id, item_ref, draft, author, id, kind)
+    WHERE item_ref IS NOT NULL;
 """
 # Triggers fire for any connection: in the schema, so a writer running older code fires
 # them too once any newer one has opened the database. Each is one statement of its own, as
