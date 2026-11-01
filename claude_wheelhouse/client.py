@@ -753,7 +753,8 @@ class RemoteClient:
         return bool(self.tutorial_state.get("offer"))
 
     def see_features(self, ids: list[str], notes: str | None = None) -> None:
-        self.quietly("/tour/seen", {"ids": ids, "notes": notes})
+        # fetched at the next read: an inbox fetch already waiting would show it unseen again (#268)
+        self.quietly("/tour/seen", {"ids": ids, "notes": notes}, refetch="now")
         tour = self.tour_state()   # as the daemon now has it, until the next fetch says so itself
         if "seen" in tour:   # not known, it stays so: nothing offered
             tour["seen"] = sorted({*tour["seen"], *ids})
@@ -764,7 +765,7 @@ class RemoteClient:
         return self.tutorial_state.setdefault("tour", {})
 
     def tour_at(self, at: str | None) -> bool:
-        ok = self.quietly("/tour/at", {"at": at})
+        ok = self.quietly("/tour/at", {"at": at}, refetch="now")   # as see_features
         if ok:   # as the daemon now has it, until the next fetch says so itself
             self.tour_state()["at"] = at
         return ok

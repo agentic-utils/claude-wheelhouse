@@ -10317,3 +10317,15 @@ async def test_a_dialogs_shade_is_textuals_drawn_a_line_at_a_time(store, sid, mo
         assert any("zebra" in s.text for s in textuals()), f"{desc}: the change shows in Textual's"
         assert any("zebra" in s.text for s in ours()), f"{desc}: a change beneath shows through"
         assert cells(ours()) == cells(textuals()), f"{desc}: and still as Textual draws it"
+
+        def frame() -> str:   # the whole screen as the app draws it, through Dialog.render_lines
+            for screen in app.screen_stack:
+                screen._styles_cache.clear()
+                screen.refresh()
+            return app.export_screenshot()
+        drawn = frame()
+        with monkeypatch.context() as m:
+            m.setattr(tui.Dialog, "render_lines", Screen.render_lines)
+            m.setattr(tui.Dialog, "render_line", Screen.render_line)
+            theirs = frame()
+        assert "zebra" in drawn and drawn == theirs, f"{desc}: a real frame, as Textual draws it"
