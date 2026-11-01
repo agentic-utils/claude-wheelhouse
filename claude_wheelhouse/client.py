@@ -59,6 +59,9 @@ class LocalClient(Hub):
     def land(self) -> None:
         pass   # in process, every read is the store's own: nothing waits to be shown
 
+    def sessions_loaded(self) -> bool:
+        return True   # read from the store at every refresh
+
     def background(self) -> None:
         """The hub's reading at each tick: context sizes, the tab sessions' keepalive,
         subagents, the account's usage."""
@@ -392,6 +395,12 @@ class RemoteClient:
             for key in [k for k in self.cache if k not in self.wanted]:
                 self.forget(key)
         self.catch_up()
+
+    def sessions_loaded(self) -> bool:
+        """Whether the daemon's sessions list has been fetched and shown (not dropped since):
+        before then the app's list is empty, not the daemon's (#277)."""
+        with self.lock:
+            return ("sessions",) in self.shown_seq
 
     def catch_up(self) -> None:
         """After a command, what it changed, fetched before anything is read again: the

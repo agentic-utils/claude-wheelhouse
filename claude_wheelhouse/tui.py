@@ -593,10 +593,12 @@ def _block_lines(who: str, md: str, width: int, console) -> list:
 def stage_text(who: str, text: str) -> Text:
     """A compaction's stage lines or crew excerpt (#244) as plain Text, never Markdown (which
     would turn its art into rules and bullets): each line cut with an ellipsis, not wrapped; a
-    stage's lines after its first dim."""
+    stage's last line (who asked or what came of it, and when) dim under its art (#277)."""
     out = Text(no_wrap=True, overflow="ellipsis")
-    for i, line in enumerate(text.split("\n")):
-        out.append(("\n" if i else "") + line, style=VOICE[who] + (" dim" if who == "stage" and i else ""))
+    lines = text.split("\n")
+    for i, line in enumerate(lines):
+        dim = who == "stage" and i and i == len(lines) - 1
+        out.append(("\n" if i else "") + line, style=VOICE[who] + (" dim" if dim else ""))
     return out
 
 
@@ -4682,6 +4684,7 @@ class WheelhouseApp(App):
         self.animating = True   # whether it runs: paused while unfocused with nothing busy (pace)
         self.filter_sid: str | None = None
         self.followed: str | None = None   # the session last followed, which a key picks again (SessionList.reveal)
+        self.cycles_seen: set[tuple] | None = None   # the compaction cycles under way at the last refresh (focus_compactions)
         # the dwell (DWELL): what the person is looking at, (selection, screen), its generation,
         # bumped whenever that changes, and its one-shot timer, running only while they rest
         self.dwelling: tuple | None = None
@@ -5318,6 +5321,7 @@ class WheelhouseApp(App):
         self.client.background()   # in process, the hub's reading: the daemon's hub does its own
         self.paint_sessions()
         self.paint_items()
+        self.focus_compactions()
         self.paint_away()
         self.paint_compacting()
         self.each_pane("tick")
@@ -5767,10 +5771,9 @@ class WheelhouseApp(App):
             cells = ("", names.get(conv, "")[:14] if self.filter_sid else "", Text("💬"),
                      Text("queued", style="bold #05d9e8") if general else "",
                      Text("Conversation" if self.filter_sid else names.get(conv, ""), style="bold"))
-            if conv in compacting:
-                cells = faded(cells)
-                table.locked.add(f"{conv}|")
-            elif conv in dead:   # its session dead, not parked: dimmed, still selectable (#252)
+            # compacting (dimmed, still selectable: the walls and the crew are there, #277) or its
+            # session dead, not parked (#252)
+            if conv in compacting or conv in dead:
                 cells = faded(cells)
             conversations.append((f"{conv}|", cells))
         if self.filter_sid:
@@ -6827,6 +6830,32 @@ class WheelhouseApp(App):
         if s["id"] in self.compacting():   # under way, however it was asked for (#150)
             busy |= {"compact"}
         return busy | {"compact-now"} if "compact" in busy else busy
+
+    def focus_compactions(self) -> None:
+        """A compaction cycle that has started since the last refresh, whoever asked (Compact
+        here, the session's request_compact, a /compact in its tab): its conversation shown
+        (follow) and the inbox focused on its row, so the walls and the crew are in view (#277).
+        Not on the app's first refresh with the sessions loaded (a cycle already under way isn't news), never focus
+        taken from a text box with something typed in it (the row selected all the same, but for
+        the answer box: selecting would swap its text under the person, retarget), nor from a
+        dialog or full screen in front. Several at once: the last listed."""
+        if not self.client.sessions_loaded():
+            return   # the daemon's list not fetched yet (unreachable, busy): no baseline from nothing
+        cycles = {(s["id"], s["compaction_id"]) for s in self.sessions
+                  if compacting_now(s) and self.running(s["id"])}
+        started, self.cycles_seen = (cycles - self.cycles_seen if self.cycles_seen is not None else set()), cycles
+        if not started:
+            return
+        sid = next(s["id"] for s in reversed(self.sessions) if s["id"] in {sid for sid, _ in started})
+        main = self.screen is self.main_screen
+        typing = isinstance(self.focused, (TextArea, Input)) and bool(self.focused.text if isinstance(self.focused, TextArea)
+                                                                       else self.focused.value)
+        if typing and self.focused is self.answer:
+            return
+        if self.filter_sid != sid or self.selected != (sid, None):
+            self.follow(sid)
+        if main and not typing:
+            self.items_table.focus()
 
     def compacting(self) -> set[str]:
         """The running sessions being compacted (hub.compacting_now, from the store): what locks and

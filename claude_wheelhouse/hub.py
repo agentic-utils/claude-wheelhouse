@@ -99,17 +99,22 @@ def short(sid: str) -> str:
 
 
 def compaction_entries(stages, active: bool, at: float | None = None) -> list:
-    """A session's compaction stages as conversation entries (#244): each stage's lines (art B,
-    then dim who asked or what came of it, with its time), and while a cycle is preparing or
-    compacting the crew's excerpts (compactor.schedule), those due by now (at, epoch). Placed
-    by time among the transcript's entries (transcript.blocks); the task item's thread has the
-    stages' notes, never the excerpts."""
+    """A session's compaction stages as conversation entries (#244): one art per cycle, drawn
+    where its first stage with art was, showing its latest stage's (art B, then dim who asked or
+    what came of it, with its time), so each stage replaces the last in place (#277); and while a
+    cycle is preparing or compacting the crew's excerpts (compactor.schedule), those due by now
+    (at, epoch). Placed by time among the transcript's entries (transcript.blocks); the task
+    item's thread has the stages' notes, never the excerpts."""
     at = time.time() if at is None else at
-    out, cycles = [], {}
+    out, cycles, drawn = [], {}, {}
     for st in stages:
-        if (text := compactor.stage_text(st["state"], ORIGIN_WORDS.get(st["origin"]), st["note"])) is not None:
-            art, *rest = text.split("\n")
-            out.append(transcript.Entry("stage", "\n".join([art, " · ".join([*rest, st["at"][11:16] + "Z"])]), st["at"]))
+        text = compactor.stage_text(st["state"], ORIGIN_WORDS.get(st["origin"]), st["note"], st["at"][11:16] + "Z")
+        if text is not None:
+            if (i := drawn.get(st["cycle_id"])) is None:
+                drawn[st["cycle_id"]] = len(out)
+                out.append(transcript.Entry("stage", text, st["at"]))
+            else:
+                out[i] = transcript.Entry("stage", text, out[i].at)
         cycles.setdefault(st["cycle_id"], []).append(st)
     last = stages[-1]["cycle_id"] if stages else None
     for cid, run in cycles.items():

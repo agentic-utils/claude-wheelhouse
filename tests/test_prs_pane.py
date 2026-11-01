@@ -15,7 +15,7 @@ from claude_wheelhouse import tui
 from claude_wheelhouse.tui import WheelhouseApp, tab_stops
 from textual.content import Content
 from textual import events
-from textual.widgets import Button, Input, OptionList
+from textual.widgets import Button, DataTable, Input, OptionList
 from textual.pilot import _get_mouse_message_arguments
 
 prs = pytest.importorskip("claude_wheelhouse_prs", reason="installed without the prs module")
@@ -1077,7 +1077,10 @@ def hosted(store, sid, monkeypatch):
 async def compacting(app, pilot, store, sid, hosted, end: str | None = None):
     """The session's compaction cycle (#244) starting (end None), as Compact and its host start
     it, or its end: "compacted", or "host gone", stopped mid-way with the cycle left
-    (store.compacting_now). The app ticks."""
+    (store.compacting_now). The app ticks. A start shows the session's conversation (#277); what
+    Detail showed is then put back, as it stays when the person is typing in the answer box, so
+    the locked item's own view is what's checked."""
+    before = app.selected
     if end == "host gone":
         hosted["liveness"] = "dead"
     elif end:
@@ -1092,6 +1095,15 @@ async def compacting(app, pilot, store, sid, hosted, end: str | None = None):
         store.set_activity(sid, "compacting: collecting notes")
     app.refresh_data()
     await pilot.pause()
+    if end is None:
+        assert app.selected == (sid, None), f"its conversation shown as it starts (#277): {app.selected}"
+        key, table = "|".join((before[0], before[1] or "")), app.items_table
+        if key in table.rows:
+            with table.prevent(DataTable.RowHighlighted):
+                table.move_cursor(row=table.get_row_index(key), animate=False)
+            app.items_cursor = key
+        app.select_row(key)
+        await pilot.pause()
 
 
 @pytest.mark.anyio
