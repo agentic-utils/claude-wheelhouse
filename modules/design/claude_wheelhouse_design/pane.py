@@ -46,8 +46,25 @@ def routes(ctx: api.Context) -> list[api.Route]:
         alive = {d for d, root in pairs if root in roots} | {d for d, _ in api.decision_dirs(living)}
         for r in rows:
             r["dead"] = Path(r["path"]).parent not in alive
-        return {"decisions": rows, "dirs": [str(d) for d, _ in found]}
+        return {"decisions": rows, "dirs": [str(d) for d, _ in found], "scopes": scopes(sessions)}
     return [api.Route("decisions", decisions)]
+
+
+def scopes(sessions: list[dict]) -> dict[str, dict]:
+    """What each session's selection shows (#264): its repo's decision directories, those
+    every session there declared or docs/adr (api.decision_dirs), and the repo's name for the
+    empty pane's note. A session in no repo: the directories it declared itself, and its own
+    directory's name."""
+    by_root: dict = {}
+    for s in sessions:
+        by_root.setdefault(api.git_root(s["cwd"]), []).append(s)
+    out = {}
+    for root, group in by_root.items():
+        shared = [str(d) for d, _ in api.decision_dirs(group)] if root is not None else None
+        for s in group:
+            out[s["id"]] = {"name": root.name if root is not None else Path(s["cwd"]).name,
+                            "dirs": shared if shared is not None else [str(d) for d, _ in api.decision_dirs([s])]}
+    return out
 
 
 def doc_roots(ctx: api.Context) -> list[Path]:
@@ -84,7 +101,8 @@ class DecisionTable(api.KeepColours, DataTable):
 
 class Decisions(Vertical):
     """A bordered pane, titled Decisions (its drag handle), of the decisions in every repo a
-    session works in: number, status, title, and repo when there's more than one. Asked of the module's route on a worker
+    session works in: number, status, title, and repo when there's more than one. With a
+    session selected, its repo's alone (#264), as the PRs pane follows the selection. Asked of the module's route on a worker
     thread when it mounts and every EVERY seconds after (tick), never on the app's thread.
     Moving the cursor shows the decision in the Detail pane; Enter, or a click on the row
     the cursor is on, opens it full screen. A header click sorts, as the inbox's do."""
@@ -104,6 +122,7 @@ class Decisions(Vertical):
         self.ctx = ctx
         self.rows: list[dict] = []           # as the route last gave them
         self.looked: list[str] = []          # the directories it looked in
+        self.scopes: dict[str, dict] = {}    # each session's repo name and decision dirs (route.scopes)
         self.error: str | None = None        # why the last ask failed
         self.sort = DEFAULT
         self.asked_at = 0.0                  # time.monotonic() at the last ask
@@ -133,6 +152,7 @@ class Decisions(Vertical):
         if time.monotonic() - self.asked_at >= EVERY or where != self.where:
             self.where = where
             self.ask()
+        self.settle()   # the session selected may have changed: the rows held filtered, never asked again
 
     def ask(self) -> None:
         """The route asked again, on a worker thread (a remote call blocks); while an ask is
@@ -163,10 +183,16 @@ class Decisions(Vertical):
         self.error = got.get("error")
         if self.error is None:
             self.rows, self.looked = got.get("decisions", []), got.get("dirs", [])
+            self.scopes = got.get("scopes", {})
+        self.settle()
+
+    def settle(self) -> None:
+        """The table painted, and the pane shrunk to its note when none is listed (the note
+        says where it looked); a failed ask keeps it as it was, its error in the note."""
+        if not self.is_mounted:
+            return
         self.paint()
-        # none found: only the note, which says where it looked; a failed ask keeps it as it was,
-        # its error in the note
-        compact = self.compact if self.error is not None else not self.rows
+        compact = self.compact if self.error is not None else not self.listed()
         if compact != self.compact:
             self.compact = compact
             self.query_one(DecisionTable).display = not compact
@@ -188,7 +214,7 @@ class Decisions(Vertical):
         the cursor kept on the row it was on."""
         table = self.query_one(DecisionTable)
         note = self.query_one("#decisions-note", Static)
-        rows = sorted_by(self.rows, self.sort)
+        rows = sorted_by(self.listed(), self.sort)
         said = self.note()
         note.update(said)
         note.display = bool(said)
@@ -216,9 +242,26 @@ class Decisions(Vertical):
         if at is not None and at in table.rows:
             table.move_cursor(row=table.get_row_index(at), animate=False)
 
+    def session(self) -> str | None:
+        """The session selected in the session list (Context.focus), as the PRs pane follows it."""
+        return self.ctx.focus() if self.ctx.focus else None
+
+    def listed(self) -> list[dict]:
+        """The rows shown (#264): with a session selected, those in its repo's decision
+        directories alone (scopes; none until the route has seen the session); with none, every repo's."""
+        sid = self.session()
+        if sid is None:
+            return self.rows
+        dirs = {Path(d) for d in self.scopes.get(sid, {}).get("dirs", ())}
+        return [r for r in self.rows if Path(r["path"]).parent in dirs]
+
     def note(self) -> str:
         if self.error:
             return f"Couldn't list decisions: {self.error}"
+        if (sid := self.session()) is not None and not self.listed():
+            name = self.scopes.get(sid, {}).get("name") or next(
+                (s["name"] for s in self.ctx.sessions() if s["id"] == sid), sid)
+            return f"No decisions in {name}: docs/adr or set_doc_dirs."
         if not self.rows:
             where = ", ".join(self.looked) if self.looked else "docs/adr in a session's repo"
             return f"No decisions (NNNN-*.md) in {where}."

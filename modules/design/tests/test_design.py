@@ -54,7 +54,7 @@ def test_not_a_decision(tmp_path, name, desc):
 
 
 def sessions(*rows):
-    return [{"cwd": str(cwd), "doc_dirs": dirs} for cwd, dirs in rows]
+    return [{"id": f"s{i}", "cwd": str(cwd), "doc_dirs": dirs} for i, (cwd, dirs) in enumerate(rows)]
 
 
 def listed(ctx_sessions) -> list[tuple]:
@@ -213,3 +213,50 @@ def test_route_lists_a_docs_repos_decisions_for_a_session_in_no_repo(tmp_path):
     assert listed(rows) == [("app-docs", "0001", "ACCEPTED")]
     s = served.Served([api.Loaded("design", design.module)], api.Context(Path("/tmp"), lambda: rows, lambda: None))
     assert "Loose" in s.read(str(docs / "0001-ACCEPTED-loose.md"))["text"]
+
+
+def follow(tmp_path, selected):
+    """Two repos, videography with two decisions and electronics with none, each with a session,
+    and a docs repo videography declared as well; the pane given the route's answer, as it lands,
+    with `selected` the session in context (#264)."""
+    repo(tmp_path / "videography", {"0001-ACCEPTED-a.md": "", "0002-PROPOSED-b.md": ""})
+    repo(tmp_path / "docs", {"0007-c.md": ""}, where="adr")
+    (tmp_path / "electronics" / ".git").mkdir(parents=True)
+    rows = [{"id": "v", "name": "video", "cwd": str(tmp_path / "videography"),
+             "doc_dirs": ["docs/adr", str(tmp_path / "docs" / "adr")] if selected == "v+" else None},
+            {"id": "e", "name": "elec", "cwd": str(tmp_path / "electronics"), "doc_dirs": None}]
+    ctx = api.Context(Path("/tmp"), lambda: rows, lambda: {"v+": "v"}.get(selected, selected))
+    got = served.Served([api.Loaded("design", design.module)], ctx).call("design", "decisions")
+    p = pane.Decisions(ctx)
+    p.rows, p.looked, p.scopes = got["decisions"], got["dirs"], got["scopes"]
+    return p
+
+
+@pytest.mark.parametrize("selected, numbers, repos, note, desc", [
+    (None, ["0002", "0001"], {"videography"}, "", "none selected: every repo's, as before"),
+    ("v", ["0002", "0001"], {"videography"}, "", "videography selected: its own, one repo, no Repo column"),
+    ("e", [], set(), "No decisions in electronics: docs/adr or set_doc_dirs.",
+     "electronics selected: none, and the note says so (Doug's report)"),
+    ("v+", ["0002", "0007", "0001"], {"videography"}, "",
+     "a declared sibling docs repo's decisions listed under the declaring repo, with its own"),
+    ("x", [], set(), "No decisions in x: docs/adr or set_doc_dirs.",
+     "a session the route hasn't seen yet: none until the next ask, never another repo's"),
+])
+def test_the_pane_follows_the_selected_session(tmp_path, selected, numbers, repos, note, desc):
+    p = follow(tmp_path, selected)
+    got = p.listed()
+    assert [r["number"] for r in got] == numbers, desc
+    assert {r["repo"] for r in got} == repos, f"{desc}: the repos (a Repo column only past one)"
+    assert p.note() == note, desc
+
+
+def test_the_route_scopes_a_repos_sessions_together_and_a_loose_one_alone(tmp_path):
+    d = repo(tmp_path / "app", {"0001-a.md": ""})
+    other = repo(tmp_path / "other", {"0002-b.md": ""}, where="adr")
+    rows = [{"id": "a1", "cwd": str(tmp_path / "app"), "doc_dirs": None},
+            {"id": "a2", "cwd": str(tmp_path / "app" / "sub"), "doc_dirs": None},
+            {"id": "l", "cwd": str(tmp_path), "doc_dirs": [str(other)]}]
+    (tmp_path / "app" / "sub").mkdir()
+    got = pane.scopes(rows)
+    assert got["a1"] == got["a2"] == {"name": "app", "dirs": [str(d)]}, "one repo, one scope"
+    assert got["l"] == {"name": tmp_path.name, "dirs": [str(other)]}, "no repo: its own declared dirs"

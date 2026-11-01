@@ -1,4 +1,4 @@
-<!-- fact sheet stamp: version 104, 2026-10-30T22:23:33Z, source 3a52fd1ed505e0c8 (make facts restamps it: AGENTS.md) -->
+<!-- fact sheet stamp: version 105, 2026-11-01T01:14:23Z, source 687d0f214cec56be (make facts restamps it: AGENTS.md) -->
 # Wheelhouse fact sheet
 
 What the helper chat knows before any question. The guide below is written by hand; the
@@ -20,7 +20,9 @@ daemon running.
   under it the buttons that act on the highlighted session.
 - Middle: the inbox (the item list: tasks, questions, decisions, subagents, PRs, docs), the
   conversation pane and the answer box with its send bar (Mode, Send).
-- Right and the other slots: the modules' panes (stats, PRs, Decisions) when installed. A
+- Right and the other slots: the modules' panes (stats, PRs, Decisions) when installed. With a
+  session selected, the PRs pane shows its PRs alone and the Decisions pane its repo's decisions
+  alone (with none, a line saying so: docs/adr or set_doc_dirs); with none selected, every repo's. A
   pane dragged by its title swaps places with another; Reset layout puts them back.
 - Session info: with a session selected, the ⓘ at the stats pane's top right opens its id
   (C copies it), user, machine, directory, branch, model, mode, start, transcript, and its
@@ -383,3 +385,4 @@ The app's command line args (make args). Give them to make run in ARGS, for exam
 - A dead session (not parked) keeps its red dot, and its rows dim everywhere: its session list row, its inbox items and conversation, its PRs (their lights kept bright) and the decisions only it looks at.
 - Shell (Alt+H, from anywhere) opens a quick shell in a new terminal tab, in the directory the session in context works in now, or home. Handing a session run in the wheelhouse to a Claude Code tab is now Handover to Claude Code in a shell, in its right-click menu.
 - A session can suggest a shell command for you to run: a C item with a Run button that opens it in an editable box and runs it in a new terminal tab, sending the output back if you tick it.
+- The Decisions pane follows the selected session, as the PRs pane does: its repo's decisions alone, or a line saying it has none; with no session selected, every repo's.

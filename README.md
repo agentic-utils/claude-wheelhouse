@@ -404,7 +404,11 @@ session.
   named it, or the first by path when several did). A session started outside any git repo
   (a projects folder, say) may name one too, absolute or relative to that folder, listed under the repo it
   is in. Read again every 10
-  seconds and whenever a session starts in another repo or names its directories. A row is
+  seconds and whenever a session starts in another repo or names its directories. With a
+  session selected, the pane follows it, as the PRs pane does: only its repo's decisions (those
+  in the directories its repo's sessions named, else `docs/adr`), and with none, a line saying
+  so (`No decisions in electronics: docs/adr or set_doc_dirs.`); Esc, or a click on the
+  selected session, lists every repo's again. A row is
   its number, status and title, and its repo when the pane lists more than one. The status is the doc's front matter `status:`, else
   a `Status:` line or `## Status` section, else its file name's (`0042-ACCEPTED-slug.md`),
   else `?`. PROPOSED and UNRESOLVED come first, then the rest, newest first; a column's
