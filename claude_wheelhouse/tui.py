@@ -6150,6 +6150,7 @@ class WheelhouseApp(App):
         from under a doc root (/docs), in place of what's selected until the selection moves:
         as a doc item shows, with no answer box."""
         self.shown_doc = (path, title)
+        self.items_table.show_cursor = False   # picked elsewhere: a click on the inbox's row is a fresh pick (#281)
         self.paint_sendbar()
         self.paint_detail()
 
@@ -6164,7 +6165,6 @@ class WheelhouseApp(App):
         if key in table.locked or (hidden and self.locks(item, self.cutoffs())):   # one autocleanse hid too
             self.notify(COMPACTING_LOCKED, severity="warning")
             return False
-        self.shown_doc = None
         if hidden:   # autocleanse hid it (a Landed line, a merged PR): selected, it's back (#235)
             self.select_row(key)
             self.paint_items()
@@ -7555,7 +7555,8 @@ class WheelhouseApp(App):
 
     def select_row(self, key: str) -> None:
         sid, ref = key.split("|")
-        if self.selected != (sid, ref or None):
+        if self.selected != (sid, ref or None) or self.shown_doc is not None:
+            self.shown_doc = None   # a module's doc gives way, even to the item it showed over (#281)
             self.selected = (sid, ref or None)   # an unseen decision is seen once looked at (dwelt)
             self.detail_note = None
             self.retarget()
