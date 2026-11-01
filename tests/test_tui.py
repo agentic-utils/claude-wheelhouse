@@ -10039,6 +10039,7 @@ def test_a_call_the_turn_waits_on_is_never_locked_by_a_compaction(kind, status, 
 
 
 @pytest.mark.anyio
+@pytest.mark.both
 @pytest.mark.parametrize("focus, typed, before, taken, desc", [
     ("items", "", False, True, "the inbox focused: its conversation shown and focused"),
     ("answer", "", False, True, "an empty answer box: focus taken all the same"),

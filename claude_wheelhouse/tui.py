@@ -6835,10 +6835,12 @@ class WheelhouseApp(App):
         """A compaction cycle that has started since the last refresh, whoever asked (Compact
         here, the session's request_compact, a /compact in its tab): its conversation shown
         (follow) and the inbox focused on its row, so the walls and the crew are in view (#277).
-        Not on the app's first refresh (a cycle already under way isn't news), never focus
+        Not on the app's first refresh with the sessions loaded (a cycle already under way isn't news), never focus
         taken from a text box with something typed in it (the row selected all the same, but for
         the answer box: selecting would swap its text under the person, retarget), nor from a
         dialog or full screen in front. Several at once: the last listed."""
+        if self.client.remote and ("sessions",) not in self.client.shown_seq:
+            return   # the daemon's list not fetched yet (unreachable, busy): no baseline from nothing
         cycles = {(s["id"], s["compaction_id"]) for s in self.sessions
                   if compacting_now(s) and self.running(s["id"])}
         started, self.cycles_seen = (cycles - self.cycles_seen if self.cycles_seen is not None else set()), cycles
