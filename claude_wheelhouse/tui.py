@@ -5942,7 +5942,7 @@ class WheelhouseApp(App):
             self.deleted = set()
         if not pending:   # where the app put it; an arrow pending stays pending
             self.items_cursor = table.cursor_key()
-        if rebuilt and key not in table.rows and table.row_count and key != self.peeked:   # its item went: take the one now
+        if rebuilt and key not in table.rows and table.row_count and (key is None or key != self.peeked):   # its item went: take the one now
             # under the cursor, the list going with it: one current session (D22)
             self.select_row(table.coordinate_to_cell_key((table.cursor_row, 0)).row_key.value)
         if not table.row_count:   # its item (or followed session) went and none is left: nothing selected
