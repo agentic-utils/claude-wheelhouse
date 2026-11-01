@@ -194,6 +194,8 @@ FEATURES: tuple[Feature, ...] = (
     Feature("send-wakes", UNRELEASED, ADVANCED,
             note="Ctrl+S or Alt+S on a session that isn't running asks to Unpark (a parked one) or Relaunch it "
                  "and send: it wakes with your message and its queue as its first prompt."),
+    Feature("ctrl-s-hint", UNRELEASED, ADVANCED,
+            note="Ctrl+S with text in the box asks whether you meant Ctrl+Enter; a second Ctrl+S sends the queue."),
     Feature("pr-actions", UNRELEASED, "prs",
             note="A PR in the PRs pane has Open, Merge and Request review buttons, and a right-click on its row gives "
                  "them as a menu: Merge asks first and says what stood in its way, and Request review asks the "
