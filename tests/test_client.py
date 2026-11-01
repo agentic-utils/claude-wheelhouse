@@ -471,33 +471,38 @@ def test_what_a_command_changed_is_fetched_where_it_says(store, sid, served, hea
         c.disconnect()
 
 
-@pytest.mark.parametrize("fails, desc", [
-    (False, "fetched on the worker, shown by land on the UI thread, not before"),
-    (True, "a fetch that fails is left to the fetching thread"),
-])
-def test_a_seen_mark_fetches_what_it_changed_for_land(store, sid, served, heard, monkeypatch, fails, desc):
+def test_a_seen_mark_fetches_what_it_changed_for_land(store, sid, served, heard):
     """#268: the seen mark, sent from a worker, fetches what it changed there too, for land to
-    show on the UI thread."""
+    show on the UI thread, not before."""
     d = served(store.path)
     c = heard(d.client())
     ref = store.post_item(sid, "decision", "chose", why="local")
     try:
         c.refresh()   # forced at the start: fetched here
         until(lambda: not c.in_flight and not c.dirty, desc="the stream's first fetches done")
-        if fails:
-            real = c.fetch
-            monkeypatch.setattr(c, "fetch", lambda key: (_ for _ in ()).throw(Unreachable("down"))
-                                if key == ("inbox",) else real(key))
         with c.lock:
             c.waiting.clear()
-        assert c.mark_seen(sid, ref), desc
-        if fails:
-            assert ("inbox",) not in c.waiting, f"{desc}: nothing to land yet"
-            monkeypatch.undo()
-            until(lambda: ("inbox",) in c.waiting, desc=f"{desc}: the fetching thread fetched it")
-        else:
-            assert ("inbox",) in c.waiting and c.item(sid, ref)["status"] == "unseen", f"{desc}: not shown yet"
+        assert c.mark_seen(sid, ref)
+        assert ("inbox",) in c.waiting and c.item(sid, ref)["status"] == "unseen", "fetched, not shown yet"
         c.land()
-        assert c.item(sid, ref)["status"] == "seen", desc
+        assert c.item(sid, ref)["status"] == "seen", "shown by land"
+    finally:
+        c.disconnect()
+
+
+def test_a_seen_marks_failed_fetch_is_left_to_the_fetching_thread(store, sid, served, monkeypatch):
+    """#268: a fetch_now that fails marks what it couldn't fetch for the fetching thread
+    (dirty), on a client whose threads aren't started, so no stream event marks it instead."""
+    c = served(store.path).client()
+    ref = store.post_item(sid, "decision", "chose", why="local")
+    try:
+        c.refresh()
+        real = c.fetch
+        monkeypatch.setattr(c, "fetch", lambda key: (_ for _ in ()).throw(Unreachable("down"))
+                            if key == ("inbox",) else real(key))
+        c.dirty.clear()
+        assert c.mark_seen(sid, ref)
+        assert ("inbox",) not in c.waiting and ("inbox",) in c.dirty and ("sessions",) in c.waiting, \
+            "the inbox left to the fetching thread, the sessions fetched"
     finally:
         c.disconnect()

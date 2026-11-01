@@ -10210,10 +10210,12 @@ async def test_the_inbox_repaints_what_changed_and_only_then(store, sid, monkeyp
     (False, "seen", "rested on: the mark shows as it lands, with no refresh"),
     (True, "unseen", "moved on before it landed: dropped, the next refresh shows it"),
 ])
-async def test_a_seen_mark_through_the_daemon_is_sent_off_the_ui_thread(store, sid, via, moved, shown, desc):
+async def test_a_seen_mark_through_the_daemon_is_sent_off_the_ui_thread(store, sid, via, clock, moved, shown,
+                                                                       desc):
     """#268: a decision marked seen by the dwell was sent, and the sessions and inbox fetched
     again, on the UI thread, 300 ms and more with a big inbox. Now on a worker; what it fetched
-    shows as it lands, unless the selection has moved on, when the next refresh shows it."""
+    shows as it lands, unless the selection has moved on, when the next refresh shows it. On
+    the clock: no tick of its own refreshes between."""
     if via == "local":
         pytest.skip("in process the mark is the store's own write, made at once")
     store.post_item(sid, "question", "anchor")
