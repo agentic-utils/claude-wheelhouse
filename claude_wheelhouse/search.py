@@ -66,7 +66,7 @@ def code_lines(md: str) -> set[int]:
             for n in range(*tok.map)}
 
 
-@functools.lru_cache(maxsize=256)
+@functools.lru_cache(maxsize=4096)   # a block each: a long conversation's every turn stays held
 def linked(md: str, sid: str, refs: frozenset) -> str:
     """Markdown with each id the session has (refs) a link to its item, outside code: made once
     for a text, however often it's painted."""
