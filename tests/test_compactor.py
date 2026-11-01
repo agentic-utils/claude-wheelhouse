@@ -75,8 +75,27 @@ def test_gap_within_cadence(seed):
 
 
 @pytest.mark.parametrize("state", sorted(compactor.WALLS))
-def test_stage_lines_fit_36_cells(state):
-    assert cell_len(compactor.WALLS[state]) <= 36, state
+def test_every_stages_rows_are_the_same_width(state):
+    """#277: one stage replaces the last in place, so every row of every stage is WIDTH cells,
+    well inside an 80-column pane, and the art is several rows, not one."""
+    rows = compactor.WALLS[state].split("\n")
+    assert len(rows) >= 4, f"{state}: {len(rows)} rows"
+    assert {cell_len(r) for r in rows} == {compactor.WIDTH} and compactor.WIDTH <= 40, f"{state}: {rows}"
+
+
+@pytest.mark.parametrize("state, origin, note, want, desc", [
+    ("requested", "you (Compact)", "", None, "requested: no art"),
+    ("preparing", "you (Compact)", "", "asked for by you (Compact) · 10:39Z", "who asked, under the art"),
+    ("completed", "you (Compact)", "220k → 40k", "220k → 40k · 10:41Z", "what came of it"),
+    ("completed", None, "", "10:41Z", "nothing to say: the time alone"),
+])
+def test_stage_text_puts_the_detail_under_the_art(state, origin, note, want, desc):
+    stamp = "10:39Z" if state == "preparing" else "10:41Z"
+    text = compactor.stage_text(state, origin, note, stamp)
+    if want is None:
+        assert text is None, desc
+    else:
+        assert text == compactor.WALLS[state] + "\n" + want, desc
 
 
 @pytest.mark.parametrize("windows, at_least, desc", [

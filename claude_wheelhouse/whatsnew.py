@@ -221,7 +221,8 @@ FEATURES: tuple[Feature, ...] = (
                  "has every switch; the first press asks once."),
     Feature("compacting-shown", UNRELEASED, "sessions", when="sdk",
             note="While a session is compacting, its Compact button is off, its inbox items and its Detail dim and "
-                 "ignore clicks, and its busy eye in the session list turns blue.",
+                 "ignore clicks, and its busy eye in the session list turns blue. Its conversation opens as the "
+                 "compaction starts, the trash compactor's walls redrawn in place as they close in.",
             tip="A blue eye: the session is compacting; its items dim until it's done."),
     Feature("keepalive-50", UNRELEASED, ADVANCED,
             note="The keepalive comes every 50 minutes, ahead of Claude Code's idle compaction at about 54."),

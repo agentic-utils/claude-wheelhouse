@@ -25,7 +25,7 @@ from textual.strip import Strip
 from textual.visual import Visual, visualize
 from textual.widgets import Button, Checkbox, DataTable, Footer, Input, Label, Select, TextArea
 
-from claude_wheelhouse import emoji, features, launch, models, ordering, transcript, transcript_usage, tui, tutorial
+from claude_wheelhouse import compactor, emoji, features, launch, models, ordering, transcript, transcript_usage, tui, tutorial
 from claude_wheelhouse.hub import Done, Hub
 from claude_wheelhouse.store import PROTOCOL_VERSION
 
@@ -9723,6 +9723,11 @@ async def test_a_compacting_session_shows_it(store, tmp_path, monkeypatch, size)
         store.command(sid, "compact")   # pressed: blue from here, before the host takes it
         await again()
         assert sid in app.query_one(SessionList).blue, f"{size}: blue at the press"
+        assert app.selected == (sid, None), f"{size}: its conversation shown as it starts (#277)"
+        with table.prevent(DataTable.RowHighlighted):   # T1 back, as before the press
+            table.move_cursor(row=table.get_row_index(t1), animate=False)
+        app.items_cursor = t1
+        app.select_row(t1)
         store.take_command(sid)
         cid = store.compaction(sid)["id"]
         store.move_compaction(sid, cid, "preparing")   # as the host writes it
@@ -9738,7 +9743,7 @@ async def test_a_compacting_session_shows_it(store, tmp_path, monkeypatch, size)
         await click(q1)
         assert app.selected == (sid, "T1"), f"{size}: a click on a locked row does nothing"
         table.focus()
-        for key in ("up", "up", "down"):
+        for key in ("down", "down"):
             await pilot.press(key)
             await pilot.pause()
             assert app.selected == (sid, "T1") and table.cursor_key() == t1, f"{size}: {key} never lands on a locked row"
@@ -9746,6 +9751,11 @@ async def test_a_compacting_session_shows_it(store, tmp_path, monkeypatch, size)
         await pilot.pause()
         assert app.screen is app.screen_stack[0], f"{size}: Enter opens nothing locked"
         assert app.detail.has_class("compacting"), f"{size}: Detail dims on the session's item"
+        await pilot.press("up")
+        await pilot.pause()
+        assert app.selected == (sid, None), f"{size}: its conversation, never locked, can be switched to (#277)"
+        assert not app.detail.has_class("compacting"), f"{size}: the walls shown undimmed"
+        table.focus()
         sessions = app.query_one(SessionList)
         assert sid in sessions.eyes and sid in sessions.blue, f"{size}: its eye sweeps, blue"
         assert any(EYE_BLUE[0] in str(sp.style) for sp in tui.cylon(0, colours=EYE_BLUE).spans), size
@@ -9871,7 +9881,7 @@ async def test_a_compactions_cut_off_is_the_stores_for_every_app(store, tmp_path
         async with again.run_test(size=(160, 40)) as pilot:
             seen.append(await locked_refs(again, pilot))
     for refs, dims in seen:
-        assert refs == {"", "T1"}, f"{scenario}: the conversation and T1 locked, never Q1 posted since: {refs}"
+        assert refs == {"T1"}, f"{scenario}: T1 locked, never the conversation (#277) or Q1 posted since: {refs}"
         assert dims == {"T1": True, "Q1": False}, f"{scenario}: Detail dims on a locked item only: {dims}"
     assert len({frozenset(r) for r, _ in seen}) == 1, f"{scenario}: every app agrees"
 
@@ -10028,12 +10038,52 @@ def test_a_call_the_turn_waits_on_is_never_locked_by_a_compaction(kind, status, 
     assert WheelhouseApp.locks(it, {"s1": 5}) == locked, desc
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize("focus, typed, before, taken, desc", [
+    ("items", "", False, True, "the inbox focused: its conversation shown and focused"),
+    ("answer", "", False, True, "an empty answer box: focus taken all the same"),
+    ("answer", "half a reply", False, False, "typing in the answer box: neither focus nor its text moved"),
+    ("items", "", True, False, "a cycle already under way as the app starts: not news"),
+])
+async def test_a_compaction_starting_shows_its_conversation(store, tmp_path, monkeypatch, focus, typed, before, taken, desc):
+    """#277: as a compaction starts, whoever asked, its session's conversation is shown and its
+    inbox row focused, so the walls are in view; never over text being typed, nor for one
+    already running when the app starts."""
+    from claude_wheelhouse import liveness
+    from claude_wheelhouse.tui import ItemList
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
+    a = store.create_session(str(tmp_path), name="alpha", runner="sdk")
+    b = store.create_session(str(tmp_path), name="bravo", runner="sdk")
+    store.post_item(b, "question", "which?")
+    if before:
+        store.command(a, "compact")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pick(app, pilot, b)
+        box = app.answer if focus == "answer" else app.query_one(ItemList)
+        box.focus()
+        if typed:
+            box.text = typed
+        await pilot.pause()
+        if not before:
+            store.command(a, "compact")   # the session's request_compact, or a /compact, alike
+        app.refresh_data()
+        await pilot.pause()
+        if taken:
+            assert (app.filter_sid, app.selected) == (a, (a, None)), f"{desc}: {app.selected}"
+            assert app.focused is app.query_one(ItemList), f"{desc}: {app.focused}"
+            assert f"{a}|" not in app.items_table.locked, f"{desc}: the conversation row stays selectable"
+        else:
+            assert app.selected == (b, None) and app.focused is box, f"{desc}: {app.selected}, {app.focused}"
+            assert not typed or app.answer.text == typed, f"{desc}: the text kept"
+
+
 @pytest.mark.parametrize("width", [36, 76])
 @pytest.mark.parametrize("who, text", [
-    ("stage", "▐█          █▌ walls closing in\nasked for by you (Compact) · 10:39Z"),
-    ("stage", "▐████████████▌ compacted\n220k → 40k · 10:41Z"),
+    ("stage", compactor.stage_text("preparing", "you (Compact)", "", "10:39Z")),
+    ("stage", compactor.stage_text("completed", None, "220k → 40k", "10:41Z")),
     ("crew", "Han: I've got a bad feeling about these walls.\nC-3PO: Sir, the odds of survival are rather poor!"),
-])
+], ids=["preparing", "completed", "crew"])
 def test_stage_blocks_render_as_plain_text_never_markdown(width, who, text):
     """#244: Markdown would turn the art into rules and bullets; each line is cut, never wrapped."""
     from rich.console import Console
@@ -10043,7 +10093,7 @@ def test_stage_blocks_render_as_plain_text_never_markdown(width, who, text):
     shown = ["".join(seg.text for seg in line) for line in Segment.split_lines(rendered)]
     assert len(shown) == len(text.split("\n")), shown
     for line, want in zip(shown, text.split("\n")):
-        assert line.rstrip() == want or (line.rstrip().endswith("…") and want.startswith(line.rstrip()[:-1])), (line, want)
+        assert line.rstrip() == want.rstrip() or (line.rstrip().endswith("…") and want.startswith(line.rstrip()[:-1])), (line, want)
 
 
 @pytest.mark.anyio

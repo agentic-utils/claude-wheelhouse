@@ -861,15 +861,21 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
   8-hour mark, or Claude Code compacting by itself at full context): from the press until
   `/compact` has ended, or the cycle fails or is cancelled, the session is busy, as during
   any operation (below, Operations). Throughout, Compact is off, the session's inbox items and Detail dim
-  and ignore clicks, and its eye in the session list sweeps blue instead of red. If the
+  and ignore clicks, and its eye in the session list sweeps blue instead of red. Its conversation
+  row dims but stays selectable, and as the cycle starts the app shows that conversation and
+  puts the focus on its inbox row (not while you're typing in a text box: the row is selected,
+  focus stays, and the answer box's text is never swapped, so then it's left as it was). If the
   session is still writing its notes after 2 minutes, a question asks whether to keep
   waiting (asked again 2 minutes later) or abort (the notes turn is interrupted, nothing is
   compacted, and queued answers stay queued); `/compact` itself has 10 minutes before the
   cycle fails. Each compaction is also a task in the inbox, "Compact demo: 220k context", that
   moves with it (running, then done with the tokens before and after, blocked with why it
   failed, or dropped) and holds the 2-minute question under it; the session never sees it.
-  The conversation shows each stage as a blue line of the detention-level trash compactor
-  closing in, and while it runs, the odd panicked exchange between the crew and the droids.
+  The conversation shows the detention-level trash compactor in blue, drawn once per cycle and
+  redrawn in place at each stage: the walls thicken inward while the crew stand, then panic,
+  and are gone once it's compacted (a failed or cancelled one leaves the walls open), with who
+  asked or what came of it under the art. While it runs, the odd panicked exchange between
+  the crew and the droids appears below.
   A session in a terminal tab gets the same, from the plugin's PreCompact hook, whether
   `/compact` was typed there or Claude Code compacted by itself; there the wheelhouse can hold
   only what it sends, never what's typed in the tab. The session can also ask for a compaction itself, with

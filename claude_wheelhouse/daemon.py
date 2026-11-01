@@ -588,8 +588,9 @@ class Daemon:
         for sid, follower in list(self.hub.followers.items()):
             stamp = stamp_of(follower)
             s = self.hub.by_id.get(sid)
-            if s is not None and compacting_now(s):   # its crew's excerpts come due as time passes (#244)
-                stamp = (stamp, len(compaction_entries(self.hub.store.stages(sid), True)))
+            # its crew's excerpts come due as time passes (#244), and a new stage redraws the art in place (#277)
+            if s is not None and compacting_now(s):
+                stamp = (stamp, tuple(compaction_entries(self.hub.store.stages(sid), True)))
             if stamp is not None and stamp != self.grown.get(sid):
                 self.publish("conversation", sid)
             self.grown[sid] = stamp
