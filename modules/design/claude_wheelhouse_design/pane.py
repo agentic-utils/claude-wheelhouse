@@ -134,6 +134,7 @@ class Decisions(Vertical):
         self.again = False                   # asked while an ask was out: asked again when it lands
         self.shown: str | None = None        # the path last shown in Detail from here
         self.drawn: tuple | None = None      # what the table was last built from
+        self.said: str | None = None         # what the note last said
 
     def compose(self):
         yield DecisionTable(id="decision-list", cursor_type="row", zebra_stripes=False)
@@ -218,8 +219,10 @@ class Decisions(Vertical):
         note = self.query_one("#decisions-note", Static)
         rows = sorted_by(self.listed(), self.sort)
         said = self.note()
-        note.update(said)
-        note.display = bool(said)
+        if said != self.said:   # paint runs every tick (settle): an update relays out the screen
+            self.said = said
+            note.update(said)
+            note.display = bool(said)
         width = self.content_size.width
         drawn = (tuple(tuple(sorted(r.items())) for r in rows), self.sort, width)
         if drawn == self.drawn:
