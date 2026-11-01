@@ -3246,7 +3246,8 @@ class SearchItems(Dialog):
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
             yield Label(Text(self.heading), classes="dialog-title")
-            yield Input(self.typed, id="search-text", placeholder="An id or words of a title")
+            yield Input(self.typed, id="search-text", placeholder="An id or words of a title",
+                        select_on_focus=False)   # the key that opened it kept, the next typed after it
             yield Checkbox("Show hidden", self.hidden, id="search-hidden", compact=True)
             yield OptionList(id="search-results")
             yield Static(id="search-more")

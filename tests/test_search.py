@@ -194,6 +194,7 @@ async def test_picking_a_child_under_a_collapsed_parent_shows_it(store, sid):
 @pytest.mark.parametrize("key, typed, opens, desc", [
     ("d", "d", True, "a letter"), ("T", "T", True, "a capital"), ("3", "3", True, "a digit"),
     ("space", "", False, "Space opens nothing"),
+    ("depl", "depl", True, "the keys after it typed after it, not over it"),
 ])
 async def test_typing_in_the_inbox_opens_search(store, sid, key, typed, opens, desc):
     store.post_item(sid, "task", "deploy")
@@ -202,7 +203,7 @@ async def test_typing_in_the_inbox_opens_search(store, sid, key, typed, opens, d
         await pilot.pause()
         app.items_table.focus()
         await pilot.pause()
-        await pilot.press(key)
+        await pilot.press(*([key] if key == "space" else key))
         await pilot.pause()
         assert isinstance(app.screen, SearchItems) is opens, desc
         if opens:
