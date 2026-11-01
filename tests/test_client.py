@@ -460,17 +460,13 @@ def test_what_a_command_changed_is_fetched_where_it_says(store, sid, served, hea
     c = d.client(synchronous=True) if synchronous else heard(d.client())
     ref = store.post_item(sid, "decision", "chose", why="local")
     try:
-        c.refresh()
-        if not synchronous:
-            until(lambda: ("inbox",) in c.waiting, desc="the first fetch")
-            c.refresh()
+        c.refresh()   # forced at the start: fetched here
         c.forced = False
         c.command(f"/items/{sid}/{ref}/seen", {}, refetch)
         assert c.forced == forced, desc
         if refetch == "later" and not synchronous:
-            until(lambda: ("inbox",) in c.waiting, desc=f"{desc}: fetched in the background")
-            c.refresh()
-            assert c.item(sid, ref)["status"] == "seen", f"{desc}: shown at the refresh"
+            until(lambda: (c.refresh(), c.item(sid, ref)["status"])[1] == "seen",
+                  desc=f"{desc}: fetched in the background, shown at a refresh")
     finally:
         c.disconnect()
 
@@ -486,9 +482,8 @@ def test_a_seen_mark_fetches_what_it_changed_for_land(store, sid, served, heard,
     c = heard(d.client())
     ref = store.post_item(sid, "decision", "chose", why="local")
     try:
-        c.refresh()
-        until(lambda: ("inbox",) in c.waiting, desc="the first fetch")
-        c.refresh()
+        c.refresh()   # forced at the start: fetched here
+        until(lambda: not c.in_flight and not c.dirty, desc="the stream's first fetches done")
         if fails:
             real = c.fetch
             monkeypatch.setattr(c, "fetch", lambda key: (_ for _ in ()).throw(Unreachable("down"))

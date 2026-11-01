@@ -10288,7 +10288,12 @@ async def test_a_dialogs_shade_is_textuals_drawn_a_line_at_a_time(store, sid, mo
                 screen._styles_cache.clear()
             return drawn
 
+        def fresh() -> None:   # the dialogs beneath drawn again: Textual refreshes only the top one
+            for screen in beneath[1:]:   # for a change on the app (the title's animation, say)
+                screen._styles_cache.clear()
+
         def ours() -> list:   # a frame's crop at once, as render_lines draws it
+            fresh()
             visible_screen_stack.set(list(beneath))
             dialog.beneath = dialog.lines_beneath(list(rows))
             try:
@@ -10297,6 +10302,7 @@ async def test_a_dialogs_shade_is_textuals_drawn_a_line_at_a_time(store, sid, mo
                 dialog.beneath = None
 
         def by_line() -> list:   # a line asked for alone
+            fresh()
             return [(visible_screen_stack.set(list(beneath)), dialog.render_line(y))[1] for y in rows]
 
         def cells(strips) -> list:
@@ -10306,8 +10312,6 @@ async def test_a_dialogs_shade_is_textuals_drawn_a_line_at_a_time(store, sid, mo
         store.post_item(sid, "question", "zebra")
         app.refresh_data()
         await pilot.pause()
-        for screen in beneath[1:]:   # as Textual's: a change on the app redraws the top dialog alone
-            screen._styles_cache.clear()
         assert any("zebra" in s.text for s in textuals()), f"{desc}: the change shows in Textual's"
         assert any("zebra" in s.text for s in ours()), f"{desc}: a change beneath shows through"
         assert cells(ours()) == cells(textuals()), f"{desc}: and still as Textual draws it"
