@@ -583,3 +583,51 @@ def test_a_tabs_compaction_says_its_sizes_from_its_transcript(store, sid, tmp_pa
     cli.tab_compaction(store, sid, end=True, hook={"transcript_path": str(path)})
     assert store.thread(sid, c["item"])[-1]["body"] == "415k → 10k"
     assert store.item(sid, c["item"])["title"] == "Compact demo: 415k context"
+
+
+@pytest.mark.parametrize("command, why, want_output, error, desc", [
+    ("gh pr view 263", "Check the deployed ref", False, None, "a command: shown, nothing asked back"),
+    ("make deploy", "Deploy", True, None, "asking for the output"),
+    ("echo ’x", "Check", False, "U+2019 at line 1, column 6", "a curly quote: refused with its place"),
+    ("\n".join(["ls"] * 21), "Check", False, "21 lines", "too many lines"),
+    ("x" * 2001, "Check", False, "2001 characters", "too long"),
+    ("ls", "", False, "why is empty", "no why"),
+    ("ls", "one\ntwo", False, "one line", "a why over one line"),
+])
+def test_suggest_command(store, sid, command, why, want_output, error, desc):
+    """#257: a command item, its why the title and the command the body, checked at post time."""
+    from mcp.server.mcpserver.exceptions import ToolError
+    from claude_wheelhouse import mcp_server
+    mcp_server._store, mcp_server._sid = store, sid
+    if error:
+        with pytest.raises(ToolError, match=error.replace("+", r"\+")):
+            mcp_server.suggest_command(command, why, want_output)
+        assert not [i for i in store.items(sid) if i["kind"] == "command"], desc
+        return
+    assert mcp_server.suggest_command(command, why, want_output) == "C1: shown", desc
+    item = store.item(sid, "C1")
+    assert (item["kind"], item["title"], item["body"], item["status"], bool(item["want_output"])) == \
+        ("command", why, command, "new", want_output), desc
+
+
+def test_suggesting_a_command_again_updates_its_item(store, sid):
+    """#257: the same command from the same session is the same item, back to new."""
+    from claude_wheelhouse import mcp_server
+    mcp_server._store, mcp_server._sid = store, sid
+    mcp_server.suggest_command("ls", "List")
+    store.ran(sid, "C1", "ran 14:05")
+    assert mcp_server.suggest_command("ls", "List again", True) == "C1: shown"
+    assert mcp_server.suggest_command("pwd", "Where") == "C2: shown"
+    item = store.item(sid, "C1")
+    assert (item["title"], item["status"], item["want_output"]) == ("List again", "new", 1)
+
+
+def test_a_command_is_posted_only_with_suggest_command_and_its_status_is_the_persons(store, sid):
+    from mcp.server.mcpserver.exceptions import ToolError
+    from claude_wheelhouse import mcp_server
+    mcp_server._store, mcp_server._sid = store, sid
+    with pytest.raises(ToolError, match="suggest_command"):
+        mcp_server.post_item("command", "ls")
+    mcp_server.suggest_command("ls", "List")
+    with pytest.raises(ToolError, match="the person's"):
+        mcp_server.update_item("C1", status="run")

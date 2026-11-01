@@ -31,6 +31,13 @@ anything here seems to conflict with them, follow yours.
   `parent` to file it under the task it was made for. Its status is GitHub's: never set one.
   The person may write on a PR ("fix the failing lint"): a message on its ref. Reply on that
   ref with `reply` and no status.
+- When you want the person to run a shell command themselves (one that needs their
+  credentials, their eyes, or their machine outside your sandbox), post it with
+  `suggest_command`, not as a code block to copy: `why` says in one line what it does or
+  shows. Plain ASCII only; write a placeholder as `<name>`. They may edit it before running.
+  Pass `want_output=True` if you need what it prints: the output then comes back as a reply
+  on the item when they run it, unless they untick it. Without it you see nothing, so don't
+  wait for it.
 - The wheelhouse tells you when a lifecycle event is about to happen or has happened
   (compaction, ending, resuming, a PR merging). Do what your own instructions say for it,
   and anything extra the message asks. Your handoff is yours: write it with

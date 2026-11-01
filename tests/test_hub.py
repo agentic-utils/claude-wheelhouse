@@ -11,7 +11,7 @@ import pytest
 
 from claude_wheelhouse import fork as fork_mod, host as host_mod, hub as hub_mod, launch, liveness, models, plan_usage, subagents, transcript, transcript_usage, tutorial, whatsnew
 from claude_wheelhouse.hub import Hub
-from claude_wheelhouse.store import PROTOCOL_VERSION, SessionGone, compacting_now, mode as store_mode
+from claude_wheelhouse.store import PROTOCOL_VERSION, Busy, SessionGone, compacting_now, mode as store_mode
 
 real_open_session = launch.open_session   # before any test stubs it
 
@@ -759,7 +759,7 @@ def test_compact_first_never_asks_twice(hub, store, sid, monkeypatch, state, sen
     if sent:
         assert store.compaction(sid)["origin"] == "relaunch", desc
     else:
-        assert "is compacting: relaunch once it's done" in done.notices[0].text, desc
+        assert "is busy compacting: relaunch once it's done" in done.notices[0].text, desc
 
 
 def test_interrupt_cancels_compact_first_in_every_wheelhouse(store, sid, monkeypatch):
@@ -793,28 +793,29 @@ def test_a_compacting_relaunch_is_carried_on_by_a_hub_started_again(store, sid, 
     assert sid in again.relaunching and sid in again.compacting
 
 
-def test_a_command_pressed_as_compact_first_stops_the_host_stays_for_the_next(hub, store, sid, monkeypatch):
-    """Only the Compact it asked for is taken back: a Shell pressed meanwhile is the new host's."""
+def test_a_shell_pressed_while_relaunching_compact_first_is_refused(hub, store, sid, monkeypatch):
+    """#249: a Relaunch is an operation; Shell waits for it, and nothing is left for the new host."""
+    from claude_wheelhouse.store import Busy
     alive = {4242}
     killed, _ = compacting(hub, store, sid, monkeypatch, alive)
     compacted_to(store, sid, 40_000, "idle")
-    store.command(sid, "shell")
+    with pytest.raises(Busy, match="busy relaunching"):
+        store.command(sid, "shell")
     hub.refresh()
     hub.finish_relaunches()
-    assert killed == [4242] and store.session(sid)["host_command"] == "shell"
+    assert killed == [4242] and store.session(sid)["host_command"] is None
 
 
 @pytest.mark.parametrize("pending, left, desc", [
     ("interrupt", None, "an Interrupt pressed in the gap: not left to greet the new host as interrupted"),
     ("compact", None, "the Compact it asked for, untaken: not run again"),
-    ("shell", "shell", "a Shell: the person's, left for the new host"),
 ])
 def test_stopping_for_the_relaunch_clears_only_what_would_misgreet_the_new_host(hub, store, sid, monkeypatch,
                                                                                 pending, left, desc):
     alive = {4242}
     killed, _ = compacting(hub, store, sid, monkeypatch, alive)
     compacted_to(store, sid, 40_000, "idle")
-    store.command(sid, pending)
+    store.db.execute("UPDATE sessions SET host_command = ?", (pending,))   # left in the gap, as by older code
     hub.refresh()
     hub.finish_relaunches()
     assert killed == [4242] and store.session(sid)["host_command"] == left, desc
@@ -1567,7 +1568,6 @@ def in_cycle(store, sid, state="preparing"):
 
 
 @pytest.mark.parametrize("act, desc", [
-    (lambda h, sid: h.submit((sid, None), "hi"), "a queued answer"),
     (lambda h, sid: h.submit((sid, None), "hi", now=True), "Alt+S"),
     (lambda h, sid: h.send_queue(sid), "Ctrl+S"),
     (lambda h, sid: h.host_command(sid, "compact"), "Compact again"),
@@ -1587,20 +1587,23 @@ def test_a_refused_action_is_said_as_one_warning(hub, store, sid, monkeypatch, a
     hub.refresh()
     done = act(hub, sid)
     assert not done.ok and done.notices[0].severity == "warning", desc
-    assert "demo is compacting: " in done.notices[0].text and "or Interrupt to cancel the compaction." in \
+    assert "demo is busy compacting: " in done.notices[0].text and "or Interrupt to abort it." in \
         done.notices[0].text, desc
     assert len(store.drafts(sid)) == 1 and not store.pending(sid), f"{desc}: the queue as it was"
 
 
-def test_interrupt_and_just_stop_it_go_during_a_cycle(hub, store, sid, monkeypatch):
+def test_interrupt_goes_and_just_stop_it_is_refused_during_a_cycle(hub, store, sid, monkeypatch):
+    """Q245: Interrupt is the way out of an operation; Stop & Forget's "Just stop it" waits."""
     host(store, sid)
     monkeypatch.setattr(liveness, "is_alive", lambda pid, *a: True)
     monkeypatch.setattr(liveness, "status", lambda s, **kw: "live")
     in_cycle(store, sid)
     hub.refresh()
-    assert hub.host_command(sid, "interrupt").ok
     monkeypatch.setattr(Hub, "stop_process", staticmethod(lambda s: True))
-    assert hub.force(sid, "end").ok and store.session(sid) is None, "Just stop it: the session, cycle and all"
+    done = hub.force(sid, "end")
+    assert not done.ok and "busy compacting: stop and forget once it's done" in done.notices[0].text
+    assert store.session(sid) is not None, "Just stop it refused: the session stays"
+    assert hub.host_command(sid, "interrupt").ok
 
 
 def test_send_all_skips_a_compacting_session_and_names_it(hub, store, sid, tmp_path, monkeypatch):
@@ -1612,7 +1615,7 @@ def test_send_all_skips_a_compacting_session_and_names_it(hub, store, sid, tmp_p
     hub.refresh()
     done = hub.send_all()
     assert done.ok and [m["session_id"] for m in store.drafts()] == [sid]
-    assert any("demo is compacting" in n.text and n.severity == "warning" for n in done.notices), done.notices
+    assert any("demo is compacting in its tab" in n.text and n.severity == "warning" for n in done.notices), done.notices
 
 
 def test_an_answer_to_a_waiting_permission_goes_at_once_whatever_the_mode(hub, store, sid):
@@ -1678,7 +1681,7 @@ def test_park_with_compact_first_is_refused_in_a_tab(hub, store, sid, monkeypatc
     ("person", 30, "requested", "pressed 30 s ago, not yet claimed: within CLAIM_WITHIN"),
     ("person", 61, "failed", "unclaimed past CLAIM_WITHIN (an older or wedged host): failed, unlocked"),
     ("park", 61, "requested", "Park's waits for its park, an hour, not CLAIM_WITHIN"),
-    ("park", host_mod.PARK_COMPACT_WITHIN + 1, "failed", "Park's past its own deadline: failed"),
+    ("park", host_mod.PARK_WITHIN + 1, "failed", "Park's past its op's deadline: the op fails, its cycle with it"),
 ])
 def test_an_unclaimed_cycle_has_a_deadline(hub, store, sid, monkeypatch, origin, age, state, desc):
     from datetime import datetime, timedelta, timezone
@@ -1691,6 +1694,8 @@ def test_an_unclaimed_cycle_has_a_deadline(hub, store, sid, monkeypatch, origin,
         store.command(sid, "compact")
     at = (datetime.now(timezone.utc) - timedelta(seconds=age)).isoformat(timespec="microseconds")
     store.db.execute("UPDATE sessions SET compaction_at = ?", (at,))
+    if origin == "park":   # the op's deadline owns it (#249)
+        store.db.execute("UPDATE sessions SET op_deadline = ?", (at,) if age > host_mod.PARK_WITHIN else (None,))
     hub.refresh()
     assert store.compaction(sid)["state"] == state, desc
     assert len(store.drafts(sid)) == 1, f"{desc}: drafts stay queued"
@@ -1773,3 +1778,123 @@ def test_a_wake_never_sends_on_a_compaction_task(hub, store, sid, opened):
     assert not done.ok and "own record of a compaction" in done.notices[0].text
     assert not opened and not store.pending(sid), "not woken, nothing sent"
 
+
+
+@pytest.mark.parametrize("records, start_exists, want_dir, said, desc", [
+    ([{"type": "user", "cwd": "WT"}], True, "WT", None, "the transcript's newest cwd: a worktree it cd'd into"),
+    ([{"type": "user", "cwd": "START"}, {"type": "assistant", "cwd": "WT"}, {"type": "x"}], True, "WT", None,
+     "the newest record that has one"),
+    ([{"type": "user", "cwd": "WT"}, {"type": "assistant", "cwd": "GONE", "isSidechain": True}], True, "WT", None,
+     "a subagent's record, elsewhere, never counts"),
+    (None, True, "START", None, "no transcript: where it started"),
+    ([{"type": "user", "cwd": "GONE"}], True, "HOME", "GONE is gone", "its directory gone: home, said"),
+    (None, False, "HOME", "START is gone", "where it started gone too"),
+    ("none", True, "HOME", None, "no session: home, nothing said"),
+])
+def test_open_shell_picks_the_sessions_live_directory(store, projects, monkeypatch, records, start_exists, want_dir,
+                                                      said, desc):
+    """#257: Shell opens where the session works now, else home with a notice naming the one gone."""
+    root = projects / "dirs"
+    paths = {"START": root / "start", "WT": root / "wt", "GONE": root / "gone", "HOME": root / "home"}
+    for name in ("WT", "HOME") + (("START",) if start_exists else ()):
+        paths[name].mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(paths["HOME"]))
+    sid = store.create_session(str(paths["START"]), name="demo")
+    if isinstance(records, list):
+        folder = projects / "projects" / "p"
+        folder.mkdir(parents=True)
+        folder.joinpath(f"{sid}.jsonl").write_text(
+            "".join(json.dumps({**r, **({"cwd": str(paths[r["cwd"]])} if "cwd" in r else {})}) + "\n" for r in records))
+    opened = []
+    monkeypatch.setattr(launch, "open_shell", lambda st, cwd, title, **kw: opened.append((cwd, title)))
+    done = Hub(store).open_shell(None if records == "none" else sid)
+    assert done.ok and opened == [(str(paths[want_dir]), "shell" if records == "none" else "demo")], desc
+    warnings = [e.text.replace(str(root) + "/", "") for e in done.notices if e.severity == "warning"]
+    assert (warnings[0].upper().startswith(said.split()[0]) if said else not warnings), f"{desc}: {warnings}"
+
+
+@pytest.mark.parametrize("mode_, parked, busy, want, desc", [
+    ("immediate", False, None, "sent", "Immediate: sent"),
+    ("queued", False, None, "queued", "Queued: queued for Send"),
+    ("immediate", True, None, "queued", "parked: queued, for the resume"),
+    ("immediate", False, "compaction = 'compacting', compaction_origin = 'person'", "queued",
+     "compacting (blue): queued, never refused (D232)"),
+    ("immediate", False, "op = 'park', op_state = 'told'", "queued", "parking (blue): queued, never refused"),
+    ("immediate", False, "op = 'relaunch', op_state = 'starting'", "queued", "relaunching (blue): queued"),
+    ("immediate", False, "compaction = 'requested', compaction_origin = 'quiet'", "sent",
+     "the quiet mark's cycle: called off and sent, as a person's answer"),
+])
+def test_send_or_queue(store, sid, mode_, parked, busy, want, desc):
+    """#257: a run's output goes as an answer would, through #249's one busy check (operating)."""
+    ref = store.post_command(sid, "ls", "List")[0]
+    store.db.execute("UPDATE sessions SET send_mode = ?, parked = ?", (mode_, int(parked)))
+    if busy:
+        store.db.execute(f"UPDATE sessions SET {busy}")
+    assert hub_mod.send_or_queue(store, sid, ref, "out") == want, desc
+    queued = [m["body"] for m in store.drafts(sid)]
+    assert queued == (["out"] if want == "queued" else []), desc
+
+
+def test_send_or_queue_busy_after_the_look(store, sid, monkeypatch):
+    """The send refused as busy (an operation under way): queued, not lost (#249, #257)."""
+    ref = store.post_command(sid, "ls", "List")[0]
+    store.db.execute("UPDATE sessions SET send_mode = 'immediate'")
+
+    def busy(*_):
+        raise Busy("demo", "send", "park")
+    monkeypatch.setattr(store, "send", busy)
+    assert hub_mod.send_or_queue(store, sid, ref, "out") == "queued"
+    assert [m["body"] for m in store.drafts(sid)] == ["out"]
+
+
+@pytest.mark.parametrize("text, send, gone, ok, note, desc", [
+    ("ls", False, False, True, "ran", "as suggested, unticked: run, noted"),
+    ("ls -l", False, False, True, "ran, edited", "edited: noted so"),
+    ("ls", True, False, True, None, "ticked: run, the output its record"),
+    ("ls", False, True, False, None, "its directory gone: refused, nothing run"),
+])
+def test_run_command(store, projects, monkeypatch, text, send, gone, ok, note, desc):
+    """#257: Run writes a 0600 file and opens a tab whose command line carries only the
+    database's path and the key; refused rather than run elsewhere when the directory's gone."""
+    work = projects / "work"
+    work.mkdir()
+    sid = store.create_session(str(work), name="demo")
+    ref = store.post_command(sid, "ls", "List")[0]
+    if gone:
+        work.rmdir()
+    opened = []
+    monkeypatch.setattr(launch, "open_shell", lambda st, cwd, title, command=None, note="": opened.append((cwd, command)))
+    done = Hub(store).run_command(sid, ref, text, send)
+    assert done.ok == ok, desc
+    item = store.item(sid, ref)
+    assert item["status"] == ("run" if ok else "new"), desc
+    notes = [m["body"] for m in store.thread(sid, ref) if m["kind"] == "run"]
+    assert [n.split(" ", 2)[0] + (", edited" if n.endswith("edited") else "") for n in notes] == \
+        ([note] if note else []), desc
+    if not ok:
+        assert opened == [] and "gone" in done.notices[0].text, desc
+        return
+    (cwd, command), = opened
+    assert cwd == str(work) and command[2:5] == ["claude_wheelhouse", "shell", "--db"], desc
+    assert command[5] == str(store.path), f"{desc}: the database, a scratch one too"
+    payload = json.loads((store.path.parent / "shell" / command[6]).read_text())
+    assert (payload["text"], payload["want"], payload["edited"]) == (text, send, text != "ls"), desc
+
+
+def test_close_and_reopen_a_command(store, sid):
+    ref = store.post_command(sid, "ls", "List")[0]
+    hub = Hub(store)
+    hub.close(sid, ref, True)
+    assert store.item(sid, ref)["status"] == "closed"
+    hub.close(sid, ref, False)
+    assert store.item(sid, ref)["status"] == "new"
+
+
+def test_a_runs_note_is_never_the_sessions(store, sid):
+    """#257: the note an unsent run leaves is the person's alone: the session's view of the
+    thread leaves it out, and it never makes the item await a reply."""
+    ref = store.post_command(sid, "ls", "List")[0]
+    store.ran(sid, ref, "ran 14:05")
+    assert [m["body"] for m in store.thread(sid, ref)] == ["ran 14:05"]
+    assert list(store.thread(sid, ref, in_flight=False)) == []
+    assert (sid, ref) not in store.awaiting()

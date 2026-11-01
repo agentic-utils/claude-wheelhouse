@@ -1732,7 +1732,7 @@ def test_parking_compaction_holds_messages_and_requests(host, store, sid, then, 
         finish_at(host, 220_000)
     run(host.poll())
     host.client.queries.clear()
-    with pytest.raises(store_mod.Compacting):
+    with pytest.raises(store_mod.Busy):
         store.send(sid, "one more thing")
     store.notice(sid, "one more thing")   # not the person's: held all the same
     run(host.poll())
@@ -1744,13 +1744,13 @@ def test_parking_compaction_holds_messages_and_requests(host, store, sid, then, 
 
 @pytest.mark.parametrize("step, desc", [
     ("interrupt", "Interrupt during Park's compaction: interrupted, and the host stops"),
-    ("late", "the park comes after PARK_COMPACT_WITHIN: no compaction, its flag dropped"),
+    ("late", "the park comes after PARK_WITHIN: no compaction, its flag dropped"),
 ])
 def test_parks_compact_first_gives_way(host, store, sid, monkeypatch, step, desc):
     store.request(sid, "park", True)
     run(host.poll())
     if step == "late":
-        host.park_told -= host_mod.PARK_COMPACT_WITHIN + 1
+        host.park_told -= host_mod.PARK_WITHIN + 1
         run(host.poll())
         assert not store.session(sid)["park_compact"], desc
     store.set_parked(sid, True)
@@ -1815,7 +1815,7 @@ def test_stop_and_forget_is_refused_while_parking_compacts(host, store, sid, how
     """Q5: Let it know would send a turn, so it is refused during the cycle; Just stop it stays."""
     store.post_item(sid, "question", "which db?")
     setup_parking(host, store, sid, how)
-    with pytest.raises(store_mod.Compacting, match="stop and forget once it's done"):
+    with pytest.raises(store_mod.Busy, match="stop and forget once it's done"):
         store.request(sid, "end")
     finish_at(host, 40_000, compacted=True)
     assert run(host.poll()) is False, f"{desc}: parked, the host stops"
@@ -1838,7 +1838,7 @@ def test_stop_and_forget_after_a_parking_compaction_parked_it_still_wins(host, s
 ])
 def test_a_parking_compaction_that_never_ends_fails(host, store, sid, how, desc):
     setup_parking(host, store, sid, how)
-    with pytest.raises(store_mod.Compacting):
+    with pytest.raises(store_mod.Busy):
         store.send(sid, "one more thing")
     store.notice(sid, "one more thing")   # the wheelhouse's own: not refused, held while it compacts
     assert run(host.poll()) and host.client.queries == [], f"{desc}: held"
@@ -2423,21 +2423,21 @@ def test_the_8_hour_mark_is_called_off_when_the_person_is_back(host, store, sid,
 
 
 @pytest.mark.parametrize("how, desc", [
-    ("self", "a self-park with compact=false, waiting for its turn: Stop & Forget is still told"),
+    ("self", "a self-park with compact=false, waiting for its turn: Stop & Forget is refused"),
     ("person", "the person's Park without Compact, waiting for its turn: the same"),
 ])
-def test_stop_and_forget_wins_over_a_park_waiting_for_its_turn(host, store, sid, how, desc):
+def test_stop_and_forget_waits_for_a_park_waiting_for_its_turn(host, store, sid, how, desc):
+    """#249, Q245: no stopping while an operation is under way; Interrupt is the way out."""
     store.set_runner(sid, "sdk")
     run(host.turn("the last of the work"))
     if how == "person":
         store.request(sid, "park", False)
     store.park(sid, compact=False, reason="done for good")
     assert run(host.poll()), f"{desc}: waiting for the turn"
-    store.request(sid, "end")
-    assert run(host.poll()), f"{desc}: not stopped, unparked to be told"
+    with pytest.raises(store_mod.Busy, match="busy parking: stop and forget once it's done"):
+        store.request(sid, "end")
     row = store.session(sid)
-    assert not row["parked"] and row["end_told_at"] == row["end_requested_at"], desc
-    assert host.client.queries[-1] == request_text(store, "end"), desc
+    assert row["parked"] and not row["end_requested_at"] and store.op(sid)["state"] == "parking", desc
 
 
 def test_a_park_waiting_for_its_turn_says_so(host, store, sid):

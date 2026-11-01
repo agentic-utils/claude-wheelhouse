@@ -443,16 +443,38 @@ session.
   a tooltip saying what it does: its lifecycle (Rename on a running session, Relaunch
   (Unpark on a parked one), Forget (Stop & Forget on a running one) and Fork on any, and Park on one
   that isn't parked), then its
-  conversation (Mode, and Send on one that isn't dead). A button that's off, whatever the reason, is
+  conversation (Mode, and Send on one that isn't dead), and Shell on any. A button that's off, whatever the reason, is
   dark grey with black text. One you press stays off until what it started has finished: Interrupt
   until the session is interrupted, Compact until it's compacted (Compact on the question suggesting it,
-  until that question closes), Shell until the tab has it, Model until the session runs on the new
+  until that question closes), Handover until the tab has it, Model until the session runs on the new
   one, Relaunch and Unpark until it's running again, Park until it's parked, Forget until it's gone,
   Fork until the fork is made or fails. With no word from the session in 30 seconds it comes back on
   and says so. New (`Alt+N`), Adopt (`Alt+A`, a list of the sessions on disk you can adopt) and
   Relaunch all (`Alt+Shift+L`) act on no one session, so they're keys in the footer. Ctrl+S, Ctrl+T and the
   hint under the answer box act on or describe the same session (with none selected, the highlighted item's).
-  An item opened full screen has Mode, Send and the rest in its bar, for its own session. New session (directory, optional name, optional ticket, opening brief,
+  An item opened full screen has Mode, Send and the rest in its bar, for its own session.
+  Shell (`Alt+H`, from anywhere) opens a quick shell, your login shell in a new terminal tab
+  titled `⌁ <session>`, in the directory the session in context works in now (a worktree it
+  moved into included), or your home directory with none, or with that directory gone (said so).
+  `exit` or Ctrl+D closes it; the wheelhouse doesn't track it, and it never touches the session.
+  With `--connect` to another machine it would open there, so it says so and opens nothing. A
+  session run in the wheelhouse is handed to a real Claude Code tab by Handover to Claude Code in
+  a shell, in its right-click menu (no key); it comes back when you `/exit` the tab.
+- A session that wants you to run a shell command yourself (one that needs your credentials,
+  your eyes, or your machine) asks with `suggest_command`, as it asks a question: a command
+  item (`C1`, `C2`...) whose detail is a line saying why and the command in a code block, with
+  a Run button over the answer box. Run opens the command in a box you can edit (fill in a
+  `<placeholder>`, trim a line); Run there (or Ctrl+Enter) runs exactly what the box holds, in
+  a new terminal tab in the session's directory, leaving an ordinary shell after. Only
+  printable ASCII and newlines run (at most 20 lines, 2000 characters): anything else is
+  refused with its line and column, so what you read is what runs. If the session's directory
+  has gone, Run refuses rather than running elsewhere. "Send the output back" is ticked when
+  the session asked for it: the command then runs under `script` (colours, `sudo` and `less`
+  still work, but a `cd` or `export` in it doesn't stay), and what it showed, cleaned and cut
+  to the first 4,000 and last 12,000 characters, goes to the session as your reply on the item,
+  queued or sent as your answers are. It goes into the session's transcript: untick it if the
+  output may show secrets. Unticked, the session gets nothing and the item notes the run.
+  Delete closes a command you won't run. New session (directory, optional name, optional ticket, opening brief,
   model and effort) opens Claude in a Windows Terminal tab. The new session is selected in the session list
   as soon as its row appears, unless you have picked another session or are typing in the answer box by then;
   a fork is selected the same way once it's made.
@@ -490,8 +512,8 @@ session.
   default), at `<main checkout>/.worktrees/<branch>`, on a new branch from the session's last
   commit (`<branch>-fork` unless changed), or this one. Uncommitted changes stay where they are:
   the dialog warns when there are any, and the fork is told it won't see them. A
-  pending Park or Stop & Forget, its button back on after 30 seconds, is pressed again to choose: `Alt+C` cancels the request, `Alt+O` forces
-  it (the session is stopped at once, without its steps), `Esc` leaves it be. In the session's
+  pending Park or Stop & Forget, its button back on after 30 seconds, is pressed again to choose: `Alt+C` cancels the request, `Esc` leaves it be.
+  It is never forced: Park, Park now, Stop & Forget and Relaunch all wait for it, and Interrupt aborts it. In the session's
   tab, `/wheelhouse park` and `/wheelhouse end` do the same from there. A tab closes once its
   session stops, by `/exit` or by the wheelhouse: its shell then exits cleanly, which Windows
   Terminal's default `closeOnExit` takes as the end of the tab. If Claude Code fails instead,
@@ -791,7 +813,7 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
   and authorise it: the wheelhouse reconnects it every few minutes for two hours, so the
   question closes by itself, or reply anything to reconnect it at once. For a server of
   your own, Claude Code waits for the browser to come back and connects it itself; if the
-  browser can't reach it, paste the address the browser ends on as your reply. Shell
+  browser can't reach it, paste the address the browser ends on as your reply. Handover
   closes these questions, as `/mcp` in the tab does the same.
 - `Alt+Shift+M` lists the MCP servers of the session in context, as its host last saw
   them (it looks again as the dialog opens), those that need you first, each with its
@@ -803,6 +825,25 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
   this session's alone (a stdio server's process restarts). Disabled servers have no
   button: `/mcp` or the settings turn them on. A session not running shows its last look;
   a tab session says to use `/mcp` there.
+- Operations: from the press of Park, Stop & Forget, Relaunch (Unpark, Relaunch all, or Ctrl+S
+  on a stopped session), Handover (to Claude Code in a shell), New session or Adopt, or the start
+  of a compaction, to its end, the session is busy and its eye in the session list sweeps
+  blue, running or not. A launch ends when the new process has registered (within 90 seconds,
+  or it fails with a warning), a hand-over once the tab has it. Fork blues the new session,
+  never the one forked.
+  While it is busy, sending (now, Ctrl+S, Send, Send all) and every other operation (Park,
+  Park now, Stop & Forget either way, Relaunch, Unpark, Fork, Handover, Compact) are refused
+  with one message ("demo is busy parking: send once it's done, or Interrupt to abort it.").
+  Drafting, queueing and Shell (a quick shell is no operation) stay open, and an answer to a
+  permission or question the session is waiting on still goes. Interrupt aborts the operation and nothing else: a park or Stop &
+  Forget not yet passed on is dropped silently; one the session has heard, or a park already
+  under way (compacting included, its tokens spent), is called off, and the session is told
+  to carry on as before. A park or Stop & Forget the session hasn't acted on within 15
+  minutes fails with a warning ("demo couldn't be parked within 15 minutes: it carries on as
+  it was."), as does one whose session stops running first. Interrupt during a Relaunch whose
+  host has been asked to stop leaves it stopped; during a launch, the new process is stopped
+  as soon as it has started, and what Ctrl+S sent with it goes back to the queue. A hand-over
+  can be aborted until its host has taken it.
 - After a compaction, the session is told its open tasks and questions, with their titles,
   once. A session run in the wheelhouse has a Compact button, and past 200k of context a
   question suggesting it, answered with buttons (Compact, Leave it); both take optional
@@ -812,12 +853,8 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
   to the cache until it is unparked. A compaction is one cycle, however it starts (Compact,
   the question's Compact, Relaunch or Park compacting first, the session's own request, the
   8-hour mark, or Claude Code compacting by itself at full context): from the press until
-  `/compact` has ended, or the cycle fails or is cancelled, the session is closed. Sending
-  (now or with Ctrl+S), queueing, Park, Unpark, Relaunch, Shell, Stop & Forget's "Let it
-  know" and a second Compact are refused with one message ("demo is compacting: send once
-  it's done, or Interrupt to cancel the compaction."), and the answer box keeps your text;
-  Interrupt, "Just stop it" and an answer to a permission or question the notes turn is
-  waiting on still go. Throughout, Compact is off, the session's inbox items and Detail dim
+  `/compact` has ended, or the cycle fails or is cancelled, the session is busy, as during
+  any operation (below, Operations). Throughout, Compact is off, the session's inbox items and Detail dim
   and ignore clicks, and its eye in the session list sweeps blue instead of red. If the
   session is still writing its notes after 2 minutes, a question asks whether to keep
   waiting (asked again 2 minutes later) or abort (the notes turn is interrupted, nothing is

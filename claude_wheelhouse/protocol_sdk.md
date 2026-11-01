@@ -24,7 +24,9 @@ to a session: launch.protocol_file drops it. -->
   To park, write your handoff notes into your items and call `park_session`. To end, first
   do anything your own instructions describe for when a session ends, then call
   `end_session`. Either stops this session once it returns: call it last. If a later
-  message says the request was cancelled, carry on as before.
+  message says the request was cancelled, carry on as before. While the wheelhouse is
+  parking, compacting or ending you, `end_session`, `park_session` and `request_compact` are
+  refused but for the call it asked you for: call it again once that has finished.
 - While the person is away, the wheelhouse may send a `[wheelhouse] Keepalive` or
   `[wheelhouse] Check:` turn about every 50 minutes to keep your prompt cache warm. Do as
   it says and nothing more.

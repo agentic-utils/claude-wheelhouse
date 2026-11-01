@@ -89,6 +89,22 @@ def post_item(kind: str, title: str, body: str = "", status: str | None = None, 
     return _store.post_item(_sid, kind, title, body, status, bool(pinned), why=one_why(why, alternative, reverse))
 
 
+@wheelhouse_tool
+def suggest_command(command: str, why: str, want_output: bool = False) -> str:
+    """Ask the person to run a shell command themselves: one that needs their credentials,
+    their eyes, or their machine outside your sandbox. Use this, not a code block for them to
+    copy. It shows in their inbox as a command item (C1, C2...) with a Run button, which opens
+    it in an editable box: they may change it before running, in a new terminal tab in your
+    working directory. why: one line saying what it does or shows. command: plain printable
+    ASCII and newlines only, at most 20 lines and 2000 characters; write a placeholder as
+    <name>. Refused otherwise, saying where. want_output=True if you need what it prints: the
+    output then comes back as their reply on the item when they run it, unless they untick
+    that. Without it you see nothing, so don't wait for it. Suggesting the same command again
+    updates its item. Returns "C4: shown"."""
+    ref, _ = _store.post_command(_sid, command, why, bool(want_output))
+    return f"{ref}: shown"
+
+
 # a change of work: a task finished or dropped, a question answered. Its reply lists what is
 # still open (still_open), as posting a task or question does
 FINISHING = {"done", "dropped", "answered"}
@@ -323,9 +339,11 @@ def park_session(compact: bool = True, keep: str = "", reason: str = "") -> str:
 def end_session() -> str:
     """Forget this session: deletes all of its wheelhouse data, and it stops a moment after
     this returns. If your own instructions describe anything to do when a
-    session ends, do it before calling this: this is the last thing you do."""
+    session ends, do it before calling this: this is the last thing you do. Refused while
+    the wheelhouse is busy with another operation on this session (parking, compacting):
+    call it again once that has finished."""
     s = _store.session(_sid)
-    _store.end(_sid)
+    _store.end_session(_sid)
     return ("forgotten; wheelhouse data deleted; this session stops in a moment" if stop_soon(s)
             else "forgotten; wheelhouse data deleted")
 

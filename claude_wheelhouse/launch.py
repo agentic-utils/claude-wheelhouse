@@ -160,6 +160,42 @@ def iterm_argv(session, *, python: str, shell: str) -> list[str]:
     return ["osascript", "-e", ITERM, shlex.join([shell, "-lic", line]), session["name"] or Path(session["cwd"]).name]
 
 
+SHELL_MARK = "⌁"   # a quick shell's tab title starts with it (#257)
+
+
+def shell_env(base=None) -> dict[str, str]:
+    """A quick shell's environment: clean_env without any WHEELHOUSE_* variable, so a runner
+    that did inherit the app's (wt.exe and iTerm start fresh) hands none of them on."""
+    return {k: v for k, v in clean_env(base).items() if not k.startswith("WHEELHOUSE_")}
+
+
+def shell_argv(cwd: str, title: str, *, mac: bool, shell: str, distro: str = "", user: str = "",
+               command: list[str] | None = None) -> list[str]:
+    """A new terminal tab in cwd (#257), in the user's wheelhouse window, titled title
+    (tab_title's rules): the user's login shell, or command (argv) instead. No text of ours
+    reaches it but the directory, the title and command, which callers keep to an id."""
+    command = command or [shell, "-li"]
+    if mac:
+        line = f"cd {shlex.quote(cwd)} && exec {shlex.join(command)}"
+        return ["osascript", "-e", ITERM, shlex.join([shell, "-lc", line]), title]
+    if CMD_META & set(cwd) or any(CMD_META & set(a) for a in command):
+        raise ValueError(f"can't open a shell in {cwd}: it contains one of {''.join(sorted(CMD_META))}")
+    return ["cmd.exe", "/c", "wt.exe", "-w", window_name(user), "new-tab", "--title", tab_title({"name": title, "cwd": cwd}),
+            "wsl.exe", "-d", distro, "-u", user, "--cd", cwd.replace(";", r"\;"),
+            "--", *[a.replace(";", r"\;") for a in command]]
+
+
+def open_shell(store: Store, cwd: str, title: str, command: list[str] | None = None, note: str = "") -> None:
+    """Open a quick shell's tab (shell_argv), logged to launch.log as a session's is."""
+    mac = sys.platform == "darwin"
+    argv = shell_argv(cwd, f"{SHELL_MARK} {title}", mac=mac, shell=login_shell(),
+                      distro=os.environ.get("WSL_DISTRO_NAME", "Ubuntu"), user=getpass.getuser(), command=command)
+    with open(store.path.parent / "launch.log", "a") as log:
+        print(now(), "shell", cwd, note, " ".join(argv), file=log, flush=True)
+        subprocess.Popen(argv, cwd=None if mac else "/mnt/c", stdin=subprocess.DEVNULL, stdout=log,
+                         stderr=subprocess.STDOUT, start_new_session=True, env=shell_env())
+
+
 def transcript_exists(sid: str, projects: Path = Path.home() / ".claude/projects") -> bool:
     return any(projects.glob(f"*/{sid}.jsonl"))
 

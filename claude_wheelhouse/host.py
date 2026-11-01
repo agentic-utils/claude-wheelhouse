@@ -35,7 +35,7 @@ from pathlib import Path
 from . import features, liveness, models, plan_usage, steps, transcript, transcript_usage
 from .launch import PROTOCOL_SDK, after_compaction, opening_prompt, transcript_exists
 from .monitor import REQUEST_TEXT, request_text
-from .store import (CLOSED, COMPACT_QUESTION, COMPACT_QUESTION_DONE, HOST_QUESTION, NOTES_WAIT, SessionGone, compacted_note, compacting_now, requested_expired, Store, callback_url, db_path,
+from .store import (CLOSED, COMPACT_QUESTION, COMPACT_QUESTION_DONE, HOST_QUESTION, NOTES_WAIT, SessionGone, compacted_note, compacting_now, operating, requested_expired, Store, COMPACT_TIMEOUT, PARK_WITHIN, callback_url, db_path,
                     mcp_named, mcp_question, mcp_server, now, runner, wheelhouse_question)
 
 POLL_SECONDS = 1.0
@@ -44,7 +44,6 @@ CONFIRM_TRIES = (0.1, 0.5, 2.0)   # waits between tries to mark sent messages de
 STEADY_TRIES = (0.1, 0.5, 2.0, 5.0)   # waits between tries of a write the shell hand-over can't skip
 # the compaction cycle (#244, .plan/244-compaction-cycle.md): how long /compact may run before the
 # cycle fails, and how long the notes turn runs before the person is asked to keep waiting or abort
-COMPACT_TIMEOUT = 600
 NOTES_TIMEOUT = 120
 # asked of a session when it's to be compacted, after the Before Compact step (steps.py); the
 # notes in its reply, inside the block carrying this request's id, become /compact's instructions
@@ -78,9 +77,9 @@ COMPACTED = "idle · compacted"   # how the activity line starts once a compacti
 # A context past this many tokens gets one question item suggesting Compact, per crossing
 # (COMPACT_QUESTION): every turn re-reads the whole context from the prompt cache
 NUDGE_TOKENS = 200_000
-# how soon after the park request is told the session must park for its Compact first to
-# hold: the prompt cache's lifetime, after which compacting saves nothing
-PARK_COMPACT_WITHIN = 3600
+# the prompt cache's lifetime: a session quiet this long since its last turn is cold, and compacting
+# it saves nothing (cold_due). A park's Compact first holds for PARK_WITHIN (store.py), inside it
+CACHE_LIFE = 3600
 PARKS_AFTER_TURN = "parks once this turn ends"   # the activity line's note while a park waits for its turn
 # Keepalive: the prompt cache lives an hour (1 h cache writes) and a cold one is written
 # again whole. A session over KEEPALIVE_TOKENS, quiet and waiting on the person or with an
@@ -731,7 +730,7 @@ class Host:
         if self.parking_after:   # unparked (Park pressed again, Stop & Forget) while its park waited on the turn
             self.parking_after = False
             self.show((session["activity"] or "").replace(f" · {PARKS_AFTER_TURN}", "") or "thinking")
-        if self.park_told is not None and time.monotonic() - self.park_told > PARK_COMPACT_WITHIN:
+        if self.park_told is not None and time.monotonic() - self.park_told > PARK_WITHIN:
             self.park_told = None   # the park asked for never came: its Compact first goes
             self.store.give_up_park_compact(self.sid)
         if self.unsaid is not None:   # a locked database kept it from the line: written now
@@ -740,7 +739,7 @@ class Host:
         # during a compaction cycle, turns and requests sent before it began are held until it
         # ends (#244): only what a call waiting on the person takes goes
         await self.cycle_due()
-        if (self.cycle is None and (within := requested_expired(session, PARK_COMPACT_WITHIN)) is not None
+        if (self.cycle is None and (within := requested_expired(session, PARK_WITHIN)) is not None
                 and self.store.expire_requested(self.sid, session["compaction_id"], within)):
             self.park_told = None   # its park never came: unlocked, the session as it was
             session = self.store.session(self.sid)
@@ -880,7 +879,10 @@ class Host:
                 await self.client.interrupt()
             self.end_cycle("cancelled", "cancelled by Interrupt")
             self.store.take_park_compact(self.sid)
-            return False
+            # Interrupt aborts the park (#249, Store.abort): unparked, the host carries on, and the
+            # cancel message is the next turn. A park set otherwise (an older hub's) stops, as before
+            now = self.store.session(self.sid)
+            return now is not None and not now["parked"]
         if self.cycle is not None:   # its compaction under way
             await self.cycle_due()
             return True
@@ -898,7 +900,7 @@ class Host:
         # or an older session's), never compacts
         keep = session["park_keep"]
         asked = keep is not None or (self.park_told is not None
-                                     and time.monotonic() - self.park_told <= PARK_COMPACT_WITHIN)
+                                     and time.monotonic() - self.park_told <= PARK_WITHIN)
         if not (self.store.take_park_compact(self.sid) and asked):
             self.store.cancel_park_cycle(self.sid)
             return False
@@ -937,7 +939,7 @@ class Host:
                 and at - self.quiet_since < self.keepalive_for):
             return False
         session = self.store.session(self.sid)
-        return (session is not None and not session["parked"] and not compacting_now(session)   # a cycle: never (#244)
+        return (session is not None and not session["parked"] and not operating(session)   # mid-operation: never (#244, #249)
                 and (self.waits_on_person() or bool(self.store.in_doubt(self.sid))))
 
     def person_back(self, m) -> None:
@@ -958,10 +960,10 @@ class Host:
         if not (not self.pending and self.cycle is None and not self.compacted_last
                 and self.quiet_since is not None and self.cold_for != self.quiet_since and self.keepalive_for > 0
                 and (self.tokens or 0) > KEEPALIVE_TOKENS and at - self.quiet_since >= self.keepalive_for
-                and at - self.last_turn < PARK_COMPACT_WITHIN):
+                and at - self.last_turn < CACHE_LIFE):
             return False
         session = self.store.session(self.sid)
-        return (session is not None and not session["parked"] and not compacting_now(session)   # a cycle: never (#244)
+        return (session is not None and not session["parked"] and not operating(session)   # mid-operation: never (#244, #249)
                 and (self.waits_on_person() or bool(self.store.in_doubt(self.sid))))
 
     def waits_on_person(self) -> bool:
