@@ -13,7 +13,8 @@ from markdown_it import MarkdownIt
 from .store import KINDS
 
 LIMIT = 50   # rows the popover lists; a line says how many more matched
-REF_SHAPED = re.compile(rf"(?:{'|'.join(sorted(KINDS.values(), key=len, reverse=True))})\d+", re.IGNORECASE)
+KIND_LETTERS = "|".join(sorted(KINDS.values(), key=len, reverse=True))   # PR before P
+REF_SHAPED = re.compile(rf"(?:{KIND_LETTERS})\d+", re.IGNORECASE)
 
 
 def ref_shaped(query: str) -> bool:
@@ -54,7 +55,7 @@ def find(items, query: str, limit: int = LIMIT) -> tuple[list, int]:
 # word or a path (T2a, T206.md, docs/T3); inline code and code blocks are left alone. The link
 # goes through the markdown as a link to LINK, which the renderer turns into a click (tui).
 LINK = "wheelhouse-item:"
-ITEM_ID = re.compile(r"(?<![\w#/\\.\-])(?:PR|[TQDMAC])\d+(?![\w/\\\-]|\.\w)")
+ITEM_ID = re.compile(rf"(?<![\w#/\\.\-])(?:{KIND_LETTERS})\d+(?![\w/\\\-]|\.\w)")   # any kind's (KINDS), as Doug asked
 # what's never linked into, in a line: inline code, a markdown link or image, an autolink
 KEEP = re.compile(r"(`+).*?\1|!?\[[^\]]*\]\([^)]*\)|<[^>\s]+>")
 PARSER = MarkdownIt().enable("strikethrough").enable("table")   # as Rich's Markdown parses

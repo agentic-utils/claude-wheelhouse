@@ -232,12 +232,13 @@ async def test_the_glass_opens_it_and_esc_puts_focus_on_the_inbox(store, sid):
 # #274: ids in Detail's text link to their items
 
 
-REFS = {"T3", "Q252", "PR276", "M2"}
+REFS = {"T3", "Q252", "PR276", "M2", "P4"}
 
 
 @pytest.mark.parametrize("text, linked, desc", [
     ("see T3 now", ["T3"], "a whole word"),
     ("Q252. and PR276,", ["Q252", "PR276"], "before punctuation, and a PR's"),
+    ("allow P4?", ["P4"], "a permission's"),
     ("(T3)", ["T3"], "in brackets"),
     ("#273 and #T3", [], "a GitHub issue, and after #"),
     ("T3a xT3 T3-ops", [], "inside a longer word"),
