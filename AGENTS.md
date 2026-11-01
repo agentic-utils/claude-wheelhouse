@@ -150,7 +150,9 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   `.plan/docs-section.md`.
   Never imports Textual.
 - `compactor.py`: a compaction's stage lines (art B, the trash compactor) and the crew's
-  excerpts, drawn per cycle without repeats (`schedule`, seeded by the cycle's id) (#244).
+  excerpts, drawn per cycle without repeats (`schedule`, seeded by the cycle's id) (#244); the
+  big animated art (`scene`, 60 by 12 cells in every frame), which the app's `CompactorDock`
+  pins under the conversation from the hub's `dock` entry while a cycle runs (#287).
   Never imports Textual.
 - `splitter.py`, `knurl.py`, `emoji.py`, `unsent.py`: TUI pieces (dividers, scrollbars,
   emoji shortcodes, unsent text).

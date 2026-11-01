@@ -344,3 +344,42 @@ def test_stage_lines_go_by_time_and_an_untimed_entry_stays_put():
     out = tr.blocks("demo", None, recs, stages=(stage,))
     whos = [who for who, _ in out[1:]]
     assert whos == ["note", "you", "stage", "you"], out
+
+
+def notes_ask(nonce="c0ffee12"):
+    """The host's ask for a compaction's notes, as it sends it (host.compact_ask's KEEP_ASK)."""
+    from claude_wheelhouse.host import KEEP_ASK
+    return "[wheelhouse] The person pressed Compact in the wheelhouse.\n\n" + KEEP_ASK.format(nonce=nonce)
+
+
+NOTES = {"type": "text", "text": 'Keeping these.\n<keep id="c0ffee12">\n- PR #12 open\n- next: tests\n</keep>'}
+WRITING = {"type": "text", "text": 'Keeping these.\n<keep id="c0ffee12">\n- PR #12 open'}
+
+
+@pytest.mark.parametrize("recs, want, desc", [
+    ([user("fix it"), user(notes_ask()), assistant(BASH), assistant(WRITING)],
+     ["you:fix it", "note:writing its notes for after compaction · 3 lines"], "under way: one line, its tool calls folded too"),
+    ([user(notes_ask()), assistant(NOTES), user("<command-name>/compact</command-name>"),
+      {"type": "system", "subtype": "compact_boundary", "timestamp": AT}, user("go on"), assistant(TEXT)],
+     ["note:wrote its notes for after compaction · 5 lines", "note:conversation compacted", "you:go on", "claude:On it."],
+     "after the cycle: still folded, and what follows shows"),
+    ([user("fix it"), assistant(BASH), queued(notes_ask()), assistant(NOTES)],
+     ["you:fix it", "tool:Bash: Run tests", "note:wrote its notes for after compaction · 5 lines"],
+     "the ask taken into a running turn: folded from there"),
+    ([user(notes_ask()), queued("[wheelhouse] from doug (general): hello"), assistant(NOTES)],
+     ["note:wrote its notes for after compaction · 5 lines", "you:hello"],
+     "the person's words taken into it still show"),
+    ([user("the line <keep id=\"x\"> before them, I said"), assistant(TEXT)],
+     ["you:the line <keep id=\"x\"> before them, I said", "claude:On it."], "the tag quoted by the person: not an ask"),
+])
+def test_a_compactions_notes_turn_is_folded(recs, want, desc):
+    """#287: the session's reply to the wheelhouse's ask for notes shows as one dim line, while
+    it's written and after, found by the ask the host sends (KEEP_ASK), not by the reply's text."""
+    got = [f"{e.who}:{e.text}" for e in transcript.entries(recs)]
+    assert got == want, f"{desc}: {got}"
+
+
+def test_the_notes_ask_is_the_hosts():
+    """KEEP_ASKED finds every ask the host sends, whatever its id."""
+    from claude_wheelhouse.host import KEEP_ASK
+    assert all(transcript.KEEP_ASKED.search(KEEP_ASK.format(nonce=n)) for n in ("c0ffee12", "0a1b2c3d"))

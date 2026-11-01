@@ -109,3 +109,54 @@ def test_schedule_is_seeded_by_the_cycle_and_never_repeats(windows, at_least, de
     assert [t for t, _ in first] == sorted(t for t, _ in first), desc
     starts = {s for s, _ in windows}
     assert starts <= {t for t, _ in first}, f"{desc}: one at each stage change"
+
+
+TIMES = [i / compactor.TICKS for i in range(0, 40 * compactor.TICKS, 7)] + [90.0, 600.0]
+
+
+@pytest.mark.parametrize("state", sorted(compactor.CAPTIONS))
+def test_every_big_frame_is_the_same_size(state):
+    """#287: every frame of every stage BIG_WIDTH by BIG_HEIGHT, its roles cell for cell, so
+    the dock never shifts as it moves or a stage replaces the last."""
+    for t in TIMES:
+        for animate in (True, False):
+            rows, roles = compactor.scene(state, t, animate)
+            assert len(rows) == len(roles) == compactor.BIG_HEIGHT, (state, t)
+            assert {cell_len(r) for r in rows} == {len(r) for r in roles} == {compactor.BIG_WIDTH}, (state, t, rows)
+            assert set("".join(roles)) <= set(compactor.ROLES), (state, t)
+
+
+@pytest.mark.parametrize("state", sorted(compactor.CAPTIONS))
+def test_each_stage_moves_and_stills_hold(state):
+    """Animated, every stage's frames change over a few seconds; with animation off it's one still."""
+    assert len({compactor.scene(state, t)[0] for t in TIMES[:20]}) > 1, state
+    assert len({compactor.scene(state, t, animate=False) for t in TIMES}) == 1, state
+    assert compactor.still(state) == "\n".join(compactor.scene(state, 0, animate=False)[0])
+
+
+@pytest.mark.parametrize("state, t, want, desc", [
+    ("preparing", 30.0, compactor.OPEN, "preparing: the walls still"),
+    ("compacting", 0.0, compactor.OPEN + 1, "compacting: grinding in"),
+    ("compacting", 600.0, compactor.OPEN + 14, "a long /compact: nearly shut, never quite"),
+    ("completed", 0.0, compactor.SHUT, "compacted: met"),
+    ("cancelled", 60.0, compactor.OPEN, "called off: back out"),
+])
+def test_the_walls_by_stage(state, t, want, desc):
+    assert compactor.walls(state, t) == want, desc
+
+
+def test_the_crew_and_the_dianoga_show():
+    """Han, Leia, Luke and Chewie all in a compacting frame; the tentacle has Luke for a while."""
+    rows = "\n".join(compactor.scene("compacting", 1.0)[0])
+    assert all(mark in rows for mark in ("H", "@o@", "#")), rows
+    grab = compactor.GRAB / 2 + 0.5
+    rows, roles = compactor.scene("compacting", grab)
+    assert "d" in "".join(roles[1:9]) and ")" in "".join(rows[5:9]), rows
+
+
+@pytest.mark.parametrize("state", sorted(compactor.WALLS))
+def test_dock_text_and_state_of_round_trip(state):
+    text = compactor.dock_text(state, 1761990000.5, "you (Compact)", "", "23:30Z")
+    assert compactor.docked(text)[:2] == (state, 1761990000.5)
+    assert compactor.state_of(compactor.stage_text(state, None, "", "23:30Z")) == state
+    assert compactor.state_of("Han: hello") is None

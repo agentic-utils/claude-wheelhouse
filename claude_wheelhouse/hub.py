@@ -104,19 +104,29 @@ def compaction_entries(stages, active: bool, at: float | None = None) -> list:
     what came of it, with its time), so each stage replaces the last in place (#277); and while a
     cycle is preparing or compacting the crew's excerpts (compactor.schedule), those due by now
     (at, epoch). Placed by time among the transcript's entries (transcript.blocks); the task
-    item's thread has the stages' notes, never the excerpts."""
+    item's thread has the stages' notes, never the excerpts. The cycle still running (active, its
+    latest stage not an end) draws no art there: one "dock" entry instead (dock_text), which the
+    app pins under the conversation, animated (#287), until its end puts the art back in place."""
     at = time.time() if at is None else at
     out, cycles, drawn = [], {}, {}
+    last = stages[-1]["cycle_id"] if stages else None
+    running = last if active and stages and stages[-1]["state"] not in compactor.ENDS else None
     for st in stages:
         text = compactor.stage_text(st["state"], ORIGIN_WORDS.get(st["origin"]), st["note"], st["at"][11:16] + "Z")
+        if st["cycle_id"] == running:
+            continue
         if text is not None:
             if (i := drawn.get(st["cycle_id"])) is None:
                 drawn[st["cycle_id"]] = len(out)
                 out.append(transcript.Entry("stage", text, st["at"]))
             else:
                 out[i] = transcript.Entry("stage", text, out[i].at)
+    for st in stages:
         cycles.setdefault(st["cycle_id"], []).append(st)
-    last = stages[-1]["cycle_id"] if stages else None
+    if running:
+        st = cycles[running][-1]
+        out.append(transcript.Entry("dock", compactor.dock_text(st["state"], epoch(st["at"]), ORIGIN_WORDS.get(st["origin"]),
+                                                                st["note"], st["at"][11:16] + "Z"), st["at"]))
     for cid, run in cycles.items():
         windows = []
         for i, st in enumerate(run):

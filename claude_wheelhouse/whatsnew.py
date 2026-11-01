@@ -222,8 +222,12 @@ FEATURES: tuple[Feature, ...] = (
     Feature("compacting-shown", UNRELEASED, "sessions", when="sdk",
             note="While a session is compacting, its Compact button is off, its inbox items and its Detail dim and "
                  "ignore clicks, and its busy eye in the session list turns blue. Its conversation opens as the "
-                 "compaction starts, the trash compactor's walls redrawn in place as they close in.",
+                 "compaction starts, the trash compactor pinned under it.",
             tip="A blue eye: the session is compacting; its items dim until it's done."),
+    Feature("compactor-dock", UNRELEASED, ADVANCED,
+            note="A running compaction's trash compactor is pinned above the answer box, big and animated: the walls "
+                 "grind in, the crew dodge, sparks fly and the dianoga grabs Luke. Its last frame stays in the "
+                 "conversation, and the session's notes for compaction fold to one line."),
     Feature("keepalive-50", UNRELEASED, ADVANCED,
             note="The keepalive comes every 50 minutes, ahead of Claude Code's idle compaction at about 54."),
     Feature("compact-at-keepalive-end", UNRELEASED, ADVANCED,

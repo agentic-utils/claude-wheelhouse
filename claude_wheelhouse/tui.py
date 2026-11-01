@@ -66,7 +66,7 @@ from textual.widgets import (
     TextArea,
 )
 
-from . import api, away, callout, quickshell, columns, docblocks, docroots, emoji, features, helper, models, ordering, prs, search, steps, subagents, transcript, transcript_usage, tutorial, whatsnew
+from . import api, away, callout, compactor, quickshell, columns, docblocks, docroots, emoji, features, helper, models, ordering, prs, search, steps, subagents, transcript, transcript_usage, tutorial, whatsnew
 from .rows import KIND_COLOUR, KeepColours, RowTips, faded, marked, plain
 from .callout import TourCallout
 from .client import LocalClient, Unreachable
@@ -108,7 +108,12 @@ UNDO_LANDING = "{key}: the undo is still putting rows back, try again in a momen
 # the person's words in terminal green, Claude's in white as in the Claude app
 VOICE = {"you": MATRIX, "claude": "#e8e8e8", "pr": "#e8e8e8", "head": "#05d9e8",
          "warn": "bold #ffd300", "note": "#777777", "tool": "#777777", "doc": "#e8e8e8",
-         "stage": "#2f8cff", "crew": "#2f8cff"}   # a compaction's stage lines and crew (#244): its eye's blue
+         "stage": "#2f8cff", "crew": "#2f8cff", "dock": "#2f8cff"}   # a compaction's stage lines and crew (#244): its eye's blue
+# the big compactor's roles (compactor.ROLES, #287): the walls and crew in the compaction blue,
+# sparks and the hatch light in amber, the dianoga in green
+ART_STYLE = {"wall": "#2f8cff", "seam": "#1f5daa", "crew": "bold #9cc8ff", "sludge": "#1f5daa",
+             "spark": "bold #ffb000", "hatch": "bold #ffb000", "dianoga": "bold #6fcf3f", "text": "#2f8cff"}
+DOCK_FPS = 6   # the dock's frames a second (#287), no more than the app's own rate (features.animation_fps)
 # a doc block (doc_blocks) longer than this is rendered on a thread (Transcript._layout): a
 # 42 KB one takes Rich a second or two, which the loop would otherwise stall for
 RENDER_OFF_LOOP = 2000
@@ -586,14 +591,32 @@ def _block_lines(who: str, md: str, width: int, console) -> list:
     """A block's rendered segments at one width: rendered once, though Textual measures a
     widget's height and then draws it, and a new turn leaves every older block as it was."""
     r = Text(md.strip("`"), style=VOICE[who]) if who == "tool" else pr_text(md) if who == "pr" \
-        else stage_text(who, md) if who in ("stage", "crew") else RichMarkdown(md, style=VOICE[who])
+        else stage_text(who, md, width) if who in ("stage", "crew") else RichMarkdown(md, style=VOICE[who])
     return list(console.render(r, console.options.update_width(width)))
 
 
-def stage_text(who: str, text: str) -> Text:
+def art_text(rows: tuple[str, ...], roles: tuple[str, ...]) -> Text:
+    """A big compactor frame (compactor.scene) as Text, each run of cells in its role's colour."""
+    out = Text(no_wrap=True, overflow="ellipsis")
+    for i, (row, role) in enumerate(zip(rows, roles)):
+        if i:
+            out.append("\n")
+        start = 0
+        for j in range(1, len(row) + 1):
+            if j == len(row) or role[j] != role[start]:
+                out.append(row[start:j], style=ART_STYLE[compactor.ROLES[role[start]]])
+                start = j
+    return out
+
+
+def stage_text(who: str, text: str, width: int = 0) -> Text:
     """A compaction's stage lines or crew excerpt (#244) as plain Text, never Markdown (which
     would turn its art into rules and bullets): each line cut with an ellipsis, not wrapped; a
-    stage's last line (who asked or what came of it, and when) dim under its art (#277)."""
+    stage's last line (who asked or what came of it, and when) dim under its art (#277). A
+    stage's art in a pane at least compactor.BIG_WIDTH wide is the big one's still (#287)."""
+    if who == "stage" and width >= compactor.BIG_WIDTH and (state := compactor.state_of(text)):
+        line = text[len(compactor.WALLS[state]) + 1:]
+        return art_text(*compactor.scene(state, 0.0, animate=False)).append("\n" + line, style=VOICE[who] + " dim")
     out = Text(no_wrap=True, overflow="ellipsis")
     lines = text.split("\n")
     for i, line in enumerate(lines):
@@ -1880,6 +1903,68 @@ def under_way(button: str, s, status: str, relaunching: bool) -> bool:
     if button == "relaunch":
         return relaunching or status == "starting"
     return False
+
+
+class CompactorDock(Widget, can_focus=False):
+    """The compactor pinned under the conversation while its session's cycle runs (#287): big
+    and moving where the pane is compactor.BIG_WIDTH wide, the #277 art below that, and a still
+    per stage with the app's animation off. Its own timer, at DOCK_FPS (or the app's rate if
+    lower), runs only while it shows, and draws only this widget: never the inbox (#268)."""
+    DEFAULT_CSS = "CompactorDock { height: auto; display: none; padding: 0 1; }"
+    timer = None
+    shown: tuple[str, float, str] | None = None
+    drawn = None   # what the last frame drew (paint): the same again draws nothing
+
+    @staticmethod
+    def now() -> float:
+        """The animation's clock, epoch seconds as a stage's start is (a test runs it on its own)."""
+        return time.time()
+
+    def dock(self, text: str | None) -> None:
+        """Show a dock entry's stage (compactor.dock_text), or with None close: hidden, its timer stopped."""
+        if text is None:
+            if self.timer is not None:
+                self.timer.stop()
+                self.timer = None
+            self.shown = self.drawn = None
+            self.display = False
+            return
+        shown = compactor.docked(text)
+        if shown != self.shown:
+            self.shown, self.drawn, self.display = shown, None, True
+            self.paint()
+        fps = min(DOCK_FPS, features.animation_fps())
+        if fps and self.timer is None:
+            self.timer = self.set_interval(1 / fps, self.paint)
+
+    def frame(self) -> tuple:
+        """What this moment draws: the stage, big or not, and its frame number (compactor.TICKS)."""
+        state, since, _ = self.shown
+        big = self.content_size.width >= compactor.BIG_WIDTH
+        moving = big and features.animation_fps() > 0
+        return state, big, int(max(0.0, self.now() - since) * compactor.TICKS) if moving else -1
+
+    def paint(self) -> None:
+        """The frame for now, drawn only if it differs from the last."""
+        if self.shown is None:
+            return
+        frame = self.frame()
+        if frame != self.drawn:   # a new size (big or not, a new stage's line) lays it out again
+            resized = self.drawn is None or frame[:2] != self.drawn[:2]
+            self.drawn = frame
+            self.refresh(layout=resized)
+
+    def render(self) -> Text:
+        if self.shown is None or self.drawn is None:
+            return Text()
+        (state, big, f), line = self.drawn, self.shown[2]
+        if not big:
+            return stage_text("stage", compactor.WALLS[state] + "\n" + line)
+        art = art_text(*compactor.scene(state, max(f, 0) / compactor.TICKS, animate=f >= 0))
+        return art.append("\n" + line, style=VOICE["stage"] + " dim")
+
+    def on_resize(self) -> None:
+        self.paint()
 
 
 class ConversationScroll(VerticalScroll, can_focus=False):
@@ -4991,6 +5076,7 @@ class WheelhouseApp(App):
                     with ConversationScroll(id="detail-scroll"):
                         yield Transcript(NOTHING_SELECTED, id="detail")
                         yield Vertical(id="detail-more")   # a module's part, scrolling with the thread (detail_parts)
+                    yield CompactorDock(id="compactor-dock")   # a running compaction's art, pinned (#287)
                     yield Vertical(id="detail-bar")   # a module's part, under it: its buttons (detail_parts)
                     yield hidden(Splitter("editor", "#detail-editor", "#detail-scroll", "y", label="editing"))
                     yield DocEditor("#detail", "#detail-pane", self.detail_doc_sends_now, self.paint_detail,
@@ -5016,6 +5102,7 @@ class WheelhouseApp(App):
         self.items_table = self.query_one("#items", ItemList)
         self.detail = self.query_one("#detail", Transcript)
         self.detail_scroll = self.query_one("#detail-scroll", VerticalScroll)
+        self.compactor_dock = self.query_one("#compactor-dock", CompactorDock)
         # held: a query walks every doc block
         self.answer_splitter = next(s for s in self.query("#detail-pane > Splitter") if s.key == "answer")
         self.detail_editor = self.query_one("#detail-editor", DocEditor)
@@ -6558,6 +6645,11 @@ class WheelhouseApp(App):
             blocks[0] = ("head", blocks[0][1] + " · *Hidden from the inbox*")   # picked by search, or a module (#273)
         if editor is not None:
             blocks = editor.shown_in(blocks, self.detail.doc_path, gone)
+        # a running compaction's art pinned under the conversation, not in it (#287)
+        docked = next((md for who, md in blocks if who == "dock"), None) if self.viewing and not shown else None
+        blocks = [b for b in blocks if b[0] != "dock"]
+        if (dock := getattr(self, "compactor_dock", None)) is not None:
+            dock.dock(docked)
         for part in self.detail_boxes():   # a pane's parts go with an item, or a note: not a doc's
             part.display = not (shown or self.viewing or doc)
         if not agent and not isinstance(self.screen, ThreadView):   # which may follow one itself
