@@ -111,7 +111,9 @@ DECISION_FIELDS = (("why", "Why"),)
 # session mid-operation, and an older host keeps it warm. With it, command items and the
 # suggest_command tool (#257), with a protocol rule to use it rather than a code block to copy:
 # an older session never posts one, and isn't told to.
-PROTOCOL_VERSION = 26
+# 27: a protocol rule on where an ADR's status is read from (#283), so a session changing one
+# edits the place the Decisions pane reads: an older session isn't told.
+PROTOCOL_VERSION = 27
 # the least time between two compactions a session asks for itself (request_compact), so a
 # confused one can't loop: seconds since its last accepted request
 MODEL_COMPACT_GAP = 30 * 60
