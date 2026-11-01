@@ -2455,6 +2455,10 @@ def carried(old: str, new: str, line: int, added: int | None = -1) -> int | None
 
 
 SAVING_NEXT = "Saving comes next: the edits stay in the editor until it closes."
+# Ctrl+S with text in the focused box, likely a Ctrl+Enter missed (Doug, #271): the first press says so
+# and sends nothing; a second within CTRL_S_AGAIN seconds (the toast's life), the text unchanged, sends
+CTRL_S_HINT = "Did you mean Ctrl+Enter? Hit Ctrl+S again if you meant to send the queue"
+CTRL_S_AGAIN = 5.0
 
 
 class DocEditor(TextArea):
@@ -4125,7 +4129,8 @@ DESCRIBE = {
     "app.submit": "Submit what's typed: queued, or sent at once, by the session's mode",
     "submit(True)": ("Send what's typed at once, whatever the mode, leaving the mode and the rest of the queue as they "
                      "are (one not running: Unpark or Relaunch it and send it with the queue, asked first)"),
-    "send_session": "Send the current session's queue (one not running: Unpark or Relaunch it and send, asked first)",
+    "send_session": ("Send the current session's queue (one not running: Unpark or Relaunch it and send, asked first); "
+                     "with text in the box, the first press asks whether you meant Ctrl+Enter, and a second sends"),
     "toggle_mode": "Switch the session between Queued and Immediate",
     "recall": ("Take this item's latest queued answer back into the box; with none queued, in the item list, "
                "reopen the highlighted finished item (or every marked one)"),
@@ -4289,6 +4294,8 @@ SEND_RULES = (
     "session's queue as one message, so related answers arrive together; ✉ counts what's queued. "
     "A session not running: Ctrl+S or Alt+S asks to Unpark (a parked one) or Relaunch it and send, its queue "
     "and the box's answer its first prompt; Send all leaves its queue. "
+    "Ctrl+S with text in the box first asks \"Did you mean Ctrl+Enter?\": a second Ctrl+S within a few "
+    "seconds, the text unchanged, sends the queue. "
     "Alt+S sends just the answer in the box at once, leaving the queue and the mode as they are. "
     "**Immediate**: Ctrl+Enter (or Alt+S) sends at once. Ctrl+T switches the session's mode; Ctrl+R takes a "
     "queued answer back to edit.")
@@ -7105,8 +7112,8 @@ class WheelhouseApp(App):
             if not self.answer.text.strip():
                 self.answer.text = tutorial.ANSWER if stop.id == "answer" else tutorial.ASK
             self.action_submit(stop.id == "ask")
-        elif stop.id == "send":   # Ctrl+S's own path
-            self.action_send_session()
+        elif stop.id == "send":   # Ctrl+S's own path, less its Ctrl+Enter hint: this is the Send button's
+            self.action_send_session(hint=False)
         elif stop.id == "close":   # Delete in the inbox
             self.items_table.focus()
             self.action_close_question()
@@ -8200,17 +8207,35 @@ class WheelhouseApp(App):
             self.notify("select a session first", severity="warning")
         return sid
 
-    def action_send_session(self) -> None:
+    ctrl_s_hinted = None   # (box, text) the last CTRL_S_HINT was shown for, until CTRL_S_AGAIN has passed
+
+    def action_send_session(self, hint: bool = True) -> None:
         """Ctrl+S: the session's queue sent; one that isn't running is offered Unpark or
-        Relaunch first, the queue its first prompt on waking (#221)."""
+        Relaunch first, the queue its first prompt on waking (#221). With text in the focused
+        box, first asks whether Ctrl+Enter was meant (#271); hint False, the tour's Send, doesn't."""
         self.settle()
         if sid := self.context_session():
+            if hint and self.ctrl_s_meant_enter():
+                return
             focused = self.focused
             if self.dead(sid) and self.client.drafts(sid):
                 self.offer_wake(sid, lambda: (self.wake(sid), self.after_send(focused)))
                 return
             self.send_session(sid)
             self.after_send(focused)
+
+    def ctrl_s_meant_enter(self) -> bool:
+        """True, with CTRL_S_HINT shown, when the focused text box holds text and no hint for that
+        same box and text is still showing (#271): the next Ctrl+S then sends as ever."""
+        box = self.focused
+        text = box.text if isinstance(box, TextArea) else box.value if isinstance(box, Input) else ""
+        shown, self.ctrl_s_hinted = self.ctrl_s_hinted, None
+        if not text.strip() or shown == (box, text):
+            return False
+        self.ctrl_s_hinted = hinted = (box, text)
+        self.notify(CTRL_S_HINT, timeout=CTRL_S_AGAIN)
+        self.after(CTRL_S_AGAIN, lambda: self.ctrl_s_hinted is hinted and setattr(self, "ctrl_s_hinted", None))
+        return True
 
     @session_action
     def offer_wake(self, sid: str, then) -> None:

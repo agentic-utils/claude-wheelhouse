@@ -99,6 +99,44 @@ async def test_alt_s_sends_one_answer_now(store, sid, live, clock, send_mode, ke
     assert mode(store.session(sid)) == send_mode, f"{desc}: the session's mode left as it was"
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize("text, focus_box, steps, hints, sent, desc", [
+    ("", True, ["s"], 0, ["queued"], "an empty box: Ctrl+S sends at once, as ever"),
+    ("ship it", True, ["s"], 1, [], "text in the box: the first Ctrl+S asks, and sends nothing"),
+    ("ship it", True, ["s", "s"], 1, ["queued"], "a second Ctrl+S while the toast shows sends"),
+    ("ship it", True, ["s", "edit", "s"], 2, [], "an edit between the presses: the second asks again"),
+    ("ship it", False, ["s"], 0, ["queued"], "focus off the box: Ctrl+S sends at once, as ever"),
+    ("ship it", True, ["s", "wait", "s"], 2, [], "the toast timed out: the second asks again"),
+])
+async def test_ctrl_s_with_text_in_the_box_asks_first(store, sid, live, clock, monkeypatch, text, focus_box, steps,
+                                                       hints, sent, desc):
+    """#271 (Doug): "when wheelhouse receives Ctrl+S, check whether focus is on a non-empty text
+    input; if so, pop up a toast saying "Did you mean Ctrl+Enter? Hit Ctrl+S again if you meant
+    to send the queue""."""
+    store.db.execute("UPDATE sessions SET code_version = ?", (PROTOCOL_VERSION,))   # live, on code that queues
+    store.queue(sid, "queued")
+    store.post_item(sid, "question", "which db?")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.move_cursor(row=0)
+        await pilot.pause()
+        app.answer.text = text
+        (app.answer if focus_box else app.items_table).focus()
+        notes = []
+        monkeypatch.setattr(app, "notify", lambda note, **kw: notes.append(note))
+        for step in steps:
+            if step == "s":
+                await pilot.press("ctrl+s")
+            elif step == "edit":
+                app.answer.text += "!"
+            else:
+                clock.advance(tui.CTRL_S_AGAIN)
+            await pilot.pause()
+    assert notes.count(tui.CTRL_S_HINT) == hints, f"{desc}: the toast"
+    assert [m["body"] for m in store.pending(sid)] == sent, f"{desc}: the queue"
+
+
 @pytest.mark.parametrize("sends, shown, desc", [
     ("queue", True, "queued: the hint offers Alt+S"),
     ("send", False, "immediate: Ctrl+Enter sends already, so no Alt+S"),
@@ -829,8 +867,8 @@ async def test_sending_to_a_session_not_running_offers_to_wake_it(store, sid, mo
         app.answer.text = "ship it"
         if key == "alt+s":   # as a terminal sends it (ESC s)
             app.post_message(events.Key("alt+s", "s"))
-        else:
-            await pilot.press(key)
+        else:   # twice: with text in the box, the first asks whether Ctrl+Enter was meant (#271)
+            await pilot.press(key, key)
         await pilot.pause()
         assert isinstance(app.screen, Confirm) and app.screen.prompt == prompt, f"{desc}: the dialog"
         await pilot.press("alt+y" if yes else "alt+n")
