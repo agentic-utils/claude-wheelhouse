@@ -3484,6 +3484,11 @@ async def test_items_that_tie_to_the_second_keep_one_order(store, sid, clock, po
                 elif step == "down+lapse":   # the lapse fires before Down lands, either way
                     raw_keys(app, "down")
                     clock.advance(REST)
+                    # through the daemon its seen mark lands once the selection has moved on: the
+                    # next tick shows it (#268)
+                    await app.workers.wait_for_complete([w for w in app.workers if w.group == "seen"])
+                    await pilot.pause()
+                    app.refresh_data()
                 elif typing == "raw":
                     raw_keys(app, *step.split(" "))
                 else:
@@ -10243,10 +10248,15 @@ async def test_a_seen_mark_through_the_daemon_is_sent_off_the_ui_thread(store, s
 
 
 @pytest.mark.anyio
-async def test_a_dialogs_shade_is_textuals_drawn_a_line_at_a_time(store, sid):
+@pytest.mark.parametrize("nested, desc", [
+    (False, "a dialog over the app"),
+    (True, "a dialog over a dialog (New session's directory picker): the app shows under both shades"),
+])
+async def test_a_dialogs_shade_is_textuals_drawn_a_line_at_a_time(store, sid, monkeypatch, nested, desc):
     """#268: a dialog's shade over the screen beneath is drawn line by line, each line's tint
     kept, not the whole screen again for any change beneath (~100 ms a frame with a big inbox).
     It looks exactly as Textual's own (BackgroundScreen) does, and follows a change beneath."""
+    from textual.screen import Screen
     from textual.widget import Widget
     from textual._context import visible_screen_stack
     for i in range(12):
@@ -10254,34 +10264,50 @@ async def test_a_dialogs_shade_is_textuals_drawn_a_line_at_a_time(store, sid):
     app = WheelhouseApp(store)
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
+        if nested:
+            app.push_screen(tui.Confirm("Underneath?"))
+            await pilot.pause()
         dialog = tui.Confirm("Delete it?")
         app.push_screen(dialog)
         await pilot.pause()
-        beneath = app.screen_stack[0]
+        beneath = app.screen_stack[:-1]
+        rows = range(dialog.size.height)
 
-        def textuals() -> list:
-            visible_screen_stack.set([beneath])
-            dialog._render_content()
-            return [Widget.render_line(dialog, y) for y in range(dialog.size.height)]
+        def textuals() -> list:   # Textual's own shade, all the way down
+            with monkeypatch.context() as m:
+                m.setattr(tui.Dialog, "render_lines", Screen.render_lines)
+                m.setattr(tui.Dialog, "render_line", Screen.render_line)
+                for i, screen in enumerate(beneath[1:], 1):
+                    screen._styles_cache.clear()
+                    visible_screen_stack.set(list(beneath[:i]))
+                    screen._render_content()
+                visible_screen_stack.set(list(beneath))
+                dialog._render_content()
+                drawn = [Widget.render_line(dialog, y) for y in rows]
+            for screen in beneath[1:]:
+                screen._styles_cache.clear()
+            return drawn
 
         def ours() -> list:   # a frame's crop at once, as render_lines draws it
-            visible_screen_stack.set([beneath])
-            dialog.beneath = dialog.lines_beneath(list(range(dialog.size.height)))
+            visible_screen_stack.set(list(beneath))
+            dialog.beneath = dialog.lines_beneath(list(rows))
             try:
-                return [dialog.render_line(y) for y in range(dialog.size.height)]
+                return [dialog.render_line(y) for y in rows]
             finally:
                 dialog.beneath = None
 
         def by_line() -> list:   # a line asked for alone
-            visible_screen_stack.set([beneath])
-            return [dialog.render_line(y) for y in range(dialog.size.height)]
+            return [(visible_screen_stack.set(list(beneath)), dialog.render_line(y))[1] for y in rows]
 
         def cells(strips) -> list:
             return [[(seg.text, seg.style) for seg in s.simplify()] for s in strips]
-        assert cells(ours()) == cells(textuals()) == cells(by_line()), "drawn as Textual draws it"
+        assert any("which db" in s.text for s in ours()), f"{desc}: the app shows through"
+        assert cells(ours()) == cells(textuals()) == cells(by_line()), f"{desc}: drawn as Textual draws it"
         store.post_item(sid, "question", "zebra")
         app.refresh_data()
         await pilot.pause()
-        assert any("zebra" in s.text for s in textuals()), "the change shows in Textual's"
-        assert any("zebra" in s.text for s in ours()), "a change beneath shows through"
-        assert cells(ours()) == cells(textuals()), "and still as Textual draws it"
+        for screen in beneath[1:]:   # as Textual's: a change on the app redraws the top dialog alone
+            screen._styles_cache.clear()
+        assert any("zebra" in s.text for s in textuals()), f"{desc}: the change shows in Textual's"
+        assert any("zebra" in s.text for s in ours()), f"{desc}: a change beneath shows through"
+        assert cells(ours()) == cells(textuals()), f"{desc}: and still as Textual draws it"

@@ -2923,24 +2923,34 @@ class Dialog(ModalScreen):
         fresh = cache._width != self.size.width
         self.beneath = self.lines_beneath([y for y in crop.line_range
                                            if fresh or y in cache._dirty_lines or y not in cache._cache])
-        self._dirty_regions.clear()   # Widget.render_line's whole render, never used while this draws
+        if self.beneath is not None:
+            self._dirty_regions.clear()   # Widget.render_line's whole render, never used while this draws
         try:
             return super().render_lines(crop)
         finally:
             self.beneath = None
 
     def lines_beneath(self, rows: list[int]) -> dict[int, Strip] | None:
-        """The rows of the screen beneath, by y, as its compositor draws them, each run of
-        neighbouring rows in one pass; None when nothing shows through (an opaque dialog, or
-        none beneath)."""
-        stack = visible_screen_stack.get(None)
-        if not stack or stack[-1] is self or self.styles.background.a >= 1:
+        """The rows of the screen just beneath this one, by y, as its compositor draws them,
+        each run of neighbouring rows in one pass; None when nothing shows through (an opaque
+        dialog, or none beneath). The screens visible (visible_screen_stack, bottom first) may
+        hold this one, when it is drawn as the shade of a dialog over it: the one beneath is
+        below it there, and is drawn with only those below it visible, as Textual's own shade
+        (Screen.render) pops them one by one."""
+        stack = list(visible_screen_stack.get(None) or ())
+        if self in stack:
+            stack = stack[:stack.index(self)]
+        if not stack or self.styles.background.a >= 1:
             return None
         compositor, width, out = stack[-1]._compositor, self.size.width, {}
-        for _, run in itertools.groupby(enumerate(sorted(rows)), lambda pair: pair[1] - pair[0]):
-            ys = [y for _, y in run]
-            chops = compositor._render_chops(Region(0, ys[0], width, len(ys)), lambda y: ys[0] <= y <= ys[-1])
-            out |= {y: Strip.join([c for c in chops[y].values() if c is not None]) for y in ys if y < len(chops)}
+        below = visible_screen_stack.set(stack[:-1])
+        try:
+            for _, run in itertools.groupby(enumerate(sorted(rows)), lambda pair: pair[1] - pair[0]):
+                ys = [y for _, y in run]
+                chops = compositor._render_chops(Region(0, ys[0], width, len(ys)), lambda y: ys[0] <= y <= ys[-1])
+                out |= {y: Strip.join([c for c in chops[y].values() if c is not None]) for y in ys if y < len(chops)}
+        finally:
+            visible_screen_stack.reset(below)
         return out
 
     def render_line(self, y: int) -> Strip:

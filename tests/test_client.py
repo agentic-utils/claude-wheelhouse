@@ -444,3 +444,65 @@ def test_wake_and_send_goes_through_the_daemon(store, sid, served, no_launch):
         assert store.session(sid)["parked"] == 0
     finally:
         c.disconnect()
+
+
+@pytest.mark.parametrize("synchronous, refetch, forced, desc", [
+    (False, "now", True, "a command the person waits on: fetched at the next read, as the hub in process read it"),
+    (False, "later", False, "a quiet one: fetched on the fetching thread, never at a read on the UI's"),
+    (False, "none", False, "the seen mark: its caller fetches (fetch_now), on its own worker"),
+    (True, "later", True, "a client with no threads of its own fetches at the next read, whatever the command"),
+])
+def test_what_a_command_changed_is_fetched_where_it_says(store, sid, served, heard, synchronous, refetch, forced,
+                                                         desc):
+    """#268: a quiet command (a seen mark, the last input, a setting) made the next read on
+    the UI thread fetch /sessions and /inbox, 200 ms and more with a big inbox."""
+    d = served(store.path)
+    c = d.client(synchronous=True) if synchronous else heard(d.client())
+    ref = store.post_item(sid, "decision", "chose", why="local")
+    try:
+        c.refresh()
+        if not synchronous:
+            until(lambda: ("inbox",) in c.waiting, desc="the first fetch")
+            c.refresh()
+        c.forced = False
+        c.command(f"/items/{sid}/{ref}/seen", {}, refetch)
+        assert c.forced == forced, desc
+        if refetch == "later" and not synchronous:
+            until(lambda: ("inbox",) in c.waiting, desc=f"{desc}: fetched in the background")
+            c.refresh()
+            assert c.item(sid, ref)["status"] == "seen", f"{desc}: shown at the refresh"
+    finally:
+        c.disconnect()
+
+
+@pytest.mark.parametrize("fails, desc", [
+    (False, "fetched on the worker, shown by land on the UI thread, not before"),
+    (True, "a fetch that fails is left to the fetching thread"),
+])
+def test_a_seen_mark_fetches_what_it_changed_for_land(store, sid, served, heard, monkeypatch, fails, desc):
+    """#268: the seen mark, sent from a worker, fetches what it changed there too, for land to
+    show on the UI thread."""
+    d = served(store.path)
+    c = heard(d.client())
+    ref = store.post_item(sid, "decision", "chose", why="local")
+    try:
+        c.refresh()
+        until(lambda: ("inbox",) in c.waiting, desc="the first fetch")
+        c.refresh()
+        if fails:
+            real = c.fetch
+            monkeypatch.setattr(c, "fetch", lambda key: (_ for _ in ()).throw(Unreachable("down"))
+                                if key == ("inbox",) else real(key))
+        with c.lock:
+            c.waiting.clear()
+        assert c.mark_seen(sid, ref), desc
+        if fails:
+            assert ("inbox",) not in c.waiting, f"{desc}: nothing to land yet"
+            monkeypatch.undo()
+            until(lambda: ("inbox",) in c.waiting, desc=f"{desc}: the fetching thread fetched it")
+        else:
+            assert ("inbox",) in c.waiting and c.item(sid, ref)["status"] == "unseen", f"{desc}: not shown yet"
+        c.land()
+        assert c.item(sid, ref)["status"] == "seen", desc
+    finally:
+        c.disconnect()
