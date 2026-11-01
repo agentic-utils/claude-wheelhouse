@@ -10254,7 +10254,7 @@ async def test_a_seen_mark_through_the_daemon_is_sent_off_the_ui_thread(store, s
     (False, "a dialog over the app"),
     (True, "a dialog over a dialog (New session's directory picker): the app shows under both shades"),
 ])
-async def test_a_dialogs_shade_is_textuals_drawn_a_line_at_a_time(store, sid, monkeypatch, nested, desc):
+async def test_a_dialogs_shade_is_textuals_drawn_a_line_at_a_time(store, sid, monkeypatch, clock, nested, desc):
     """#268: a dialog's shade over the screen beneath is drawn line by line, each line's tint
     kept, not the whole screen again for any change beneath (~100 ms a frame with a big inbox).
     It looks exactly as Textual's own (BackgroundScreen) does, and follows a change beneath."""
@@ -10314,6 +10314,7 @@ async def test_a_dialogs_shade_is_textuals_drawn_a_line_at_a_time(store, sid, mo
         store.post_item(sid, "question", "zebra")
         app.refresh_data()
         await pilot.pause()
+        live = app.export_screenshot()   # as drawn after the change: only the lines it touched again
         assert any("zebra" in s.text for s in textuals()), f"{desc}: the change shows in Textual's"
         assert any("zebra" in s.text for s in ours()), f"{desc}: a change beneath shows through"
         assert cells(ours()) == cells(textuals()), f"{desc}: and still as Textual draws it"
@@ -10329,3 +10330,5 @@ async def test_a_dialogs_shade_is_textuals_drawn_a_line_at_a_time(store, sid, mo
             m.setattr(tui.Dialog, "render_line", Screen.render_line)
             theirs = frame()
         assert "zebra" in drawn and drawn == theirs, f"{desc}: a real frame, as Textual draws it"
+        if not nested:   # nested, Textual's own leaves the middle dialog's shade as it was: so does ours
+            assert live == theirs, f"{desc}: the frame after a change beneath, redrawn where it changed"
