@@ -574,6 +574,46 @@ async def test_a_pick_in_the_inbox_or_decisions_clears_the_others(store, sid, de
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("route, hidden, desc", [
+    ("inbox", False, "the inbox's row clicked"),
+    ("prs", False, "the PRs pane's row (show_item)"),
+    ("search", False, "a search's pick (go_to_item)"),
+    ("clicked-id", False, "an id clicked in Detail (go_to_item)"),
+    ("search", True, "a search's pick of a hidden item, gone to before (peeked)"),
+])
+async def test_the_item_picked_again_over_a_decision_shows(store, sid, decisions, route, hidden, desc):
+    """#281 (b889430's merge undid it): the selected item picked again, by any route, while a
+    decision shows over it showed nothing new and left the Decisions' highlight lit."""
+    if hidden:   # a dismissed task: the inbox hides it
+        q = store.post_item(sid, "task", "Which way?", status="dropped")
+        store.dismiss(sid, q)
+    else:
+        q = store.post_item(sid, "question", "Which way?", status="open")
+    key = f"{sid}|{q}"
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settled(app, pilot)
+        table = app.query_one("#decision-list")
+        if hidden:
+            app.searched((sid, q))
+        else:
+            await click_inbox(app, pilot, key)
+        await pilot.pause()
+        assert app.selected == (sid, q), f"{desc}: the item selected first"
+        await click_decision(app, pilot, "0003")
+        assert "Write-ahead logging." in app._detail_text, f"{desc}: the decision over it"
+        if route == "inbox":
+            await click_inbox(app, pilot, key)
+        else:
+            {"prs": lambda: app.show_item(sid, q), "search": lambda: app.searched((sid, q)),
+             "clicked-id": lambda: app.action_go_to_item(sid, q)}[route]()
+        await pilot.pause()
+        assert "Which way?" in app._detail_text and "Write-ahead" not in app._detail_text, f"{desc}: the item"
+        assert not table.show_cursor, f"{desc}: the Decisions' highlight cleared"
+        assert app.items_table.show_cursor is not hidden, f"{desc}: the inbox lit unless it hides the item"
+
+
+@pytest.mark.anyio
 async def test_a_decision_saved_shows_its_new_text_and_status_at_once(store, sid, tmp_path, monkeypatch):
     """A decision edited in Detail: moving off it asks first, Keep editing coming back to it; a
     save (Ctrl+S) shows in Detail and in the pane's status at once, not at its next ask."""

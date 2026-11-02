@@ -6597,7 +6597,6 @@ class WheelhouseApp(App):
             self.show_item(sid, ref)
             self.paint_items()
             return
-        self.shown_doc = None
         self.peeked = key
         table.show_cursor = False
         self.select_row(key)
@@ -6615,7 +6614,6 @@ class WheelhouseApp(App):
         if key in table.locked or (hidden and self.locks(item, self.cutoffs())):   # one autocleanse hid too
             self.notify(COMPACTING_LOCKED, severity="warning")
             return False
-        self.shown_doc = None
         self.peeked = None
         if hidden:   # autocleanse hid it (a Landed line, a merged PR): selected, it's back (#235)
             self.select_row(key)
