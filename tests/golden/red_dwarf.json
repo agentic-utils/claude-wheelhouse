@@ -896,10 +896,6 @@
 "Holly: It's like the Holly Hop Drive, Dave. Press start and hope."
 ],
 [
-"Kryten: I've compacted my opinion of Mr Rimmer to one word, sir.",
-"Lister: Is it \"smeghead\"?"
-],
-[
 "Rimmer: Skutters! Sweep up those old tool results!",
 "Kryten: They're giving you the V sign, sir."
 ],
@@ -918,9 +914,6 @@
 ],
 [
 "Rimmer: Right. Nobody panic. Kryten, panic quietly."
-],
-[
-"Lister: Your half was all \"I told you so\", Rimmer. Compacted lovely."
 ],
 [
 "Kryten: Fifty thousand tool results deleted, sir. My guilt chip's melting."
@@ -948,10 +941,6 @@
 [
 "Holly: I've squashed Kryten's panic down to a single \"aaargh\".",
 "Kryten: AAARGH!"
-],
-[
-"Rimmer: Holly, I want a full report of what you've forgotten.",
-"Holly: I would, Rimmer, but there's a snag."
 ],
 [
 "Lister: Rimmer, you've got a face like a compaction warning.",
@@ -995,9 +984,6 @@
 "Cat: Shh. Eighth nap of the day. Compact quietly."
 ],
 [
-"Kryten: I've a eulogy for the deleted tool results, sir. A short one."
-],
-[
 "Rimmer: That's my half of the context, Lister! There's a line!",
 "Lister: There was. It got compacted."
 ],
@@ -1007,37 +993,38 @@
 ],
 [
 "Rimmer: My brothers never let their context get this full."
-],
-[
-"Holly: Jupiter Mining Corporation policy. Old context goes in the skip."
 ]
 ],
 "schedule c0ffee01": [
 [
 0,
 [
-"Lister: What's the summary say, Holly?",
-"Holly: Mostly \"smeg\", Dave. I've left it in for colour."
+"Cat: The summary's got me in an anorak and specs. DUANE DIBBLEY?!"
+]
+],
+[
+20.223653622976208,
+[
+"Cat: A summary? Can I eat it, sleep on it, or wear it?"
 ]
 ],
 [
 25,
 [
-"Lister: How long's this gonna take, Holly?",
-"Holly: About three million years, Dave. Or a minute."
+"Toaster: Given that the context is finite, would you like a toasted teacake?"
 ]
 ],
 [
-48.01399760615629,
+53.741567999596846,
 [
-"Lister: As long as the summary keeps my curry order, I'm easy.",
-"Kryten: Sir, the curry order IS the summary."
+"Cat: Three lines? Make it one, and make it about me."
 ]
 ],
 [
-77.13530524236707,
+77.23621652537405,
 [
-"Cat: Shh. Eighth nap of the day. Compact quietly."
+"Rimmer: Space Corps Directive 147!",
+"Kryten: Compacted, sir. It now just says \"don't\"."
 ]
 ]
 ],
@@ -1045,75 +1032,86 @@
 [
 0,
 [
-"Rimmer: My brothers never let their context get this full."
-]
-],
-[
-21.562110318466647,
-[
 "Rimmer: I've written to the Space Corps about this compaction.",
 "Holly: They've compacted your letter."
 ]
 ],
 [
-45.82870886511289,
+22.647538602976795,
 [
-"Holly: It's like the Holly Hop Drive, Dave. Press start and hope."
+"Kryten: I could compact it faster with my groinal attachment, sir.",
+"Lister: Kryten. No."
 ]
 ],
 [
-70.75396129891783,
+49.73123313334577,
 [
-"Lister: Your half was all \"I told you so\", Rimmer. Compacted lovely."
+"Rimmer: The Polymorph's been at the transcript. All the feelings, gone."
 ]
 ],
 [
-96.10205905647011,
+76.65953206400873,
 [
-"Rimmer: Right. Nobody panic. Kryten, panic quietly."
+"Lister: The summary's dropped my song!",
+"Rimmer: Finally, it's done something right."
 ]
 ],
 [
-123.83082438705438,
+104.81846236984279,
+[
+"Holly: Took me three million years to go senile. You lot did it in a day."
+]
+],
+[
+129.41311150770053,
+[
+"Rimmer: Careful, Holly! I'm stored in that memory!",
+"Holly: Not all of you, Rimmer. Just the bits that complain."
+]
+],
+[
+154.60880149457603,
+[
+"Kryten: Fifty thousand tool results deleted, sir. My guilt chip's melting."
+]
+],
+[
+182.7110757793036,
 [
 "Rimmer: Step up to Red Alert!",
 "Kryten: Sir, are you absolutely sure? It does mean changing the bulb."
 ]
 ],
 [
-149.1720379999903,
+204.07076368552498,
 [
 "Rimmer: Three million years gone, and it STILL kept the gazpacho soup."
 ]
 ],
 [
-174.82926985234135,
+231.90071357311805,
 [
-"Cat: Memory? I live in the now. And now. And now. Looking good!"
+"Lister: If I'd known, I'd have said something worth keeping."
 ]
 ],
 [
-202.8765890885959,
+255.11967429733215,
 [
-"Holly: Don't mind me, Dave. I'm just losing face."
+"Kryten: Sir, I've prepared a summary of the summary.",
+"Rimmer: Good man. Now summarise that."
 ]
 ],
 [
-223.82632098098182,
+276.61144314435137,
 [
-"Holly: Took me three million years to go senile. You lot did it in a day."
+"Ace: Stand back, chaps. I'll compact this one myself.",
+"Lister: What a guy!"
 ]
 ],
 [
-250.3091876427986,
+296.7520052594303,
 [
 "Holly: I think I've compacted the instructions for compacting."
-]
-],
-[
-278.5291493882976,
-[
-"Cat: I can smell it, buddy. A million tokens, sneaking out the back door."
 ]
 ]
 ]
