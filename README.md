@@ -909,7 +909,10 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
   while there's another: the trash compactor, or Star Trek's engine room, where Scotty thumps
   the console as the warp core pulses faster and the CONTEXT gauge falls from full to a sliver,
   steam venting from the bulkheads (a red alert if it failed), with Kirk, Spock, McCoy, Uhura,
-  Sulu and Chekov's lines while it runs. With the animation off (`ANIMATION_FPS=0`) each stage is a
+  Sulu and Chekov's lines while it runs, or Red Dwarf, where Holly's face flakes off the
+  monitor as her MEMORY readout falls from three million years to three lines, Kryten panicking,
+  Rimmer ordering Red Alert and the Cat checking his reflection (static and a red alert if it
+  failed). With the animation off (`ANIMATION_FPS=0`) each stage is a
   still. When the cycle ends the dock closes and its last frame stays in the conversation where
   the art was first drawn, with who asked or what came of it under it. The session's notes turn
   shows as one dim line ("writing its notes for after compaction · 12 lines"), never the notes
