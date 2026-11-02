@@ -108,11 +108,15 @@ def compaction_entries(stages, active: bool, at: float | None = None) -> list:
     latest stage not an end) draws no art there: one "dock" entry instead (dock_text), which the
     app pins under the conversation, animated (#287), until its end puts the art back in place."""
     at = time.time() if at is None else at
-    out, cycles, drawn = [], {}, {}
+    out, cycles, drawn, scenes = [], {}, {}, {}
     last = stages[-1]["cycle_id"] if stages else None
     running = last if active and stages and stages[-1]["state"] not in compactor.ENDS else None
+    previous = None
+    for st in stages:   # each cycle's scene (#304), never the one before's while there's another
+        if st["cycle_id"] not in scenes:
+            scenes[st["cycle_id"]] = previous = compactor.scene_for(st["cycle_id"], previous and previous.name)
     for st in stages:
-        text = compactor.stage_text(st["state"], ORIGIN_WORDS.get(st["origin"]), st["note"], st["at"][11:16] + "Z")
+        text = compactor.stage_text(scenes[st["cycle_id"]], st["state"], ORIGIN_WORDS.get(st["origin"]), st["note"], st["at"][11:16] + "Z")
         if st["cycle_id"] == running:
             continue
         if text is not None:
@@ -125,7 +129,7 @@ def compaction_entries(stages, active: bool, at: float | None = None) -> list:
         cycles.setdefault(st["cycle_id"], []).append(st)
     if running:
         st = cycles[running][-1]
-        out.append(transcript.Entry("dock", compactor.dock_text(st["state"], epoch(st["at"]), ORIGIN_WORDS.get(st["origin"]),
+        out.append(transcript.Entry("dock", compactor.dock_text(scenes[running], st["state"], epoch(st["at"]), ORIGIN_WORDS.get(st["origin"]),
                                                                 st["note"], st["at"][11:16] + "Z"), st["at"]))
     for cid, run in cycles.items():
         windows = []
@@ -134,7 +138,7 @@ def compaction_entries(stages, active: bool, at: float | None = None) -> list:
                 continue
             end = (epoch(run[i + 1]["at"]) if i + 1 < len(run) else at if active and cid == last else epoch(st["at"]))
             windows.append((epoch(st["at"]), min(end, at)))
-        for when, excerpt in compactor.schedule(cid, windows):
+        for when, excerpt in compactor.schedule(cid, windows, scenes[cid]):
             if when <= at:
                 stamp_ = datetime.fromtimestamp(when, timezone.utc).isoformat(timespec="microseconds")
                 out.append(transcript.Entry("crew", "\n".join(excerpt), stamp_))
