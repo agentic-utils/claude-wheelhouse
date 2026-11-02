@@ -337,12 +337,17 @@ class Decisions(Vertical):
             self.pick(event.row_key.value)
 
     def pick(self, path: str) -> None:
-        """A decision picked by the person: shown in Detail, the inbox's highlight hidden (#281)."""
+        """A decision picked by the person: shown in Detail, the other panes' highlights hidden
+        (#281, #305). show_doc's showing(None, None) reaches this pane too, so its own
+        highlight is lit after."""
         if (r := self.row(path)) is None:
             return
-        self.shown = path
         if self.ctx.show_doc is not None:
             self.ctx.show_doc(path, title_of(r))
+        table = self.query_one(DecisionTable)
+        with table.prevent(DataTable.RowHighlighted):
+            table.show_cursor = True
+        self.shown = path
 
     def showing(self, sid: str | None, ref: str | None) -> None:
         """Detail shows an item or a conversation (api's showing hook): the highlight hidden,

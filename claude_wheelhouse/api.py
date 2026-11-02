@@ -16,7 +16,7 @@ methods on it:
 - `animate(frame)`: five times a second, except while the person types in an answer box,
   when animation rests.
 - `showing(sid, ref)`: the item Detail shows has changed, picked in the inbox or another pane
-  (ref None for a session's conversation, both None for nothing): a pane listing it can
+  (ref None for a session's conversation, both None for nothing or a module's doc, #305): a pane listing it can
   highlight it, and one that doesn't can hide its highlight (#148).
 - `detail_parts()`: once, after the panes mount: widgets of the pane's own for the Detail pane,
   {"body": one scrolling under the thread shown, "bar": one fixed under that}, either left

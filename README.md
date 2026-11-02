@@ -438,7 +438,7 @@ session.
   header sorts by it, as the inbox's do. Moving the cursor shows the decision in Detail,
   rendered, with no answer box, and `Enter`, or a click on the highlighted row, opens it full screen. As with
   the PRs pane, Detail shows what you picked last: picking a decision hides the inbox's
-  highlight, and picking in the inbox hides the pane's, so a click on the row it was on
+  and the PRs pane's highlights, and picking in the inbox or the PRs pane hides this pane's, so a click on the row it was on
   shows that row again, never opening it full screen. With no decisions found
   the pane shrinks to a line saying where it looked, and the other panes in its column share
   the room, each in proportion to its size (the inbox twice the PRs', by default). That
