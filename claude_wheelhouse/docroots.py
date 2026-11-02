@@ -58,12 +58,13 @@ def confine(path, roots) -> Path:
     raise Outside(f"{path} is not under any doc root")
 
 
-def read(path, roots, have: str | None = None) -> dict:
-    """A doc under roots (confine), at most DOC_CAP bytes: {path, text, stamp, gone, mtime_ns},
+def read(path, roots, have: str | None = None, files=()) -> dict:
+    """A doc under roots (confine), or one of files (permitted: a doc item's file granted to an
+    editor, Hub.grant_doc), at most DOC_CAP bytes: {path, text, stamp, gone, mtime_ns},
     path as resolved; {"same": true} if its stamp is still have. gone says why it can't be
     read ("gone", "not a file"). Opened without following a symlink and without blocking, so
     a link or FIFO swapped in since it was resolved is refused or never waited on."""
-    real = confine(path, roots)
+    real = permitted(path, roots, files)
     try:
         fd = os.open(real, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
     except FileNotFoundError:

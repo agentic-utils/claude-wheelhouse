@@ -166,7 +166,7 @@ class LocalClient(Hub):
             self.doc_roots_at = roots = (now, self.served.doc_roots())
         kept = getattr(self, "docs_read", {}).get(path)
         try:
-            doc = docroots.read(path, roots[1], kept and kept.get("stamp"))
+            doc = docroots.read(path, roots[1], kept and kept.get("stamp"), sorted(self.granted))
         except docroots.Outside as e:
             doc = {"refused": str(e)}
         if doc.get("same"):
@@ -178,7 +178,7 @@ class LocalClient(Hub):
         """The doc editor's save, as the daemon's /docs/write makes it (docroots.save): to a doc
         item's file or under a module's doc root, refused if the file changed or went since
         mtime_ns, unless force."""
-        return docroots.save(path, text, mtime_ns, self.served.doc_roots(), self.store.doc_paths(), force)
+        return docroots.save(path, text, mtime_ns, self.served.doc_roots(), self.doc_files(), force)
 
 
 class Unreachable(RuntimeError):
@@ -668,6 +668,15 @@ class RemoteClient:
         """A doc under a module's doc root (/docs), kept up to date as a doc item's is;
         {"refused": why} for a path outside them, None if it couldn't be read."""
         return self.shown(("file", path))
+
+    def grant_doc(self, sid: str, ref: str) -> dict:
+        """A doc editor opened on a doc item (/docs/grant, Hub.grant_doc): its file still read
+        and saved once the item has gone with its session. {} if refused or unreachable: a
+        save then says why."""
+        try:
+            return self.request("POST", "/docs/grant", {"sid": sid, "ref": ref}, str(uuid.uuid4()))
+        except (Refused, Unreachable, self.httpx.TransportError):
+            return {}
 
     def write_doc(self, path: str, text: str, mtime_ns: int | None, force: bool = False) -> dict:
         """The doc editor's save (/docs/write), answered as LocalClient's (docroots.save). Saved,

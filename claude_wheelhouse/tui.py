@@ -2697,6 +2697,9 @@ class DocEditor(FollowsCursor):
         self.anchor: tuple[int, int] | None = None   # (source line, screen row) a render keeps
         self.title: str | None = None   # the pane's own title, while edited shows on it
         self.titled: str | None = None   # ... and the title last set, own and marks
+        # a doc item's file (as posted) and title, granted when it opened (Hub.grant_doc): still
+        # shown and saved by its path once the item goes with its session (#293)
+        self.granted: tuple[str, str] | None = None
 
     def on_mount(self) -> None:
         # held, not queried: the app's refresh paints through here (shown_in, paint_title),
@@ -2771,6 +2774,7 @@ class DocEditor(FollowsCursor):
         """Opened on the doc the viewer shows: its kept edits' buffer, base and cursor (which it
         returns) if it has them, else the file's text as shown, with the mtime it was read at."""
         self.key, self.path = view.doc_key, view.doc_path
+        self.granted = self.app.grant_doc(*self.key) if self.key and self.key[0] != "file" else None
         kept, cursor = self.edits.get(self.path), None
         if kept is not None:   # edits kept from before: the buffer, and edited, back
             self.base, self.shown, self.mtime, cursor = kept.base, kept.shown, kept.mtime, kept.cursor
@@ -2826,10 +2830,11 @@ class DocEditor(FollowsCursor):
             return
         if key != self.key:
             left, path, back = self.edited, self.path, ("show", *self.came) if self.came else ("item", *self.key)
+            granted = self.granted
             self.stash()
             self.close()
             if left:
-                self.app.call_later(self.app.leaving, self, path, back)
+                self.app.call_later(self.app.leaving, self, path, back, granted)
         elif (kept := self.edits.get(self.path)) is None and self.text != self.base:
             self.close()
         elif kept is not None and (kept.text, kept.shown) != (self.text, self.shown):
@@ -2843,7 +2848,7 @@ class DocEditor(FollowsCursor):
         if self.key is None:
             return
         refocus = self.has_focus
-        self.key = self.path = self.shown = self.block = self.anchor = self.mtime = self.came = None
+        self.key = self.path = self.shown = self.block = self.anchor = self.mtime = self.came = self.granted = None
         self.splitter.display = self.display = False
         self.paint_title()
         self.repaint()
@@ -6227,15 +6232,18 @@ class WheelhouseApp(App):
             elif rebuilt and table.row_count:
                 above = self.above_deleted(before) if arrow in self.deleted else None
                 table.move_cursor(row=min(keep, table.row_count - 1) if above is None else above, animate=False)
+        # its item went from under Detail's doc editor, not by the person's Delete: held there (#293)
+        held = bool(rebuilt and key and key not in table.rows and key not in self.deleted and self.hold_doc_edited(key)) \
+            or self.shown_doc is not None and self.editing_doc()   # a doc shown by its path, being edited: kept
         if rebuilt:
             self.deleted = set()
         if not pending:   # where the app put it; an arrow pending stays pending
             self.items_cursor = table.cursor_key()
-        if rebuilt and key not in table.rows and table.row_count and (key is None or key != self.peeked):   # its item went: take the one now
+        if rebuilt and not held and key not in table.rows and table.row_count and (key is None or key != self.peeked):   # its item went: take the one now
             # under the cursor, the list going with it: one current session (D22)
             self.select_row(table.coordinate_to_cell_key((table.cursor_row, 0)).row_key.value)
-        if not table.row_count:   # its item (or followed session) went and none is left: nothing selected
-            self.selected = None
+        if not table.row_count and not held and (key is None or key != self.peeked):   # its item (or followed
+            self.selected = None   # session) went and none is left: nothing selected
         if self.selected is None and self.box_target is not None:   # nor the box aimed at what went
             self.retarget(move_list=False)
         self.items_painted = ((read, self.items_state()), [row_values(r) for r in found],
@@ -6561,6 +6569,17 @@ class WheelhouseApp(App):
         item = self.selected and self.selected[1] and self.client.item(*self.selected)
         return item if item and item["kind"] == "doc" else None
 
+    def grant_doc(self, sid: str, ref: str) -> tuple[str, str] | None:
+        """A doc item's file (as its session posted it) and title, granted to the editor opening
+        on it (client.grant_doc): still read and saved once the item goes with its session
+        (#293). None if it couldn't be granted (gone already, the daemon unreachable)."""
+        try:
+            path = self.client.grant_doc(sid, ref).get("path")
+            item = self.client.item(sid, ref)
+        except Exception:   # gone meanwhile (KeyError in process): nothing granted
+            return None
+        return (path, item["title"]) if path and item is not None else None
+
     def show_doc(self, path: str, title: str) -> None:
         """A module's doc in the Detail pane (api.Context.show_doc), read through the client
         from under a doc root (/docs), in place of what's selected until the selection moves:
@@ -6807,15 +6826,24 @@ class WheelhouseApp(App):
             editor.repaint()
         self.each_pane("doc_written", path)
 
-    def leaving(self, editor: "DocEditor", path: str, back: tuple[str, str, str]) -> None:
+    def leaving(self, editor: "DocEditor", path: str, back: tuple[str, str, str],
+                granted: tuple[str, str] | None = None) -> None:
         """The selection moved off a doc with unsaved edits (DocEditor.follow): Save, Discard,
         or Keep editing, which goes back to it (`back`: ("item", sid, ref) for a doc item,
         ("show", path, title) for a module's doc) and opens its editor again where the cursor
-        was."""
+        was. granted: the doc item's file and title (DocEditor.granted), gone back to by its path
+        if the item has gone meanwhile."""
         if path not in self.doc_edits or editor.view.doc_path == path:   # saved or discarded meanwhile, or
             return   # the same file shown by another way (a doc item of the same path): its edits show there
 
         def go_back() -> None:
+            nonlocal back
+            if back[0] == "item" and back[1] != "file" and self.client.item(*back[1:]) is None:
+                if granted is None:   # gone, and its file never granted (the daemon unreachable at open)
+                    self.notify(f"{back[2]} has gone and {os.path.basename(path)} can't be opened again here: its "
+                                "unsaved edits can't be saved from the wheelhouse", severity="error")
+                    return
+                back = ("show", *granted)   # gone with its session meanwhile (#293): its file, by its path
             if back[0] == "show":
                 self.show_doc(*back[1:])
             elif back[1] != "file":   # ("item", "file", path): a module's doc of no known title stays left
@@ -7459,6 +7487,31 @@ class WheelhouseApp(App):
         and with edits put Save, the Enter default, under their next keystroke (#282)."""
         editor = getattr(self, "detail_editor", None)
         return editor is not None and editor.key is not None and (editor.edited or editor.has_focus)
+
+    def hold_doc_edited(self, key: str) -> bool:
+        """The selected doc item's row gone from the inbox while Detail's editor is on it
+        (editing_doc), not by the person's Delete (#293): the editor stays open and nothing is
+        asked, as for a selection the app would move (#282). Its session parked, say: the item
+        stays selected, shown hidden from the inbox (peeked, #273). Gone with its session (ended),
+        with unsaved edits: the editor goes on with the file by its path (show_doc), which it
+        may still save (DocEditor.granted). True if held."""
+        editor = getattr(self, "detail_editor", None)
+        if editor is None or self.shown_doc or not self.editing_doc() or editor.key != tuple(key.split("|")):
+            return False
+        if self.client.item(*editor.key) is not None:
+            self.peeked = key
+            self.items_table.show_cursor = False
+            return True
+        if not editor.edited or editor.granted is None:
+            return False
+        path, title = editor.granted
+        editor.key, editor.came = ("file", path), (path, title)   # the viewer's key for it, below: no leaving
+        self.selected = None   # first: a selection set gives way to no module's doc
+        self.shown_doc = (path, title)
+        self.items_table.show_cursor = False
+        self.notify(f"{key.split('|')[1]} has gone: {os.path.basename(path)} stays open "
+                    "with your edits, and Ctrl+S saves it", severity="warning")
+        return True
 
     def compacting(self) -> set[str]:
         """The running sessions being compacted (hub.compacting_now, from the store): what locks and

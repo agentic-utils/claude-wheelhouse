@@ -381,6 +381,9 @@ class Hub:
         self.agent_followers: dict[tuple[str, str], transcript.AgentFollower] = {}
         # the docs shown (document), by (session, ref): their last read, as (path, stamp, text)
         self.docs: dict[tuple[str, str], tuple[str, str, str]] = {}
+        # the doc items' files an editor has opened (grant_doc): still read and saved through the
+        # doc editor once the item has gone with its session (#293), for the hub's life
+        self.granted: set[str] = set()
         # the account's plan usage, for every surface: asked of one Claude Code, every
         # plan_usage.EVERY seconds, and taken from SDK sessions' readings in the store
         self.usage = plan_usage.AccountUsage()
@@ -1764,6 +1767,22 @@ class Hub:
         if follower.blocks_key != follower.seen or follower.blocks is None:   # parsed once per change
             follower.blocks_key, follower.blocks = follower.seen, transcript.agent_blocks(recs, prompt=follower.prompt)
         return follower.blocks
+
+    def grant_doc(self, sid: str, ref: str) -> dict:
+        """A doc editor opened on a doc item (DocEditor.opened): its file, as the session
+        posted it (never a path a client sends), stays readable and writable through the doc
+        editor (doc_files, /docs, /docs/write) after the item goes with its session, so unsaved
+        edits there can still be saved (#293). That one file only; nothing for any other item."""
+        item = self.store.item(sid, ref)
+        if item is None or item["kind"] != "doc":
+            raise KeyError(f"no doc {ref} in this session")
+        self.granted.add(item["body"])
+        return {"path": item["body"]}
+
+    def doc_files(self) -> list[str]:
+        """The files besides the modules' doc roots the doc editor may read and save: every doc
+        item's (Store.doc_paths), and those granted to an editor that opened one (grant_doc)."""
+        return [*self.store.doc_paths(), *sorted(self.granted)]
 
     def document(self, sid: str, ref: str) -> dict | None:
         """A doc item's file, read from the path the session posted (never one a client

@@ -475,6 +475,7 @@ class Daemon:
             # the modules' (served.py): a doc under a doc root, and each module's own routes
             Route("/docs", self.query(self.doc)),
             Route("/docs/write", self.command(self.write_doc), methods=["POST"]),
+            Route("/docs/grant", self.command(self.grant_doc), methods=["POST"]),
             Route("/m/{mid}/{rest:path}", self.query(self.module_query, run=self.module_run)),
             Route("/m/{mid}/{rest:path}", self.command(self.module_command, hub=False), methods=["POST"]),
         ], middleware=[Middleware(Guard, daemon=self)], lifespan=self.lifespan)
@@ -928,9 +929,18 @@ class Daemon:
         if its stamp is still ?have=; 403 for any other path, resolved first, so neither ..
         nor a symlink reaches outside."""
         try:
-            return self.served.read(text(dict(request.query_params), "path"), request.query_params.get("have"))
+            return self.served.read(text(dict(request.query_params), "path"), request.query_params.get("have"),
+                                    sorted(self.hub.granted))
         except docroots.Outside as e:
             raise Refused(403, str(e)) from None
+
+    def grant_doc(self, request: Request, body: dict) -> dict:
+        """A doc editor opened on a doc item ({sid, ref}, Hub.grant_doc): its file still read
+        and saved here once the item has gone with its session (#293). 404 for no such doc."""
+        try:
+            return self.hub.grant_doc(text(body, "sid"), text(body, "ref"))
+        except KeyError as e:
+            raise Refused(404, e.args[0]) from None
 
     def write_doc(self, request: Request, body: dict) -> dict:
         """The doc editor's save (docroots.write): {path, text, mtime_ns, force} to a doc item's
@@ -944,7 +954,7 @@ class Daemon:
             raise Refused(400, "force must be true or false")
         try:
             return docroots.write(text(body, "path"), text(body, "text"), mtime_ns, self.served.doc_roots(),
-                                  self.hub.store.doc_paths(), force)
+                                  self.hub.doc_files(), force)
         except docroots.Conflict as e:
             raise Refused(409, str(e), extra={"mtime_ns": e.mtime_ns, "stamp": e.stamp, "text": e.text}) from None
         except docroots.Gone as e:

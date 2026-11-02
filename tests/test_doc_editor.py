@@ -491,7 +491,8 @@ async def test_a_save_outside_what_may_be_written_is_refused(store, sid, doc, mo
     async with app.run_test(size=(160, 40)) as pilot:
         view, editor = await shown(app, pilot, doc[0])
         await edited(app, pilot, view, editor)
-        monkeypatch.setattr(store, "doc_paths", lambda: [])   # the item's file no longer a doc's
+        monkeypatch.setattr(store, "doc_paths", lambda: [])   # the item's file no longer a doc's,
+        app.client.granted.clear()   # nor granted to the editor that opened it (#293)
         await pressed(pilot, "ctrl+s", lambda: isinstance(app.screen, SaveFailed))
         assert isinstance(app.screen, SaveFailed)
         assert "is not under any doc root" in str(app.screen.query_one(".dialog-prompt").render())
@@ -621,3 +622,65 @@ async def test_an_undo_that_shrinks_the_editor_keeps_the_cursor_in_it(store, sid
         view, editor = await shown(app, pilot, doc[0])
         await click(pilot, view, row_with(view, "The plan"))
         await undone_across_the_scrollbar(pilot, editor, extra, keys, desc)
+
+
+@pytest.mark.anyio
+@pytest.mark.both
+@pytest.mark.parametrize("how, asked, selected, desc", [
+    ("delete", True, "doc", "Delete in the inbox: the person's own, so asked; Keep editing goes back to it"),
+    ("ctrl+delete", False, "doc", "Ctrl+Delete in the inbox: a new doc isn't completed, so it stays"),
+    ("dismissed", False, "doc", "dismissed by another app: the selected item held, the editor open"),
+    ("parked", False, "doc", "its session parked by another app: held, hidden from the inbox, nothing asked"),
+    ("ended", False, None, "its session ended: the editor open on the file by its path, nothing asked"),
+    ("ended while asked", True, "q", "its session ended under the prompt: Keep editing goes back by its path"),
+])
+async def test_the_item_going_from_under_the_editor_never_loses_the_edits(store, sid, doc, tmp_path, how, asked,
+                                                                          selected, desc):
+    """#293: the doc item under Detail's editor going away, each way it can. Moved by the app,
+    LeaveEdits fired unasked with Save, the Enter default, under the person's typing; with the
+    session ended the save was refused and the edits stranded. Now asked only for the person's
+    own move, and the edits always reach the file with Ctrl+S."""
+    other = store.create_session(str(tmp_path), name="other")
+    q = store.post_item(other if how == "ended while asked" else sid, "question", "which db?")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        view, editor = await shown(app, pilot, doc[0])
+        await click(pilot, view, row_with(view, "Build it."))
+        editor.insert("Typing ")
+        await pilot.pause()
+        if how in ("delete", "ctrl+delete"):
+            app.items_table.focus()
+            await pilot.pause()
+            if how == "delete":   # a doc is pinned: Delete confirmed first
+                await pressed(pilot, "delete", lambda: isinstance(app.screen, tui.Confirm))
+                await pressed(pilot, "alt+y", lambda: isinstance(app.screen, LeaveEdits))
+            else:
+                await pilot.press("ctrl+delete")
+        elif how == "ended while asked":
+            app.items_table.move_cursor(row=item_row(app, q))
+            await until(pilot, lambda: isinstance(app.screen, LeaveEdits))
+            store.end(sid)
+            app.refresh_data()
+        else:
+            if how == "dismissed":
+                store.set_pinned(sid, doc[0], False)
+                store.dismiss(sid, doc[0])
+            else:
+                store.set_parked(sid, True) if how == "parked" else store.end(sid)
+            app.refresh_data()
+        await pilot.pause()
+        await pilot.pause()
+        store.post_item(other, "question", "and the cache?")   # the inbox rebuilt after: still held
+        app.refresh_data()
+        await pilot.pause()
+        assert isinstance(app.screen, LeaveEdits) == asked, f"{desc}: asked {asked}, {app.screen}"
+        if asked:   # Keep editing
+            await pressed(pilot, "escape", lambda: editor.display and editor.has_focus)
+        assert editor.display and editor.text.startswith("# The plan\n\nTyping "), f"{desc}: the editor open on the edits"
+        assert app.selected == {"doc": (sid, doc[0]), "q": (other, q), None: None}[selected], f"{desc}: {app.selected}"
+        if selected != "doc":
+            assert app.shown_doc == (str(doc[1]), "the plan"), f"{desc}: shown by its path, {app.shown_doc}"
+        assert doc[1].read_text() == DOC, f"{desc}: nothing written unasked"
+        editor.focus()
+        await pressed(pilot, "ctrl+s", lambda: doc[1].read_text() != DOC)
+        assert doc[1].read_text() == DOC.replace("Build it.", "Typing Build it."), f"{desc}: saved"

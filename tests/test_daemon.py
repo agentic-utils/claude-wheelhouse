@@ -830,7 +830,7 @@ def every_route(daemon):
 
 def test_every_route_is_covered_by_the_token_tests(daemon):
     routes = every_route(daemon)
-    assert len(routes) == len(set(routes)) == 48 and not [p for _, p in routes if "{" in p], routes
+    assert len(routes) == len(set(routes)) == 49 and not [p for _, p in routes if "{" in p], routes
     assert ("GET", "/events") in routes and ("POST", "/shutdown") in routes
 
 
@@ -1443,6 +1443,30 @@ async def test_a_doc_is_written_only_where_and_when_it_may_be(moduled, store, si
     if status == 409:
         assert (r.json()["mtime_ns"], r.json()["text"]) == (st.st_mtime_ns, "# A\n"), f"{desc}: the file's mtime and text"
     assert not [p.name for p in (tmp / "root").iterdir() if p.name.endswith(".tmp")], f"{desc}: no temporary file left"
+
+
+@pytest.mark.parametrize("granted, status, desc", [
+    (True, 200, "granted when an editor opened it: still saved once its session has ended (#293)"),
+    (False, 403, "never granted: its session ended, the file is no doc's"),
+])
+async def test_a_granted_doc_items_file_outlives_its_session(moduled, store, sid, granted, status, desc):
+    daemon, tmp = moduled
+    path = tmp / "item.txt"
+    path.write_text("# Item\n")
+    ref = store.post_doc(sid, "an item's doc", str(path))
+    q = store.post_item(sid, "question", "which db?")
+    if granted:
+        r = await call(daemon, "POST", "/docs/grant", {"sid": sid, "ref": ref})
+        assert r.status_code == 200 and r.json() == {"path": str(path)}, f"{desc}: {r.text}"
+    assert (await call(daemon, "POST", "/docs/grant", {"sid": sid, "ref": q})).status_code == 404, \
+        f"{desc}: a question has no file to grant"
+    store.end(sid)
+    r = await call(daemon, "POST", "/docs/write", {"path": str(path), "text": "# New\n",
+                                                   "mtime_ns": path.stat().st_mtime_ns})
+    assert r.status_code == status, f"{desc}: {r.text}"
+    assert path.read_text() == ("# New\n" if granted else "# Item\n"), desc
+    r = await call(daemon, "GET", f"/docs?path={path}")
+    assert r.status_code == status, f"{desc}: read through /docs as granted, {r.text}"
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root writes anywhere")
