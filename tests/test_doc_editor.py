@@ -580,3 +580,34 @@ async def test_the_app_never_moves_the_selection_off_a_doc_being_edited(store, s
             await pilot.press("enter")
             await pressed(pilot, "ctrl+a", lambda: view.text_selection is not None)
         assert doc[1].read_text() == DOC, f"{desc}: nothing written"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("full", [False, True])
+@pytest.mark.parametrize("keys, desc", [
+    (["enter"], "Enter on the last row in sight"),
+    (["x"], "a long line wrapping past the last row in sight"),
+])
+async def test_the_editor_follows_the_cursor_down(store, sid, doc, full, keys, desc):
+    """#300, as #298 for the answer box: Textual scrolls to the cursor before it grows the
+    editor for the edit, so the new row was left just under it."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        view, editor = await shown(app, pilot, doc[0], full)
+        await click(pilot, view, row_with(view, "The plan"))
+        height = editor.scrollable_content_region.height
+        # a row more than the editor holds, so it has scrolled once already (see #298's test)
+        editor.text = "\n".join(["line"] * (height + 1))
+        await pilot.pause()
+        if keys == ["x"]:   # the last line a full row: one more key wraps it
+            editor.text = "\n".join(["line"] * height + ["x" * editor.wrap_width])
+        editor.move_cursor(editor.document.end)
+        await pilot.pause()
+        assert editor.scroll_offset.y == 1, f"{desc}: scrolled to the cursor on the last row"
+        assert editor.wrapped_document.location_to_offset(editor.cursor_location).y == height, f"{desc}: on its last row"
+        await pilot.press(*keys)
+        await pilot.pause()
+        row = editor.wrapped_document.location_to_offset(editor.cursor_location).y
+        assert row == height + 1, f"{desc}: the cursor a row further down"
+        assert editor.scroll_offset.y <= row < editor.scroll_offset.y + height, \
+            f"{desc}: the cursor's row {row} in sight, rows {editor.scroll_offset.y} to {editor.scroll_offset.y + height - 1}"

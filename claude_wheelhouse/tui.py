@@ -1724,7 +1724,23 @@ class ItemList(SinkList):
         self.extend_to(self.cursor_key())
 
 
-class Compose(TextArea):
+class FollowsCursor(TextArea):
+    """A TextArea whose scroll follows the cursor down an edit: the answer box (#298) and the
+    doc editor (#300)."""
+
+    def edit(self, edit):
+        # Textual moves the cursor, and scrolls to it, before it grows the box's virtual size
+        # for the edit, so the scroll is clamped to the old height: Enter on the last row
+        # visible, or a line wrapping past it, left the new row out of sight (#298). Once
+        # the size is right, the same scroll again, for an edit that moved the cursor
+        before = self.selection
+        result = super().edit(edit)
+        if self.selection != before:
+            self.scroll_cursor_visible()
+        return result
+
+
+class Compose(FollowsCursor):
     """An answer box. Ctrl+A selects all of it, as in other editors (TextArea's own is line
     start). Ctrl+Enter submits what's typed: queued or sent at once, by the session's mode.
     Most terminals (Windows Terminal among them) send Ctrl+Enter as a line feed, which
@@ -1805,17 +1821,6 @@ class Compose(TextArea):
         self.replace(found[at][1], (row, col - len(code) - 1), (row, col))
         self.focus()
         return True
-
-    def edit(self, edit):
-        # Textual moves the cursor, and scrolls to it, before it grows the box's virtual size
-        # for the edit, so the scroll is clamped to the old height: Enter on the last row
-        # visible, or a line wrapping past it, left the new row out of sight (#298). Once
-        # the size is right, the same scroll again, for an edit that moved the cursor
-        before = self.selection
-        result = super().edit(edit)
-        if self.selection != before:
-            self.scroll_cursor_visible()
-        return result
 
     async def _on_key(self, event) -> None:
         # Enter here; Tab is a binding, which acts before the box sees its key (take_key),
@@ -2628,7 +2633,7 @@ CTRL_S_HINT = "Did you mean Ctrl+Enter? Hit Ctrl+S again if you meant to send th
 CTRL_S_AGAIN = 5.0
 
 
-class DocEditor(TextArea):
+class DocEditor(FollowsCursor):
     """A doc's editor (.plan/modules.md, "Viewing and editing a doc", Q106): a lower split of
     the viewer it edits (`viewer`, a Transcript's selector), under a splitter kept as
     layout.editor, opened by a click on the rendered doc with its cursor on the clicked
