@@ -295,15 +295,20 @@ session.
   (dragging the line between them resizes it, kept as `layout.editor`). `Ctrl+Enter`
   shows the edits rendered above, as an answer queues; nothing re-renders as you type.
   The two keep step: scrolling the doc scrolls the editor to the same place, and moving
-  the cursor into another block scrolls the doc to show it. `Esc` closes the editor,
-  asking first if there are edits (Close keeping them, the default; Discard; or Keep
-  editing), and the pane's title says `edited` while there are. Edits not discarded are kept, doc by doc, while the app
-  runs: another doc shown closes the editor, and opening it on the first again brings them
-  back, a click putting the cursor on its block; until then that doc shows them rendered,
-  full screen too. A file changed on disk meanwhile keeps the edits, said once and as
-  `file changed` in the title. One file has one buffer, however it's reached. Saving
-  comes next: for now `Ctrl+S` (and `Ctrl+Enter` for a session in Immediate mode) says so,
-  and the file is never written.
+  the cursor into another block scrolls the doc to show it. While there are unsaved edits
+  the pane's title says `edited · Ctrl+S saves`. `Ctrl+S` saves the doc to its file (and
+  `Ctrl+Enter` does too for a doc item of a session in Immediate mode), never sending the
+  session's queue; Detail, full screen and the Decisions pane show the saved text and
+  status at once. `Esc` closes the editor, asking first if there are edits: Save (the
+  default), Discard, or Keep editing. Moving the selection off a doc with unsaved edits (to
+  another item, decision or session) asks the same, Keep editing going back to the doc, so
+  edits are never left in a hidden editor. A file changed on disk meanwhile keeps the
+  edits, said once and as `file changed` in the title; saving over it asks Overwrite,
+  Reload (the file's text replaces your edits) or Cancel. A file gone meanwhile offers to
+  write it anew. A save the daemon can't make (a file another user owns, a full disk) says
+  why, naming the file. The daemon writes only a doc item's file or a doc under a module's
+  doc roots, atomically, keeping the file's mode. One file has one buffer, however it's
+  reached.
 - **Decisions.** If your own instructions let a session decide some things without asking
   you, it reports each one as a decision (`D1`): what it decided, and one short line with
   the alternative, why, and how to reverse it. Decisions block nothing. Each session

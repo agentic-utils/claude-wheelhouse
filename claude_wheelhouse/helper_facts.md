@@ -1,4 +1,4 @@
-<!-- fact sheet stamp: version 136, 2026-11-02T00:23:04Z, source d628e6f96de7ee0d (make facts restamps it: AGENTS.md) -->
+<!-- fact sheet stamp: version 138, 2026-11-02T01:18:41Z, source 2752d28f03a1cec2 (make facts restamps it: AGENTS.md) -->
 # Wheelhouse fact sheet
 
 What the helper chat knows before any question. The guide below is written by hand; the
@@ -54,6 +54,10 @@ daemon running.
   task in the inbox ("Compact <name>: <k>k context", done once compacted) and blue lines in the
   conversation, and the session's eye is blue meanwhile; what you send it waits until it's done.
 - Tour: the guided tour, resumed with Alt+T while the title bar shows its badge.
+- Doc editor: a click on a doc (an item's or a decision, in Detail or full screen) opens an
+  editor below it. Ctrl+S saves to the file; the pane's title says `edited · Ctrl+S saves`
+  while there are unsaved edits, and leaving them (Esc, or selecting something else) asks
+  Save, Discard or Keep editing. A file changed on disk since asks Overwrite, Reload or Cancel.
 
 ## Where to look in the source
 
@@ -216,11 +220,11 @@ This fact sheet describes claude-wheelhouse 0.2.0.dev0.
 
 ### A doc's editor
 
-- **Ctrl+Enter or Ctrl+J**: Show the edits rendered in the doc above
+- **Ctrl+Enter or Ctrl+J**: Show the edits rendered in the doc above; in Immediate mode, save them too
 
-- **Ctrl+S**: Says writing the doc comes next; never sends the session's queue
+- **Ctrl+S**: Save the doc to its file; never sends the session's queue
 
-- **Esc**: Close the editor, asking first with unsaved edits: Close and keep them, Discard or Keep editing
+- **Esc**: Close the editor, asking first with unsaved edits: Save, Discard or Keep editing
 
 ### The helper (Alt+Q)
 
@@ -348,7 +352,7 @@ The app's command line args (make args). Give them to make run in ARGS, for exam
 - A session can tell the wheelhouse where its repo keeps its decisions, when that isn't docs/adr (set_doc_dirs).
 - A Decisions pane under the inbox lists every repo's design decisions (docs/adr), shown in Detail.
 - Drag a pane by its title onto another to swap the two; Reset layout, in the command palette, puts them back.
-- A click on a doc opens an editor below it; Ctrl+Enter shows the edits rendered. Saving comes next.
+- A click on a doc opens an editor below it; Ctrl+Enter shows the edits rendered, and Ctrl+S saves them to the file. The pane's title says when there are edits to save.
 - Alt+Q asks the wheelhouse how to do something: a chat that answers from its help and its source, through Haiku on your own Claude Code login.
 - The helper chat moved from Alt+G, which opens Gemini on some desktops, to Alt+Q (Q for question).
 - After an update, the tour shows only what's new, pane by pane, with no demo; Esc ends it at any time, and after quitting mid-tour, Alt+T or the title bar's badge resumes it.

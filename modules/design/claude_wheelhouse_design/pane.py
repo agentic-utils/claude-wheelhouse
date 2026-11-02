@@ -189,6 +189,11 @@ class Decisions(Vertical):
             self.ask()
         self.settle()   # the session selected may have changed: the rows held filtered, never asked again
 
+    def doc_written(self, path: str) -> None:
+        """A doc saved from the editor (the app's each_pane): asked again at once, so a
+        decision's new title or status shows now, not at the next EVERY."""
+        self.ask()
+
     def ask(self) -> None:
         """The route asked again, on a worker thread (a remote call blocks); while an ask is
         still out, once more when it lands, as what it was asked for may have changed."""

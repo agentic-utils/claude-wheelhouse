@@ -64,7 +64,10 @@ class Splitter(Widget):
     # the panes and their sizes along the axis
 
     def panes(self) -> tuple[Widget, Widget] | None:
-        """The two panes, or None with either gone."""
+        """The two panes, or None with either gone, or the splitter itself (taken out of the
+        DOM, as the app ends, while a refresh still paints)."""
+        if self.parent is None:
+            return None
         try:
             return self.parent.query_one(self.sized_selector), self.parent.query_one(self.flex_selector)
         except NoMatches:
