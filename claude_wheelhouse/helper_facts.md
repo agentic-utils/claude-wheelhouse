@@ -1,4 +1,4 @@
-<!-- fact sheet stamp: version 168, 2026-11-02T20:33:28Z, source e04b6081e629b8bc (make facts restamps it: AGENTS.md) -->
+<!-- fact sheet stamp: version 169, 2026-11-02T21:22:04Z, source 92a0b030446ad7d1 (make facts restamps it: AGENTS.md) -->
 # Wheelhouse fact sheet
 
 What the helper chat knows before any question. The guide below is written by hand; the
@@ -375,6 +375,7 @@ The app's command line args (make args). Give them to make run in ARGS, for exam
 - A PR's buttons that can't apply are greyed, and say why on hover (Merge on a PR awaiting review, say), and Mark ready or Make draft switches a PR between draft and ready for review.
 - The wheelhouse tells a session before it ends or resumes (and, in SDK mode, compacts), so its own instructions can act, and can keep a handoff doc for it. Session steps, in the command palette, has every switch; the first press asks once.
 - A running compaction's trash compactor is pinned above the answer box, big and animated: the walls grind in, the crew dodge, sparks fly and the dianoga grabs Luke. Its last frame stays in the conversation, and the session's notes for compaction fold to one line.
+- Compaction has a second scene, picked per cycle: Star Trek's engine room, with Scotty thumping the console as the warp core races and the CONTEXT gauge falls to a sliver, Kirk pacing and Spock unmoved, and the bridge crew's lines between.
 - The keepalive comes every 50 minutes, ahead of Claude Code's idle compaction at about 54.
 - A session run in the wheelhouse that was being kept warm is compacted when the keepalive's hours run out, while its cache is warm; a tab idle-compacts then, past 150k tokens.
 - Sessions keep a handoff with the write_handoff tool, shown as their handoff doc; Stop & Forget and Compact ask for one.

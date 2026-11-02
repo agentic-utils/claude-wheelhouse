@@ -26,7 +26,7 @@ from textual.visual import Visual, visualize
 from textual.widgets import Button, Checkbox, DataTable, Footer, Input, Label, Select, TextArea
 
 from claude_wheelhouse import compactor, emoji, features, launch, models, ordering, transcript, transcript_usage, tui, tutorial
-from claude_wheelhouse.scenes import star_wars
+from claude_wheelhouse.scenes import SCENES
 from claude_wheelhouse.hub import Done, Hub
 from claude_wheelhouse.store import PROTOCOL_VERSION
 
@@ -10292,10 +10292,10 @@ async def test_a_compaction_starting_shows_its_conversation(store, tmp_path, mon
 
 @pytest.mark.parametrize("width", [36, 76])
 @pytest.mark.parametrize("who, text", [
-    ("stage", compactor.stage_text(star_wars.SCENE, "preparing", "you (Compact)", "", "10:39Z")),
-    ("stage", compactor.stage_text(star_wars.SCENE, "completed", None, "220k → 40k", "10:41Z")),
+    *(("stage", compactor.stage_text(scene, "preparing", "you (Compact)", "", "10:39Z")) for scene in SCENES.values()),
+    *(("stage", compactor.stage_text(scene, "completed", None, "220k → 40k", "10:41Z")) for scene in SCENES.values()),
     ("crew", "Han: I've got a bad feeling about these walls.\nC-3PO: Sir, the odds of survival are rather poor!"),
-], ids=["preparing", "completed", "crew"])
+], ids=[*(f"{n} preparing" for n in SCENES), *(f"{n} completed" for n in SCENES), "crew"])
 def test_stage_blocks_render_as_plain_text_never_markdown(width, who, text):
     """#244: Markdown would turn the art into rules and bullets; each line is cut, never wrapped."""
     from rich.console import Console
@@ -10304,7 +10304,8 @@ def test_stage_blocks_render_as_plain_text_never_markdown(width, who, text):
     rendered = console.render(tui.stage_text(who, text, width), console.options.update_width(width))
     shown = ["".join(seg.text for seg in line) for line in Segment.split_lines(rendered)]
     if who == "stage" and width >= compactor.BIG_WIDTH:   # the big one's still, then its dim line (#287)
-        text = star_wars.SCENE.still(compactor.state_of(text)[1]) + "\n" + text.split("\n")[-1]
+        scene, state = compactor.state_of(text)
+        text = scene.still(state) + "\n" + text.split("\n")[-1]
     assert len(shown) == len(text.split("\n")), shown
     for line, want in zip(shown, text.split("\n")):
         assert line.rstrip() == want.rstrip() or (line.rstrip().endswith("…") and want.startswith(line.rstrip()[:-1])), (line, want)
@@ -10696,6 +10697,7 @@ async def test_the_compactor_docks_while_its_cycle_runs(store, sid, monkeypatch,
     monkeypatch.setattr(tui.CompactorDock, "now", staticmethod(lambda: clock[0]))
     store.command(sid, "compact")
     cid = store.compaction(sid)["id"]
+    scene = compactor.scene_for(cid, None)   # the session's first cycle: its scene, whichever
     for m in moves:
         store.move_compaction(sid, cid, m)
     app = WheelhouseApp(store)
@@ -10709,9 +10711,9 @@ async def test_the_compactor_docks_while_its_cycle_runs(store, sid, monkeypatch,
             clock[0] = datetime.fromisoformat(store.stages(sid)[-1]["at"]).timestamp() + 3
             dock.paint()
             rows = dock_rows(app)
-            assert rows[:compactor.BIG_HEIGHT] == list(star_wars.scene(docked, 3.0, animate=bool(fps))[0]), desc
+            assert rows[:compactor.BIG_HEIGHT] == list(scene.frame(docked, 3.0, animate=bool(fps))[0]), desc
             assert rows[-1].startswith("asked for by you (Compact)"), f"{desc}: {rows[-1]}"
-            assert "\n".join(star_wars.WALLS[docked].split("\n")[:2]) not in app._detail_text, f"{desc}: not in the conversation"
+            assert "\n".join(scene.walls[docked].split("\n")[:2]) not in app._detail_text, f"{desc}: not in the conversation"
             clock[0] += 1
             dock.paint()
             assert (dock_rows(app) != rows) == bool(fps), f"{desc}: moving only with the animation on"
@@ -10720,7 +10722,7 @@ async def test_the_compactor_docks_while_its_cycle_runs(store, sid, monkeypatch,
             await pilot.pause()
             art = "completed"
         assert not dock.display and dock.timer is None, f"{desc}: closed, its timer stopped"
-        assert star_wars.WALLS[art] + "\n" in app._detail_text, f"{desc}: the final frame in the conversation"
+        assert scene.walls[art] + "\n" in app._detail_text, f"{desc}: the final frame in the conversation"
 
 
 @pytest.mark.anyio
