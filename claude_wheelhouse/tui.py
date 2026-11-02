@@ -2743,11 +2743,19 @@ class DocEditor(TextArea):
         self.paint_title()
         return cursor
 
-    def resume(self, came: tuple[str, str] | None = None) -> None:
-        """Opened again on the doc its viewer shows, with the edits kept for it, the cursor where
-        it was: Keep editing, once the selection has gone back to it (WheelhouseApp.leaving).
-        came: a module's doc's path and title, gone back to again if the selection moves off."""
-        if self.key is not None or not self.live or self.edits.get(self.view.doc_path) is None:
+    def resume(self, path: str, came: tuple[str, str] | None = None) -> None:
+        """Opened again on the doc at `path`, which its viewer shows, with the edits kept for
+        it, the cursor where it was: Keep editing, once the selection has gone back to it
+        (WheelhouseApp.leaving). came: a module's doc's path and title, gone back to again if
+        the selection moves off. One that couldn't be gone back to (gone, its session
+        compacting) says where its edits are, never leaving them unsaid."""
+        if path not in self.edits or not self.live:
+            return
+        if self.view.doc_path != path:
+            self.app.notify(f"{os.path.basename(path)} couldn't be shown again: its unsaved edits are kept, and "
+                            "show when you open it", severity="warning")
+            return
+        if self.key is not None:
             return
         cursor = self.opened(self.view)
         self.came = came
@@ -2818,7 +2826,13 @@ class DocEditor(TextArea):
             self.mtime = mtime
             self.load_text(on_disk)
             self.move_cursor(cursor)
+        same = path is not None and not gone and mtime is not None and on_disk is not None
+        if same and path == self.path and self.key is not None and on_disk == self.base and mtime != self.mtime:
+            self.mtime = mtime   # rewritten unchanged (a touch, a session posting it again): no change to ask about
+            self.stash()
         kept = self.edits.get(path) if path is not None else None
+        if same and kept is not None and on_disk == kept.base and kept.mtime != mtime:
+            kept = self.edits[path] = dataclasses.replace(kept, mtime=mtime)
         if kept is not None and gone and kept.gone != gone:
             kept = self.edits[path] = dataclasses.replace(kept, gone=gone)
             what = "has gone from disk" if gone == "gone" else "is no longer a regular file"
@@ -6702,29 +6716,33 @@ class WheelhouseApp(App):
         self.repaint_doc()
 
     def save_doc(self, path: str, text: str, mtime: int | None, then: Callable[[], None] | None = None,
-                 force: bool = False) -> None:
+                 force: bool = False, failed: Callable[[], None] | None = None) -> None:
         """A doc's buffer saved through the daemon (client.write_doc, POST /docs/write) against
         mtime, the file's when its text was read. Saved: every editor on it and every view of it
         shows the new text at once, the panes are told (doc_written), and `then` runs. The file
         changed since: Overwrite (saved with force), Reload (the file's text replaces the
         buffer, the edits lost) or Cancel. Gone: written anew, or not. Refused (outside what
-        may be written, or the filesystem refusing it): said in a prompt, path and reason."""
+        may be written, or the filesystem refusing it): said in a prompt, path and reason.
+        `failed` runs when it ends unsaved with the edits kept (Cancel, or refused)."""
         name = os.path.basename(path)
+        again = functools.partial(self.save_doc, path, text, mtime, then, True, failed)
         answer = self.client.write_doc(path, text, mtime, force)
         if answer.get("conflict"):
             def chose(choice: str | None) -> None:
                 if choice == "overwrite":
-                    self.save_doc(path, text, mtime, then, force=True)
+                    again()
                 elif choice == "reload":
                     self.doc_written(path, answer.get("text", ""), answer.get("mtime_ns"), reloaded=True)
+                elif failed is not None:
+                    failed()
             self.push_screen(SaveConflict(f"{name} has changed on disk since you started editing. Overwrite it "
                                           "with your edits, Reload it (your edits are lost), or Cancel?"), chose)
         elif answer.get("gone"):
             self.push_screen(SaveGone(f"{name} has gone from disk since you started editing. Write it anew "
                                       "with your edits, or Cancel?"),
-                             lambda choice: choice == "anew" and self.save_doc(path, text, mtime, then, force=True))
+                             lambda choice: again() if choice == "anew" else failed and failed())
         elif "refused" in answer:
-            self.push_screen(SaveFailed(f"{name} wasn't saved: {answer['refused']}"))
+            self.push_screen(SaveFailed(f"{name} wasn't saved: {answer['refused']}"), lambda _: failed and failed())
         else:
             self.doc_written(path, text, answer.get("mtime_ns"))
             self.notify(f"Saved {name}")
@@ -6749,20 +6767,23 @@ class WheelhouseApp(App):
         if path not in self.doc_edits or editor.view.doc_path == path:   # saved or discarded meanwhile, or
             return   # the same file shown by another way (a doc item of the same path): its edits show there
 
+        def go_back() -> None:
+            if back[0] == "show":
+                self.show_doc(*back[1:])
+            elif back[1] != "file":   # ("item", "file", path): a module's doc of no known title stays left
+                self.go_to_item(*back[1:])
+            self.call_after_refresh(editor.resume, path, tuple(back[1:]) if back[0] == "show" else None)
+
         def answered(choice: str | None) -> None:
             edit = self.doc_edits.get(path)
             if edit is None:
                 return
-            if choice == "save":
-                self.save_doc(path, edit.text, edit.mtime)
+            if choice == "save":   # not saved after all (Cancel, refused): back to the edits, never left hidden
+                self.save_doc(path, edit.text, edit.mtime, failed=go_back)
             elif choice == "discard":
                 dropped(self, path)
             else:
-                if back[0] == "show":
-                    self.show_doc(*back[1:])
-                elif back[1] != "file":   # ("item", "file", path): a module's doc of no known title stays left
-                    self.go_to_item(*back[1:])
-                self.call_after_refresh(editor.resume, tuple(back[1:]) if back[0] == "show" else None)
+                go_back()
         self.push_screen(LeaveEdits(f"{os.path.basename(path)} has unsaved edits."), answered)
 
     def paint_quote(self) -> None:

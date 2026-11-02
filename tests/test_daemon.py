@@ -1446,17 +1446,23 @@ async def test_a_doc_is_written_only_where_and_when_it_may_be(moduled, store, si
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root writes anywhere")
-async def test_a_write_the_daemons_user_cant_make_says_where_and_why(moduled):
+@pytest.mark.parametrize("make, why, desc", [
+    (lambda p: p.parent.chmod(0o555), "can't be written: Permission denied", "its directory read-only"),
+    (lambda p: p.chmod(0o444), "can't be written: Permission denied", "the file read-only, its directory not"),
+    (lambda p: p.write_bytes(b"# caf\xe9\n"), "can't be written from here: it isn't UTF-8 text", "not UTF-8"),
+])
+async def test_a_write_the_daemons_user_cant_make_says_where_and_why(moduled, make, why, desc):
     daemon, tmp = moduled
     path = tmp / "root" / "a.md"
-    (tmp / "root").chmod(0o555)
+    make(path)
+    before = path.read_bytes()
     try:
         r = await call(daemon, "POST", "/docs/write", {"path": str(path), "text": "# New\n",
                                                        "mtime_ns": path.stat().st_mtime_ns})
     finally:
         (tmp / "root").chmod(0o755)
-    assert r.status_code == 403 and r.json()["error"] == f"{path} can't be written: Permission denied", r.text
-    assert path.read_text() == "# A\n"
+    assert r.status_code == 403 and r.json()["error"].startswith(f"{path} {why}"), f"{desc}: {r.text}"
+    assert path.read_bytes() == before, desc
 
 
 async def test_settings_say_which_modules_are_off(moduled):

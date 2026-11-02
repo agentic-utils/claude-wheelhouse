@@ -27,9 +27,9 @@ class Conflict(Exception):
     """A save refused (409): the file has changed since the editor's base. Its mtime and
     text now, for the editor's Reload."""
 
-    def __init__(self, path: Path, mtime_ns: int, text: str):
+    def __init__(self, path: Path, st: os.stat_result, text: str):
         super().__init__(f"{path} has changed on disk since you started editing")
-        self.mtime_ns, self.text = mtime_ns, text
+        self.mtime_ns, self.stamp, self.text = st.st_mtime_ns, f"{st.st_mtime_ns}:{st.st_size}", text
 
 
 class Gone(Exception):
@@ -118,11 +118,16 @@ def write(path, text: str, mtime_ns: int | None, roots, files=(), force: bool = 
         raise Unwritable(f"{real} can't be written: it isn't a regular file")
     if st is not None and st.st_size > DOC_CAP:
         raise Unwritable(f"{real} can't be written from here: it's over {DOC_CAP >> 20} MB, more than the editor holds")
+    if st is not None and not os.access(real, os.W_OK):   # a rename over it would replace a read-only file
+        raise Unwritable(f"{real} can't be written: Permission denied")
+    if st is not None and not utf8(real):
+        raise Unwritable(f"{real} can't be written from here: it isn't UTF-8 text, so the editor shows some of its "
+                         "bytes as \ufffd and a save would change them")
     if not force:
         if st is None and mtime_ns is not None:
             raise Gone(f"{real} has gone from disk since you started editing")
         if st is not None and st.st_mtime_ns != mtime_ns:
-            raise Conflict(real, st.st_mtime_ns, current(real))
+            raise Conflict(real, st, current(real))
     data = text.encode()
     try:
         if st is None:
@@ -133,7 +138,7 @@ def write(path, text: str, mtime_ns: int | None, roots, files=(), force: bool = 
     except FileExistsError:   # made meanwhile, between the stat and the write
         if not force:
             st = os.stat(real)
-            raise Conflict(real, st.st_mtime_ns, current(real)) from None
+            raise Conflict(real, st, current(real)) from None
         return write(path, text, None, roots, files, force)
     except OSError as e:
         raise Unwritable(f"{real} can't be written: {e.strerror or e}") from None
@@ -147,11 +152,23 @@ def save(path, text: str, mtime_ns: int | None, roots, files=(), force: bool = F
     try:
         return write(path, text, mtime_ns, roots, files, force)
     except Conflict as e:
-        return {"conflict": True, "mtime_ns": e.mtime_ns, "text": e.text, "error": str(e)}
+        return {"conflict": True, "mtime_ns": e.mtime_ns, "stamp": e.stamp, "text": e.text, "error": str(e)}
     except Gone as e:
         return {"gone": True, "error": str(e)}
     except (ValueError, Unwritable) as e:   # Outside is a ValueError
         return {"refused": str(e)}
+
+
+def utf8(real: Path) -> bool:
+    """Whether a file's bytes are UTF-8, so the editor's text of it is them exactly; True if
+    it can't be read (the write then says why)."""
+    try:
+        real.read_bytes().decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    except OSError:
+        return True
+    return True
 
 
 def current(real: Path) -> str:

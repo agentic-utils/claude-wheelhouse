@@ -677,23 +677,29 @@ class RemoteClient:
         try:
             done = self.request("POST", "/docs/write", body, str(uuid.uuid4()))
         except Refused as e:
-            if e.status == 409:
-                return {"conflict": True, "mtime_ns": e.data.get("mtime_ns"), "text": e.data.get("text", ""),
-                        "error": e.error}
+            if e.status == 409:   # the file's text now kept too, so a Reload never shows the text before
+                self.wrote(path, e.data.get("text", ""), e.data.get("mtime_ns"), e.data.get("stamp"))
+                return {"conflict": True, "mtime_ns": e.data.get("mtime_ns"), "stamp": e.data.get("stamp"),
+                        "text": e.data.get("text", ""), "error": e.error}
             if e.status == 404 and e.kind == "Refused":
                 return {"gone": True, "error": e.error}
             return {"refused": self.refusal_of(e)}
         except (Unreachable, self.httpx.TransportError) as e:
             return {"refused": str(e) or UNREACHABLE}
+        self.wrote(done["path"], text, done["mtime_ns"], done["stamp"])
+        return done
+
+    def wrote(self, path: str, text: str, mtime_ns: int | None, stamp: str | None) -> None:
+        """A doc's file as a save left it, or as a 409 found it: kept as its text here, a doc
+        item's and a module's alike, so a paint before the next fetch shows it."""
+        real = os.path.realpath(path)
         with self.lock:
             for key, data in list(self.cache.items()):
                 if key[0] in ("doc", "file") and isinstance(data, dict) and data.get("path") \
-                        and os.path.realpath(data["path"]) == done["path"]:
-                    self.cache[key] = {**data, "text": text, "stamp": done["stamp"], "gone": None,
-                                       "mtime_ns": done["mtime_ns"]}
+                        and os.path.realpath(data["path"]) == real:
+                    self.cache[key] = {**data, "text": text, "stamp": stamp, "gone": None, "mtime_ns": mtime_ns}
                     self.shown_seq[key] = self.next_seq()   # a fetch sent before this one lands as stale
             self.forced = True
-        return done
 
     def call_module(self, mid: str, path: str, body: dict | None = None):
         """A module's own route (api.Context.call): a GET without a body, a POST, sent once

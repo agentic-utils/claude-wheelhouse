@@ -497,3 +497,50 @@ async def test_a_save_outside_what_may_be_written_is_refused(store, sid, doc, mo
         assert isinstance(app.screen, SaveFailed)
         assert "is not under any doc root" in str(app.screen.query_one(".dialog-prompt").render())
         assert doc[1].read_text() == DOC
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("trouble, answer, desc", [
+    ("changed", "escape", "the file changed, the save cancelled"),
+    ("readonly", "escape", "the save refused"),
+])
+async def test_a_save_from_moving_off_that_doesnt_land_goes_back_to_the_edits(store, sid, doc, trouble, answer, desc):
+    if trouble == "readonly" and os.geteuid() == 0:
+        pytest.skip("root writes anywhere")
+    q = store.post_item(sid, "question", "which db?")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        view, editor = await shown(app, pilot, doc[0])
+        await edited(app, pilot, view, editor)
+        if trouble == "changed":
+            doc[1].write_text(ON_DISK)
+        else:
+            doc[1].chmod(0o444)
+        app.items_table.move_cursor(row=item_row(app, q))
+        await pilot.pause()
+        await pilot.pause()
+        await pilot.press("alt+s")
+        await pilot.pause()
+        assert isinstance(app.screen, SaveConflict if trouble == "changed" else SaveFailed), desc
+        await pilot.press(answer)
+        for _ in range(3):
+            await pilot.pause()
+        assert app.selected == (sid, doc[0]) and editor.display, f"{desc}: back on the doc, editing"
+        assert editor.text.startswith("# The plan\n\nKept. "), desc
+        assert app.query_one("#detail-pane").border_title.startswith("Detail · edited"), desc
+
+
+@pytest.mark.anyio
+async def test_a_file_rewritten_unchanged_is_no_change_to_ask_about(store, sid, doc):
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        view, editor = await shown(app, pilot, doc[0])
+        await edited(app, pilot, view, editor)
+        later = doc[1].stat().st_mtime_ns + 10 ** 9
+        os.utime(doc[1], ns=(later, later))   # touched, its text the same
+        app.refresh_data()
+        await pilot.pause()
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert not isinstance(app.screen, SaveConflict), "no 409: the base's mtime taken up"
+        assert doc[1].read_text().startswith("# The plan\n\nKept. ")

@@ -399,6 +399,9 @@ def test_both_clients_save_a_doc_alike(store, sid, served, tmp_path):
             conflict = c.write_doc(str(doc), "# Again\n", base)
             assert (conflict["conflict"], conflict["text"], conflict["mtime_ns"]) == (
                 True, f"# Saved {name}\n", saved["mtime_ns"]), f"{name}: changed since"
+            doc.write_text(f"# Outside {name}\n")
+            assert c.write_doc(str(doc), "# Again\n", base)["text"] == f"# Outside {name}\n"
+            assert c.document(sid, ref)["text"] == f"# Outside {name}\n", f"{name}: a 409's text shown at once (Reload)"
             assert c.write_doc(str(tmp_path / "gone.md"), "x", base) == {
                 "refused": f"{tmp_path / 'gone.md'} is not under any doc root"}, f"{name}: outside, refused"
             doc.unlink()

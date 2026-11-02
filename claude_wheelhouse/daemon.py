@@ -946,7 +946,7 @@ class Daemon:
             return docroots.write(text(body, "path"), text(body, "text"), mtime_ns, self.served.doc_roots(),
                                   self.hub.store.doc_paths(), force)
         except docroots.Conflict as e:
-            raise Refused(409, str(e), extra={"mtime_ns": e.mtime_ns, "text": e.text}) from None
+            raise Refused(409, str(e), extra={"mtime_ns": e.mtime_ns, "stamp": e.stamp, "text": e.text}) from None
         except docroots.Gone as e:
             raise Refused(404, str(e)) from None
         except (docroots.Outside, docroots.Unwritable) as e:
