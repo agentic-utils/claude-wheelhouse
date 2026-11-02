@@ -199,7 +199,8 @@ async def test_moving_off_a_doc_with_edits_asks(store, sid, doc, choice, file, s
         app.items_table.move_cursor(row=item_row(app, q))
         await until(pilot, lambda: isinstance(app.screen, LeaveEdits))   # its highlight handled late: asked
         assert isinstance(app.screen, LeaveEdits) and not editor.display, f"{desc}: asked, the editor closed"
-        await pressed(pilot, choice, lambda: str(doc[1]) not in app.doc_edits or editor.display)
+        await pressed(pilot, choice, lambda: str(doc[1]) not in app.doc_edits   # saved or dropped, or open again
+                      or editor.display and editor.cursor_location == (2, 3))   # with its cursor put back (place)
         assert doc[1].read_text() == DOC.replace("Build it.", file), desc
         assert app.selected == (sid, q if selected == "q" else doc[0]), f"{desc}: {app.selected}"
         if selected == "doc":
