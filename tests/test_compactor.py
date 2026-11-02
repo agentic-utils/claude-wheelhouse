@@ -219,37 +219,47 @@ def test_scene_for_is_seeded_by_the_cycle_and_never_repeats_the_last(monkeypatch
     assert set(picks.values()) == want, f"{desc}: {sorted(set(picks.values()))}"
 
 
-# #304: the Star Wars scene's output recorded before it moved into scenes/, byte for byte
-GOLDEN = json.loads((pathlib.Path(__file__).parent / "golden" / "star_wars.json").read_text(encoding="utf-8"))
+# #304: each scene's output recorded byte for byte (Star Wars's from before it moved into scenes/),
+# so a change to the shared code that moves any scene's art fails here. A new scene records its own
+# (tests/golden/<name>.json, from golden_cases)
+GOLDEN_DIR = pathlib.Path(__file__).parent / "golden"
 GOLDEN_TICKS = (0.0, 1.5, 8.0, 40.0)
 
 
-def golden_cases() -> dict:
-    """Each recorded case's id and how the moved code makes it now."""
+def golden_cases(scene: Scene) -> dict:
+    """Each recorded case's id and how the code makes it now."""
     cases = {}
-    for state in sorted(SW.captions):
+    for state in sorted(scene.captions):
         for t in GOLDEN_TICKS:
-            cases[f"frame {state} t={t}"] = lambda s=state, t=t: list(map(list, SW.frame(s, t)))
-        cases[f"frame {state} still"] = lambda s=state: list(map(list, SW.frame(s, 3.0, animate=False)))
-        cases[f"still {state}"] = lambda s=state: SW.still(s)
-        cases[f"caption {state}"] = lambda s=state: SW.captions[s]
-    for state in ("requested", *SW.walls):
-        cases[f"walls {state}"] = lambda s=state: SW.walls.get(s)
-        cases[f"stage_text {state}"] = lambda s=state: compactor.stage_text(SW, s, "you (Compact)", "", "10:39Z")
-        cases[f"stage_text {state} note"] = lambda s=state: compactor.stage_text(SW, s, None, "220k → 40k", "10:41Z")
-    cases["excerpts"] = lambda: list(map(list, SW.excerpts))
+            cases[f"frame {state} t={t}"] = lambda s=state, t=t: list(map(list, scene.frame(s, t)))
+        cases[f"frame {state} still"] = lambda s=state: list(map(list, scene.frame(s, 3.0, animate=False)))
+        cases[f"still {state}"] = lambda s=state: scene.still(s)
+        cases[f"caption {state}"] = lambda s=state: scene.captions[s]
+    for state in ("requested", *scene.walls):
+        cases[f"walls {state}"] = lambda s=state: scene.walls.get(s)
+        cases[f"stage_text {state}"] = lambda s=state: compactor.stage_text(scene, s, "you (Compact)", "", "10:39Z")
+        cases[f"stage_text {state} note"] = lambda s=state: compactor.stage_text(scene, s, None, "220k → 40k", "10:41Z")
+    cases["excerpts"] = lambda: list(map(list, scene.excerpts))
     for cid, windows in (("c0ffee01", [(0, 25), (25, 100)]), ("deadbeef", [(0, 300)])):
-        cases[f"schedule {cid}"] = lambda c=cid, w=windows: [[t, list(e)] for t, e in compactor.schedule(c, w, SW)]
+        cases[f"schedule {cid}"] = lambda c=cid, w=windows: [[t, list(e)] for t, e in compactor.schedule(c, w, scene)]
     return cases
 
 
-CASES = golden_cases()
+GOLDEN = {name: json.loads((GOLDEN_DIR / f"{name}.json").read_text(encoding="utf-8")) for name in SCENES}
+CASES = {name: golden_cases(scene) for name, scene in SCENES.items()}
 
 
-def test_golden_covers_every_case():
-    assert set(CASES) == set(GOLDEN), sorted(set(CASES) ^ set(GOLDEN))
+@EVERY
+def test_golden_covers_every_case(scene):
+    assert set(CASES[scene.name]) == set(GOLDEN[scene.name]), sorted(set(CASES[scene.name]) ^ set(GOLDEN[scene.name]))
 
 
-@pytest.mark.parametrize("case", sorted(CASES))
-def test_star_wars_is_unchanged_by_the_move(case):
-    assert CASES[case]() == GOLDEN[case], f"{case}: differs from before the move"
+@pytest.mark.parametrize("name, case", [(n, c) for n in SCENES for c in sorted(CASES[n])])
+def test_every_scene_matches_its_golden(name, case):
+    assert CASES[name][case]() == GOLDEN[name][case], f"{name} {case}: differs from the recording"
+
+
+def test_every_role_has_a_style():
+    """A role any scene draws in has a colour in the app (tui.ART_STYLE)."""
+    from claude_wheelhouse import tui
+    assert set(compactor.ROLES.values()) <= set(tui.ART_STYLE), set(compactor.ROLES.values()) - set(tui.ART_STYLE)

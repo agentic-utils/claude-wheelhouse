@@ -229,6 +229,10 @@ FEATURES: tuple[Feature, ...] = (
             note="A running compaction's trash compactor is pinned above the answer box, big and animated: the walls "
                  "grind in, the crew dodge, sparks fly and the dianoga grabs Luke. Its last frame stays in the "
                  "conversation, and the session's notes for compaction fold to one line."),
+    Feature("compactor-star-trek", UNRELEASED, ADVANCED,
+            note="Compaction has a second scene, picked per cycle: Star Trek's engine room, with Scotty thumping "
+                 "the console as the warp core races and the CONTEXT gauge falls to a sliver, Kirk pacing and "
+                 "Spock unmoved, and the bridge crew's lines between."),
     Feature("keepalive-50", UNRELEASED, ADVANCED,
             note="The keepalive comes every 50 minutes, ahead of Claude Code's idle compaction at about 54."),
     Feature("compact-at-keepalive-end", UNRELEASED, ADVANCED,

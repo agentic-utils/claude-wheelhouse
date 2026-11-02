@@ -158,7 +158,8 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
 - `scenes/`: the compactor's scenes (#304), one module each, in `SCENES` (`scenes/__init__.py`):
   `base.py` the `Scene` interface (excerpts, captions, small stills, the big animated frame) and
   the canvas, frame sizes (60 by 12 big, in every frame), tick rate and colour roles they
-  share; `star_wars.py` the detention-level trash compactor (art B). Never imports Textual.
+  share; `star_wars.py` the detention-level trash compactor (art B), `star_trek.py` the
+  engine room (scene A). A new scene records its own golden file, `tests/golden/<name>.json`. Never imports Textual.
 - `splitter.py`, `knurl.py`, `emoji.py`, `unsent.py`: TUI pieces (dividers, scrollbars,
   emoji shortcodes, unsent text).
 - `protocol.md`, `protocol_sdk.md`, `protocol_tab.md`, `protocol_decisions.md`: what a
