@@ -2759,6 +2759,7 @@ class DocEditor(TextArea):
             return
         cursor = self.opened(self.view)
         self.came = came
+        self.app.repaint_doc()   # laid out for it now, as a click opening it is: the box hidden, not at the next tick
         self.focus()
         self.call_after_refresh(self.place, *cursor)
 
