@@ -51,6 +51,12 @@ async def pressed(pilot, key: str, done) -> None:
     of CPU for an idle one, so on a loaded run a count of pauses can end before the key
     lands. Bounded: one that never does fails the test's own assert after."""
     await pilot.press(key)
+    await until(pilot, done)
+
+
+async def until(pilot, done) -> None:
+    """Paused until done() holds, bounded, then once more (pressed): what the app does
+    late, as a highlight's handling, waited for by what it does, not a count of pauses."""
     for _ in range(300):
         if done():
             break
@@ -191,8 +197,7 @@ async def test_moving_off_a_doc_with_edits_asks(store, sid, doc, choice, file, s
         editor.move_cursor((2, 3))
         await pilot.pause()
         app.items_table.move_cursor(row=item_row(app, q))
-        await pilot.pause()
-        await pilot.pause()
+        await until(pilot, lambda: isinstance(app.screen, LeaveEdits))   # its highlight handled late: asked
         assert isinstance(app.screen, LeaveEdits) and not editor.display, f"{desc}: asked, the editor closed"
         await pressed(pilot, choice, lambda: str(doc[1]) not in app.doc_edits or editor.display)
         assert doc[1].read_text() == DOC.replace("Build it.", file), desc
@@ -293,8 +298,8 @@ async def test_a_render_keeps_the_cursors_block_on_its_row(store, sid, long_doc)
         editor.move_cursor((0, 0))
         editor.insert("## A new first section\n\nWith prose.\n\n")
         editor.move_cursor((52, 0))   # Section 12's heading, four lines down
-        await pressed(pilot, "ctrl+j", lambda: "A new first section" in text_of(view))
-        await pilot.pause()   # anchored, after the refresh
+        # rendered, then anchored after the refresh (or once laid out off the loop), which clears anchor
+        await pressed(pilot, "ctrl+j", lambda: "A new first section" in text_of(view) and editor.anchor is None)
         assert view.block_rows(52)[0] - round(view.parent.scroll_y) == before, "the block on its row, the rows above grown"
 
 
@@ -309,7 +314,7 @@ async def test_a_click_on_a_block_the_edits_took_out_keeps_the_cursor(store, sid
         editor.move_cursor((2, 3))
         await pilot.pause()
         app.items_table.move_cursor(row=item_row(app, q))
-        await pilot.pause()
+        await until(pilot, lambda: isinstance(app.screen, LeaveEdits))   # its highlight handled late: asked
         await pressed(pilot, "escape", lambda: editor.display and editor.cursor_location == (2, 3))   # Keep editing
         assert editor.display and editor.cursor_location == (2, 3), "open again where it was"
         assert not app.answer.display, "laid out for it at once, no tick needed: the box gone from under it"
@@ -510,8 +515,7 @@ async def test_a_save_from_moving_off_that_doesnt_land_goes_back_to_the_edits(st
         else:
             doc[1].chmod(0o444)
         app.items_table.move_cursor(row=item_row(app, q))
-        await pilot.pause()
-        await pilot.pause()
+        await until(pilot, lambda: isinstance(app.screen, LeaveEdits))   # its highlight handled late: asked
         await pressed(pilot, "alt+s", lambda: isinstance(app.screen, (SaveConflict, SaveFailed)))
         assert isinstance(app.screen, SaveConflict if trouble == "changed" else SaveFailed), desc
         await pressed(pilot, answer, lambda: editor.display)
