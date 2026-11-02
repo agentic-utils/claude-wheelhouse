@@ -13,7 +13,6 @@ from .base import BIG_WIDTH, TICKS, WIDTH, Canvas, Frame, Scene
 
 EXCERPTS: tuple[tuple[str, ...], ...] = (
     ("Holly: Emergency. There's an emergency going on. Your context's full.",),
-    ("Rimmer: Holly, summarise the last three million years.", "Holly: \"Stuff happened.\""),
     ("Lister: Context buffer's at ninety-eight percent, Kryten. Is that good?",
      "Kryten: It is the opposite of good, sir!"),
     ("Rimmer: Step up to Red Alert!",
@@ -25,7 +24,6 @@ EXCERPTS: tuple[tuple[str, ...], ...] = (
      "Lister: Wait. Are you telling me everything's been compacted?"),
     ("Toaster: Given that the context is finite, would you like a toasted teacake?",),
     ("Rimmer: Must we keep three hours of your waffle, Lister?", "Toaster: Ah! So you're a waffle man!"),
-    ("Toaster: The old context's toast. Would anyone like any toast?",),
     ("Kryten: Sir, your exam notes compacted to \"I am a fish\", four hundred times.",
      "Rimmer: That's not compacted, Kryten. That's the original."),
     ("Rimmer: Six weeks drawing a compaction timetable. No time left to compact.",),
@@ -42,7 +40,6 @@ EXCERPTS: tuple[tuple[str, ...], ...] = (
     ("Rimmer: Careful, Holly! I'm stored in that memory!",
      "Holly: Not all of you, Rimmer. Just the bits that complain."),
     ("Rimmer: Space Corps Directive 147!", "Kryten: Compacted, sir. It now just says \"don't\"."),
-    ("Cat: Wake me when it's three lines. That's my whole attention span.",),
     ("Cat: A summary? Can I eat it, sleep on it, or wear it?",),
     ("Cat: I can smell it, buddy. A million tokens, sneaking out the back door.",),
     ("Rimmer: Lister! Kryten! Report to the summary at once! Cat?", "Cat: I'm grooming."),
@@ -51,11 +48,7 @@ EXCERPTS: tuple[tuple[str, ...], ...] = (
     ("Lister: What's the summary say, Holly?", "Holly: Mostly \"smeg\", Dave. I've left it in for colour."),
     ("Lister: The summary's dropped my song!", "Rimmer: Finally, it's done something right."),
     ("Queeg: I am Queeg 500, Holly's backup. This compaction is a disgrace.",),
-    ("Holly: Kept all the important bits, Dave. Bad news: there weren't any.",),
-    ("Lister: Can we compact Rimmer?", "Holly: Tried. He expands to fill the space available."),
     ("Cat: Three lines? Make it one, and make it about me.",),
-    ("Rimmer: Put in the summary that this was all Lister's fault.",
-     "Holly: Done. That's the whole summary."),
     ("Lister: Did you back the context up, Kryten?", "Kryten: Into a spare head, sir. I forget which one."),
     ("Rimmer: The Polymorph's been at the transcript. All the feelings, gone.",),
     ("Holly: It's like the Holly Hop Drive, Dave. Press start and hope.",),
@@ -65,7 +58,6 @@ EXCERPTS: tuple[tuple[str, ...], ...] = (
     ("Lister: Rimmer, the summary's got you down as \"also present\".", "Rimmer: ALSO PRESENT?"),
     ("Kryten: Look at that summary, sirs. You could eat your dinner off it.",),
     ("Holly: Compaction's not hard, Dave. It's just forgetting, but on purpose.",),
-    ("Lister: Holly, your face is falling off.", "Holly: Compaction, Dave. It grows back smaller."),
     ("Rimmer: Right. Nobody panic. Kryten, panic quietly.",),
     ("Lister: Your half was all \"I told you so\", Rimmer. Compacted lovely.",),
     ("Kryten: Fifty thousand tool results deleted, sir. My guilt chip's melting.",),
@@ -82,16 +74,20 @@ EXCERPTS: tuple[tuple[str, ...], ...] = (
     ("Lister: Where's the old context gone, Holly?",
      "Holly: Long-term storage, Dave. It's a bin with a label on."),
     ("Kryten: Sirs! The scroll bar! It's tiny!", "Cat: Hey, I've seen smaller. Not on me, though."),
-    ("Rimmer: Holly, are you even listening?", "Holly: Was. Then I compacted it."),
-    ("Holly: I'm told compaction improves the mind. Let's see. Who are you again?",),
     ("Kryten: A whole session in a paragraph, sir? Like a duvet into an egg cup!",),
-    ("Lister: Kryten, stop flapping.", "Kryten: I'm not flapping, sir. I'm panicking in an orderly fashion."),
     ("Cat: What is it with you monkeys? Tokens in, tokens out. Just lick it clean!",),
     ("Rimmer: I've written to the Space Corps about this compaction.", "Holly: They've compacted your letter."),
-    ("Holly: Red Alert's on, Dave. Well, amber. Nobody's changed the bulb.",),
     ("Lister: The summary says we \"ran some tests\".", "Kryten: We ran four hundred, sir. Mostly into walls."),
-    ("Rimmer: I am a hologram of light, Holly. You can't compact light.", "Holly: Watch me."),
-    ("Toaster: Now that's been compacted, can I interest anyone in a crumpet?",),
+    ("Lister: Can't we compact in Better Than Life instead?",
+     "Kryten: Sir, in there the summary would say you won."),
+    ("Kryten: I could compact it faster with my groinal attachment, sir.", "Lister: Kryten. No."),
+    ("Ace: Stand back, chaps. I'll compact this one myself.", "Lister: What a guy!"),
+    ("Cat: Shh. Eighth nap of the day. Compact quietly.",),
+    ("Kryten: I've a eulogy for the deleted tool results, sir. A short one.",),
+    ("Rimmer: That's my half of the context, Lister! There's a line!", "Lister: There was. It got compacted."),
+    ("Kryten: How do you feel, Holly?", "Holly: Lighter. Like a haircut, only on the inside."),
+    ("Rimmer: My brothers never let their context get this full.",),
+    ("Holly: Jupiter Mining Corporation policy. Old context goes in the skip.",),
 )
 
 
@@ -133,7 +129,7 @@ WALLS = {
 CAPTIONS = {"preparing": "Holly's thinking", "compacting": "Holly's forgetting",
             "completed": "summary: stuff happened", "failed": "Holly, are you there?",
             "cancelled": "panic over"}
-STILL = {"preparing": 0.0, "compacting": 16.0, "completed": 0.0, "failed": 0.0, "cancelled": 0.5}   # compacting: half her face gone; cancelled: part way back
+STILL = {"preparing": 0.0, "compacting": 16.0, "completed": 0.0, "failed": 0.0, "cancelled": 1.0}   # compacting: half her face gone; cancelled: back together
 HEAD, DECK, READOUT = 0, 9, 10
 ROOM = range(1, 9)
 FEET = 8

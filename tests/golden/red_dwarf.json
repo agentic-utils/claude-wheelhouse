@@ -123,15 +123,15 @@
 [
 "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
 "▐ .--------------------------.  RED DWARF             (○)  ▌",
-"▐ |      .-'  '''  ''-       |                             ▌",
+"▐ |      .-''''''''''-.      |                             ▌",
 "▐ |     /  _        _  \\     |                             ▌",
-"▐ |     |   o)    (o)  |     |        \"Phew!\"              ▌",
-"▐ |     |              |     |                             ▌",
-"▐ |     \\    '  --'    /     |   (H)    [=]    %o%    o()  ▌",
-"▐ |       -.__ ___  .-'      |   /|\\    /|\\    /|U   /|/   ▌",
+"▐ |     |  (o)    (o)  |     |        \"Phew!\"              ▌",
+"▐ |     |      <       |     |                             ▌",
+"▐ |     \\    '----'    /     |   (H)    [=]    %o%    o()  ▌",
+"▐ |      '-.________.-'      |   /|\\    /|\\    /|U   /|/   ▌",
 "▐ '--------------------------'   / \\    / \\    / \\   / \\   ▌",
 "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
-"  MEMORY    72,084 yrs                                      ",
+"  MEMORY 3,000,000 yrs                                      ",
 "                         panic over                         "
 ],
 [
@@ -149,7 +149,7 @@
 "                                                            "
 ]
 ],
-"still cancelled": "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\n▐ .--------------------------.  RED DWARF             (○)  ▌\n▐ |      .-'  '''  ''-       |                             ▌\n▐ |     /  _        _  \\     |                             ▌\n▐ |     |   o)    (o)  |     |        \"Phew!\"              ▌\n▐ |     |              |     |                             ▌\n▐ |     \\    '  --'    /     |   (H)    [=]    %o%    o()  ▌\n▐ |       -.__ ___  .-'      |   /|\\    /|\\    /|U   /|/   ▌\n▐ '--------------------------'   / \\    / \\    / \\   / \\   ▌\n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n  MEMORY    72,084 yrs                                      \n                         panic over                         ",
+"still cancelled": "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\n▐ .--------------------------.  RED DWARF             (○)  ▌\n▐ |      .-''''''''''-.      |                             ▌\n▐ |     /  _        _  \\     |                             ▌\n▐ |     |  (o)    (o)  |     |        \"Phew!\"              ▌\n▐ |     |      <       |     |                             ▌\n▐ |     \\    '----'    /     |   (H)    [=]    %o%    o()  ▌\n▐ |      '-.________.-'      |   /|\\    /|\\    /|U   /|/   ▌\n▐ '--------------------------'   / \\    / \\    / \\   / \\   ▌\n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n  MEMORY 3,000,000 yrs                                      \n                         panic over                         ",
 "caption cancelled": "panic over",
 "frame compacting t=0.0": [
 [
@@ -782,10 +782,6 @@
 "Holly: Emergency. There's an emergency going on. Your context's full."
 ],
 [
-"Rimmer: Holly, summarise the last three million years.",
-"Holly: \"Stuff happened.\""
-],
-[
 "Lister: Context buffer's at ninety-eight percent, Kryten. Is that good?",
 "Kryten: It is the opposite of good, sir!"
 ],
@@ -812,9 +808,6 @@
 [
 "Rimmer: Must we keep three hours of your waffle, Lister?",
 "Toaster: Ah! So you're a waffle man!"
-],
-[
-"Toaster: The old context's toast. Would anyone like any toast?"
 ],
 [
 "Kryten: Sir, your exam notes compacted to \"I am a fish\", four hundred times.",
@@ -863,9 +856,6 @@
 "Kryten: Compacted, sir. It now just says \"don't\"."
 ],
 [
-"Cat: Wake me when it's three lines. That's my whole attention span."
-],
-[
 "Cat: A summary? Can I eat it, sleep on it, or wear it?"
 ],
 [
@@ -893,18 +883,7 @@
 "Queeg: I am Queeg 500, Holly's backup. This compaction is a disgrace."
 ],
 [
-"Holly: Kept all the important bits, Dave. Bad news: there weren't any."
-],
-[
-"Lister: Can we compact Rimmer?",
-"Holly: Tried. He expands to fill the space available."
-],
-[
 "Cat: Three lines? Make it one, and make it about me."
-],
-[
-"Rimmer: Put in the summary that this was all Lister's fault.",
-"Holly: Done. That's the whole summary."
 ],
 [
 "Lister: Did you back the context up, Kryten?",
@@ -936,10 +915,6 @@
 ],
 [
 "Holly: Compaction's not hard, Dave. It's just forgetting, but on purpose."
-],
-[
-"Lister: Holly, your face is falling off.",
-"Holly: Compaction, Dave. It grows back smaller."
 ],
 [
 "Rimmer: Right. Nobody panic. Kryten, panic quietly."
@@ -991,18 +966,7 @@
 "Cat: Hey, I've seen smaller. Not on me, though."
 ],
 [
-"Rimmer: Holly, are you even listening?",
-"Holly: Was. Then I compacted it."
-],
-[
-"Holly: I'm told compaction improves the mind. Let's see. Who are you again?"
-],
-[
 "Kryten: A whole session in a paragraph, sir? Like a duvet into an egg cup!"
-],
-[
-"Lister: Kryten, stop flapping.",
-"Kryten: I'm not flapping, sir. I'm panicking in an orderly fashion."
 ],
 [
 "Cat: What is it with you monkeys? Tokens in, tokens out. Just lick it clean!"
@@ -1012,58 +976,68 @@
 "Holly: They've compacted your letter."
 ],
 [
-"Holly: Red Alert's on, Dave. Well, amber. Nobody's changed the bulb."
-],
-[
 "Lister: The summary says we \"ran some tests\".",
 "Kryten: We ran four hundred, sir. Mostly into walls."
 ],
 [
-"Rimmer: I am a hologram of light, Holly. You can't compact light.",
-"Holly: Watch me."
+"Lister: Can't we compact in Better Than Life instead?",
+"Kryten: Sir, in there the summary would say you won."
 ],
 [
-"Toaster: Now that's been compacted, can I interest anyone in a crumpet?"
+"Kryten: I could compact it faster with my groinal attachment, sir.",
+"Lister: Kryten. No."
+],
+[
+"Ace: Stand back, chaps. I'll compact this one myself.",
+"Lister: What a guy!"
+],
+[
+"Cat: Shh. Eighth nap of the day. Compact quietly."
+],
+[
+"Kryten: I've a eulogy for the deleted tool results, sir. A short one."
+],
+[
+"Rimmer: That's my half of the context, Lister! There's a line!",
+"Lister: There was. It got compacted."
+],
+[
+"Kryten: How do you feel, Holly?",
+"Holly: Lighter. Like a haircut, only on the inside."
+],
+[
+"Rimmer: My brothers never let their context get this full."
+],
+[
+"Holly: Jupiter Mining Corporation policy. Old context goes in the skip."
 ]
 ],
 "schedule c0ffee01": [
 [
 0,
 [
-"Rimmer: Lister! Kryten! Report to the summary at once! Cat?",
-"Cat: I'm grooming."
-]
-],
-[
-20.49203609451988,
-[
-"Kryten: Look at that summary, sirs. You could eat your dinner off it."
+"Lister: What's the summary say, Holly?",
+"Holly: Mostly \"smeg\", Dave. I've left it in for colour."
 ]
 ],
 [
 25,
 [
-"Rimmer: Three million years gone, and it STILL kept the gazpacho soup."
+"Lister: How long's this gonna take, Holly?",
+"Holly: About three million years, Dave. Or a minute."
 ]
 ],
 [
-53.0198996704266,
+48.01399760615629,
 [
-"Rimmer: Holly, are you even listening?",
-"Holly: Was. Then I compacted it."
+"Lister: As long as the summary keeps my curry order, I'm easy.",
+"Kryten: Sir, the curry order IS the summary."
 ]
 ],
 [
-73.18708071185515,
+77.13530524236707,
 [
-"Lister: Rimmer, the summary's got you down as \"also present\".",
-"Rimmer: ALSO PRESENT?"
-]
-],
-[
-96.95036435470317,
-[
-"Lister: Your half was all \"I told you so\", Rimmer. Compacted lovely."
+"Cat: Shh. Eighth nap of the day. Compact quietly."
 ]
 ]
 ],
@@ -1071,85 +1045,75 @@
 [
 0,
 [
-"Cat: What is it with you monkeys? Tokens in, tokens out. Just lick it clean!"
+"Rimmer: My brothers never let their context get this full."
 ]
 ],
 [
-23.21896072421411,
+21.562110318466647,
 [
-"Holly: I've squashed Kryten's panic down to a single \"aaargh\".",
-"Kryten: AAARGH!"
+"Rimmer: I've written to the Space Corps about this compaction.",
+"Holly: They've compacted your letter."
 ]
 ],
 [
-44.710729571233315,
+45.82870886511289,
 [
-"Holly: Kept all the important bits, Dave. Bad news: there weren't any."
+"Holly: It's like the Holly Hop Drive, Dave. Press start and hope."
 ]
 ],
 [
-64.85129168631222,
+70.75396129891783,
 [
-"Rimmer: Skutters! Sweep up those old tool results!",
-"Kryten: They're giving you the V sign, sir."
+"Lister: Your half was all \"I told you so\", Rimmer. Compacted lovely."
 ]
 ],
 [
-87.76748048769927,
-[
-"Cat: Something's getting compressed, and it better not be my good looks."
-]
-],
-[
-113.65841082483948,
-[
-"Cat: A summary? Can I eat it, sleep on it, or wear it?"
-]
-],
-[
-139.65020162647875,
-[
-"Lister: The summary says we \"ran some tests\".",
-"Kryten: We ran four hundred, sir. Mostly into walls."
-]
-],
-[
-164.03097903726706,
-[
-"Holly: Don't mind me, Dave. I'm just losing face."
-]
-],
-[
-190.83616006732342,
-[
-"Rimmer: Space Corps Directive 147!",
-"Kryten: Compacted, sir. It now just says \"don't\"."
-]
-],
-[
-215.1121531628105,
-[
-"Rimmer: Holly, are you even listening?",
-"Holly: Was. Then I compacted it."
-]
-],
-[
-244.83994148915517,
+96.10205905647011,
 [
 "Rimmer: Right. Nobody panic. Kryten, panic quietly."
 ]
 ],
 [
-266.6580835360894,
+123.83082438705438,
 [
-"Lister: As long as the summary keeps my curry order, I'm easy.",
-"Kryten: Sir, the curry order IS the summary."
+"Rimmer: Step up to Red Alert!",
+"Kryten: Sir, are you absolutely sure? It does mean changing the bulb."
 ]
 ],
 [
-288.93580077968033,
+149.1720379999903,
 [
-"Kryten: The old messages are off to the compactor, sir. Shall I iron them?"
+"Rimmer: Three million years gone, and it STILL kept the gazpacho soup."
+]
+],
+[
+174.82926985234135,
+[
+"Cat: Memory? I live in the now. And now. And now. Looking good!"
+]
+],
+[
+202.8765890885959,
+[
+"Holly: Don't mind me, Dave. I'm just losing face."
+]
+],
+[
+223.82632098098182,
+[
+"Holly: Took me three million years to go senile. You lot did it in a day."
+]
+],
+[
+250.3091876427986,
+[
+"Holly: I think I've compacted the instructions for compacting."
+]
+],
+[
+278.5291493882976,
+[
+"Cat: I can smell it, buddy. A million tokens, sneaking out the back door."
 ]
 ]
 ]
