@@ -575,7 +575,7 @@ async def test_a_pick_in_the_inbox_or_decisions_clears_the_others(store, sid, de
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("route, hidden, desc", [
-    ("inbox", False, "the inbox's row clicked"),
+    ("inbox", False, "the inbox's row clicked (a control: settle never pre-cleared the doc)"),
     ("prs", False, "the PRs pane's row (show_item)"),
     ("search", False, "a search's pick (go_to_item)"),
     ("clicked-id", False, "an id clicked in Detail (go_to_item)"),
