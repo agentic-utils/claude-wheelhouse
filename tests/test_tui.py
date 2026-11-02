@@ -3651,7 +3651,6 @@ async def test_items_that_tie_to_the_second_keep_one_order(store, sid, clock, po
                         await pilot.press(key)
                 for _ in range(4):
                     await pilot.pause()
-                await landed(app, pilot)   # a Delete, and the Ctrl+R behind it (behind_deletes), landed
                 await clock.finish_moves(pilot, app)
         await pilot.pause()
         table.focus()
