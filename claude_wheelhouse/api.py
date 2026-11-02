@@ -9,7 +9,7 @@ A module imports this alone: what it may use of the wheelhouse is re-exported he
 
 A pane's `tui` surface is a factory taking the `Context` and returning a Textual widget.
 The hub mounts it in the pane's slot, one of `SLOTS` (.plan/modules.md), with the module's id as its id (an id one of the
-hub's own widgets or another module has gets a card instead), and calls three optional
+hub's own widgets or another module has gets a card instead), and calls these optional
 methods on it:
 
 - `tick()`: once a second, and as soon as the session in context changes.
@@ -24,6 +24,8 @@ methods on it:
   a doc or a session's conversation. The PRs pane's are a PR's buttons and details (#145).
 - `landed(sid)`: the hub's own read of a session's transcript has brought something (its
   transcript followers are shared, `follower`): a pane showing that session can repaint.
+- `doc_written(path)`: the doc editor has saved a file (resolved path), or reloaded it over
+  its edits: a pane listing docs can ask again at once (the Decisions pane, #282).
 
 A pane's widget may also name a section of the F1 overlay for its BINDINGS: `KEYS_HELP =
 (title, sdk_only)`, sdk_only to list them only with SDK mode on. A list in a pane (the

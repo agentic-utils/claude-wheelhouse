@@ -181,8 +181,31 @@ def stage_text(state: str, origin: str | None, note: str, stamp: str = "") -> st
     for a stage with no art (requested: usually under a second, and the eye covers it)."""
     if state not in WALLS:
         return None
-    detail = note or (f"asked for by {origin}" if state in SHOWN and origin else "")
-    return WALLS[state] + "\n" + " · ".join(filter(None, (detail, stamp)))
+    return WALLS[state] + "\n" + detail(state, origin, note, stamp)
+
+
+def detail(state: str, origin: str | None, note: str, stamp: str) -> str:
+    """The dim line under a stage's art: what came of it, else who asked, and when."""
+    said = note or (f"asked for by {origin}" if state in SHOWN + ("requested",) and origin else "")
+    return " · ".join(filter(None, (said, stamp)))
+
+
+ENDS = ("completed", "failed", "cancelled")
+
+
+def dock_text(state: str, since: float, origin: str | None, note: str, stamp: str) -> str:
+    """The running cycle's "dock" entry (#287): its stage (requested drawn as preparing), when
+    that stage began (epoch, the animation's time zero) and its dim line, one a line (docked)."""
+    return "\n".join((state if state in WALLS else "preparing", repr(since), detail(state, origin, note, stamp)))
+
+
+def docked(text: str) -> tuple[str, float, str]:
+    """A dock entry's stage, start and dim line (dock_text)."""
+    state, since, line = (text.split("\n", 2) + ["", ""])[:3]
+    try:
+        return state, float(since), line
+    except ValueError:
+        return state, 0.0, line
 
 
 def schedule(cycle_id: str, windows: list[tuple[float, float]]) -> list[tuple[float, tuple[str, ...]]]:
@@ -198,3 +221,163 @@ def schedule(cycle_id: str, windows: list[tuple[float, float]]) -> list[tuple[fl
             out.append((at, pool.next()))
             at += gap(rng)
     return out
+
+
+# The docked art (#287): the compactor big and moving, pinned under the conversation while a cycle
+# runs, and its last frame left in the conversation when it ends. BIG_WIDTH by BIG_HEIGHT cells in
+# every frame of every stage (a test pins it); a pane narrower than BIG_WIDTH gets WALLS instead.
+# A frame is its rows and, cell for cell, the role each cell is drawn in (ROLES), so the app colours
+# it without parsing the art: walls and crew in the compaction blue, sparks and the hatch light in
+# amber, the dianoga in green. Everything moves on TICKS frames a second of the stage's own time, so
+# any rate draws the same scene, and a still (animation off) is the frame at STILL[state]
+BIG_WIDTH, BIG_HEIGHT = 60, 12   # 11 rows of art and the caption
+TICKS = 6
+ROLES = {"w": "wall", "s": "seam", "c": "crew", "g": "sludge", "k": "spark", "h": "hatch", "d": "dianoga", " ": "text"}
+CAPTIONS = {"preparing": "walls closing in", "compacting": "compaction initiated", "completed": "compacted",
+            "failed": "3PO, shut them down!", "cancelled": "compaction called off"}
+STILL = {"preparing": 0.0, "compacting": 40.0, "completed": 0.0, "failed": 0.0, "cancelled": 1.5}   # cancelled: part way back out
+RIM, FLOOR, CHAMBER, SLUDGE = 0, 10, range(1, 8), (8, 9)   # the rows: hatch rim, floor, air and crew, sludge
+FEET = 7   # the row the crew stand on
+OPEN, SHUT = 3, 29   # wall thickness, each side, open and met (58 inner cells between the frame)
+# the crew, distinguishable: Han's vest and blaster, Leia's buns, Luke plain (and the one the
+# dianoga wants), Chewie tall and furry. Each pose top row first, every row the same width
+CREW = {
+    "han": {"stand": (" o ", "/H>", "/ \\"), "panic": ("\\o/", " H ", "/ \\"), "cheer": "\\o/"},
+    "leia": {"stand": ("@o@", "/|\\", "/^\\"), "panic": ("@o@", "\\|/", "/^\\"), "cheer": "@o@"},
+    "luke": {"stand": (" o ", "/|\\", "/ \\"), "panic": ("\\o/", " | ", "/ \\"), "grabbed": ("\\o/", " |)", " (("),
+             "cheer": "\\o/"},
+    "chewie": {"stand": ("{o}", "/#\\", "|#|", "/ \\"), "panic": ("{O}", "\\#/", "|#|", "/ \\"), "cheer": "{#}"},
+}
+ORDER = ("han", "leia", "luke", "chewie")
+GARBAGE = ((0.08, "[]"), (0.27, "%"), (0.45, "o="), (0.62, "&"), (0.8, "<>"), (0.95, "#"))
+GRAB, GRAB_FOR = 15, 2.0   # the tentacle takes Luke every GRAB seconds, for GRAB_FOR
+EYE, EYE_FOR = 7, 2.0   # the dianoga's eye surfaces every EYE seconds, for EYE_FOR
+
+
+def walls(state: str, t: float) -> int:
+    """Each wall's thickness at t seconds into the stage: still while preparing, grinding in
+    (fast, then ever slower: a long /compact never quite shuts them) while compacting, met once
+    compacted, stopped where the droids caught them on a failure, back out when called off."""
+    if state == "compacting":
+        return OPEN + 1 + round(13 * (1 - 0.5 ** (t / 30)))
+    if state == "completed":
+        return SHUT
+    if state == "failed":
+        return 10
+    if state == "cancelled":
+        return max(OPEN, 10 - int(t * 2))
+    return OPEN
+
+
+class Canvas:
+    """A frame being drawn: rows of cells and the role of each."""
+
+    def __init__(self) -> None:
+        self.cells = [[" "] * BIG_WIDTH for _ in range(BIG_HEIGHT)]
+        self.roles = [[" "] * BIG_WIDTH for _ in range(BIG_HEIGHT)]
+
+    def put(self, row: int, col: int, text: str, role: str, lo: int = 0, hi: int = BIG_WIDTH) -> None:
+        """text from col on row, in role, clipped to the columns lo to hi."""
+        for i, ch in enumerate(text):
+            if lo <= col + i < hi and 0 <= row < BIG_HEIGHT and ch != "\0":
+                self.cells[row][col + i], self.roles[row][col + i] = ch, role
+
+    def done(self) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        return tuple("".join(r) for r in self.cells), tuple("".join(r) for r in self.roles)
+
+
+def wall_cell(row: int, depth: int) -> tuple[str, str]:
+    """A wall's cell depth cells back from its face: the face, then plate with seams, rivets
+    and the odd greeble, all fixed to the face, so they ride in with it as it grinds."""
+    if depth == 0:
+        return "▓", "w"
+    if row in (1, 5, 9) and depth % 4 == 2:
+        return "o", "s"   # rivets
+    if depth % 6 == 5:
+        return "▒", "s"   # plate seams
+    if (row * 7 + depth * 3) % 23 == 0:
+        return "=", "s"   # greebles
+    return "█", "w"
+
+
+def scene(state: str, t: float, animate: bool = True) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """One frame of the big art for a stage, t seconds into it (rows, roles): BIG_HEIGHT rows of
+    BIG_WIDTH cells. animate False: the stage's still (STILL), as with the app's animation off."""
+    t = t if animate else STILL.get(state, 0.0)
+    f = int(t * TICKS)
+    c = Canvas()
+    moving = state == "compacting"
+    w = walls(state, t)
+    # the rim, with the hatch light: slow blink waiting, fast while grinding, steady at the end
+    c.put(RIM, 0, "▄" * BIG_WIDTH, "w")
+    lit = {"preparing": f // TICKS % 2 == 0, "compacting": f % 2 == 0, "cancelled": False}.get(state, True)
+    c.put(RIM, BIG_WIDTH // 2 - 2, "[" + ("●" if lit else "○") + "]", "h")
+    c.put(FLOOR, 0, "▀" * BIG_WIDTH, "w")
+    for row in (*CHAMBER, *SLUDGE):
+        c.put(row, 0, "▐", "w")
+        c.put(row, BIG_WIDTH - 1, "▌", "w")
+        jolt = 1 if moving and (f + row) % 4 == 0 else 0   # the grind: a row lurching a cell ahead
+        depth = min(SHUT, w + jolt)
+        for d in range(depth):
+            ch, role = wall_cell(row, d)
+            c.put(row, depth - d, ch, role)
+            c.put(row, BIG_WIDTH - 1 - depth + d, ch, role)
+    lo, hi = w + 1, BIG_WIDTH - 1 - w   # the room left between the faces
+    room = hi - lo
+    # the sludge, rippling, and what floats in it bobbing
+    for row in SLUDGE:
+        c.put(row, lo, "".join("~" if (i + f // 2 + row) % 3 else "-" for i in range(room)), "g", lo, hi)
+    for i, (at, junk) in enumerate(GARBAGE):
+        if room > len(junk) + 2:
+            c.put(SLUDGE[(f // 3 + i) % 2], lo + 1 + int(at * (room - len(junk) - 2)), junk, "g", lo, hi)
+    alive = state in ("preparing", "compacting")
+    if alive and t % EYE < EYE_FOR and room > 6:   # the dianoga's eye, blinking once as it looks round
+        x = lo + 2 + int(t // EYE * 11) % max(1, room - 6)
+        c.put(SLUDGE[0], x, "(-)" if f % 5 == 0 else "(@)", "d", lo, hi)
+    grabbed = moving and GRAB / 2 <= t % GRAB < GRAB / 2 + GRAB_FOR
+    if state == "completed":   # squeezed out of the top: on the rim, cheering
+        for i, who in enumerate(ORDER):
+            pose = CREW[who]["cheer"] if f % 4 < 2 else "_" + CREW[who]["cheer"][1] + "_"
+            c.put(RIM, (6, 16, 40, 50)[i], pose, "c")
+    elif room >= 4:
+        wide = sum(len(CREW[w_]["stand"][0]) for w_ in ORDER)
+        gap = max(0, (room - wide) // (len(ORDER) + 1))
+        x = lo + gap
+        for i, who in enumerate(ORDER):
+            poses = CREW[who]
+            cheering = state == "failed"   # the droids stopped the walls: arms up, jumping for joy
+            pose = (poses["grabbed"] if who == "luke" and grabbed else
+                    poses["panic"] if moving and (f // 2 + i) % 3 or cheering else poses["stand"])
+            dodge = ((f // 3 + i * 2) % 3 - 1) if moving else 0
+            col = min(max(lo, x + dodge), hi - len(pose[0]))
+            top = FEET - len(pose) + 1 + (1 if who == "luke" and grabbed else 0) - (1 if cheering and (f // 2 + i) % 2 else 0)
+            for r, line in enumerate(pose):
+                c.put(top + r, col, line, "c", lo, hi)
+            if who == "luke" and grabbed:   # the tentacle, wriggling up out of the sludge round him
+                for r in range(top, SLUDGE[0] + 1):
+                    c.put(r, col + len(pose[0]), ")" if (r + f) % 2 else "(", "d", lo, hi)
+                c.put(SLUDGE[0], col - 1, "@", "d", lo, hi)
+            x += len(poses["stand"][0]) + gap
+    if moving:   # sparks off both faces, a few rows a frame
+        for row in CHAMBER:
+            spark = (f * 7 + row * 13) % 11
+            if spark < 3:
+                c.put(row, lo + (spark % 2), "*+'"[spark], "k", lo, hi)
+            if (spark + 5) % 11 < 3:
+                c.put(row, hi - 1 - (spark % 2), ".*,"[(spark + 5) % 11], "k", lo, hi)
+    c.put(BIG_HEIGHT - 1, 0, CAPTIONS.get(state, "").center(BIG_WIDTH), " ")
+    return c.done()
+
+
+def still(state: str) -> str:
+    """A stage's big still frame as plain text (animation off, or its last frame left in the
+    conversation)."""
+    return "\n".join(scene(state, 0.0, animate=False)[0])
+
+
+def state_of(art: str) -> str | None:
+    """Which stage a stage entry's art (WALLS) shows, from its rows: None for any other text."""
+    for state, rows in WALLS.items():
+        if art.startswith(rows):
+            return state
+    return None

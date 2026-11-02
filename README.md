@@ -252,6 +252,22 @@ session.
   its `✕`, dismisses it, and it goes by itself once every Needs-you line is dealt with.
   Seeing it marks nothing seen. A session going quiet is noticed by the daemon (or a
   `--local` app) as it happens; one that went while neither ran is noticed at the next start.
+- **Search.** The 🔍 at the inbox's top right, or any character typed while the inbox has
+  focus (that character starting the query), opens a search over it: the selected session's
+  items, or every session's (each row naming its session) with none selected. It matches ids
+  and titles as you type, case aside: an id (`T3`, `q25`, `PR276`) puts that item first, then
+  ids holding what's typed, titles starting with it and titles holding it, each newest first,
+  50 rows at most. **Show hidden** (`Tab` to it, `Space` or a click flips it, kept until you
+  quit) takes in the items off the inbox too, dimmed: finished ones `Alt+V` would show, those
+  autocleanse hid, the dismissed and deleted, and a parked session's. `Up` and `Down` move the
+  highlight, `Enter` or a click goes to the item: highlighted in the inbox and shown in Detail,
+  as a click on its row; a hidden one in Detail alone, its header saying *Hidden from the
+  inbox*, the inbox unchanged. `Esc` closes it, focus back on the inbox.
+- **Clickable ids.** In Detail, an item's id in a doc, a conversation or an item's thread
+  (`T3`, `Q25`, `PR276`, a whole word) is a link, in the colour of a doc's links: a click
+  goes to the item with that id in the session the text belongs to, as a search's pick does.
+  An id that session hasn't got stays plain, and so does `#273` (a GitHub issue), an id
+  inside a word or a path (`T2a`, `T206.md`), and anything in code.
 - **Pins.** The inbox's first column pins an item (📌): a click there, or `Alt+P` in the item
   list, pins the row or clears its pin. A doc comes pinned (a session can post a scratch
   report unpinned), anything else unpinned, and a doc posted again keeps the pin you set.
@@ -279,15 +295,20 @@ session.
   (dragging the line between them resizes it, kept as `layout.editor`). `Ctrl+Enter`
   shows the edits rendered above, as an answer queues; nothing re-renders as you type.
   The two keep step: scrolling the doc scrolls the editor to the same place, and moving
-  the cursor into another block scrolls the doc to show it. `Esc` closes the editor,
-  asking first if there are edits (Close keeping them, the default; Discard; or Keep
-  editing), and the pane's title says `edited` while there are. Edits not discarded are kept, doc by doc, while the app
-  runs: another doc shown closes the editor, and opening it on the first again brings them
-  back, a click putting the cursor on its block; until then that doc shows them rendered,
-  full screen too. A file changed on disk meanwhile keeps the edits, said once and as
-  `file changed` in the title. One file has one buffer, however it's reached. Saving
-  comes next: for now `Ctrl+S` (and `Ctrl+Enter` for a session in Immediate mode) says so,
-  and the file is never written.
+  the cursor into another block scrolls the doc to show it. While there are unsaved edits
+  the pane's title says `edited · Ctrl+S saves`. `Ctrl+S` saves the doc to its file (and
+  `Ctrl+Enter` does too for a doc item of a session in Immediate mode), never sending the
+  session's queue; Detail, full screen and the Decisions pane show the saved text and
+  status at once. `Esc` closes the editor, asking first if there are edits: Save (the
+  default), Discard, or Keep editing. Moving the selection off a doc with unsaved edits (to
+  another item, decision or session) asks the same, Keep editing going back to the doc, so
+  edits are never left in a hidden editor. A file changed on disk meanwhile keeps the
+  edits, said once and as `file changed` in the title; saving over it asks Overwrite,
+  Reload (the file's text replaces your edits) or Cancel. A file gone meanwhile offers to
+  write it anew. A save the daemon can't make (a file another user owns, a full disk) says
+  why, naming the file. The daemon writes only a doc item's file or a doc under a module's
+  doc roots, atomically, keeping the file's mode. One file has one buffer, however it's
+  reached.
 - **Decisions.** If your own instructions let a session decide some things without asking
   you, it reports each one as a decision (`D1`): what it decided, and one short line with
   the alternative, why, and how to reverse it. Decisions block nothing. Each session
@@ -415,7 +436,10 @@ session.
   a `Status:` line or `## Status` section, else its file name's (`0042-ACCEPTED-slug.md`),
   else `?`. PROPOSED and UNRESOLVED come first, then the rest, newest first; a column's
   header sorts by it, as the inbox's do. Moving the cursor shows the decision in Detail,
-  rendered, with no answer box, and `Enter` opens it full screen. With no decisions found
+  rendered, with no answer box, and `Enter`, or a click on the highlighted row, opens it full screen. As with
+  the PRs pane, Detail shows what you picked last: picking a decision hides the inbox's
+  highlight, and picking in the inbox hides the pane's, so a click on the row it was on
+  shows that row again, never opening it full screen. With no decisions found
   the pane shrinks to a line saying where it looked, and the other panes in its column share
   the room, each in proportion to its size (the inbox twice the PRs', by default). That
   happens in any column with another pane in it: swapped onto Detail's, alone, it keeps its size. A session
@@ -586,7 +610,7 @@ along with the launch command.
 
 ## Using it
 
-Keys, shown in upper case as usual (Alt+V means Alt and the v key, not Shift+V). Every one has a modifier (or is `F1`), so each works from the answer box too: `Enter` open an item's thread (or follow a session's conversation, in the
+Keys, shown in upper case as usual (Alt+V means Alt and the v key, not Shift+V). Every one has a modifier (or is `F1`), so each works from the answer box too, and a plain character typed in the inbox opens its search (above): `Enter` open an item's thread (or follow a session's conversation, in the
 session list), `Alt+V` show or hide finished items and those autocleanse hid (the footer says which it will do), `Delete` or `Backspace` in the item list close the
 highlighted question or decision or dismiss a done task or subagent, or close a doc (asking first, as it does for an open question), `Ctrl+Delete` delete every completed item at once (`Ctrl+Z` brings them back), `Alt+N` new session, `Alt+A` adopt, `Alt+Shift+L` relaunch all, `Alt+Shift+M` the MCP servers of the session in context, `Alt+K` in the session list fork the highlighted session, `Esc` all sessions, unselecting the session (or clears a text
 selection first, or back from a thread), `Ctrl+Enter` submit an answer (queued or sent, by the session's mode), `Alt+S` send this one answer now (the queue and mode left as they are),
@@ -871,11 +895,19 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
   cycle fails. Each compaction is also a task in the inbox, "Compact demo: 220k context", that
   moves with it (running, then done with the tokens before and after, blocked with why it
   failed, or dropped) and holds the 2-minute question under it; the session never sees it.
-  The conversation shows the detention-level trash compactor in blue, drawn once per cycle and
-  redrawn in place at each stage: the walls thicken inward while the crew stand, then panic,
-  and are gone once it's compacted (a failed or cancelled one leaves the walls open), with who
-  asked or what came of it under the art. While it runs, the odd panicked exchange between
-  the crew and the droids appears below.
+  While it runs, the detention-level trash compactor is pinned under the conversation, above
+  the answer box, in blue with amber sparks and a green dianoga: 60 cells wide where the pane
+  has room (the smaller 28-cell art below that), the riveted walls grinding in while Han, Leia,
+  Luke and Chewie brace and dodge, the hatch light blinking, garbage bobbing in the sludge and
+  the dianoga's eye surfacing now and then, its tentacle grabbing Luke. Each stage looks
+  different: the walls still while the notes are written, grinding while it compacts, met with
+  the crew squeezed out of the top once compacted, stopped with the crew cheering if it failed,
+  pulling back if it was called off. With the animation off (`ANIMATION_FPS=0`) each stage is a
+  still. When the cycle ends the dock closes and its last frame stays in the conversation where
+  the art was first drawn, with who asked or what came of it under it. The session's notes turn
+  shows as one dim line ("writing its notes for after compaction · 12 lines"), never the notes
+  themselves, and stays folded afterwards. While it runs, the odd panicked exchange between the
+  crew and the droids appears in the conversation.
   A session in a terminal tab gets the same, from the plugin's PreCompact hook, whether
   `/compact` was typed there or Claude Code compacted by itself; there the wheelhouse can hold
   only what it sends, never what's typed in the tab. The session can also ask for a compaction itself, with

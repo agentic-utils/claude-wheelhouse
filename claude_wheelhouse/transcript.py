@@ -23,6 +23,10 @@ from pathlib import Path, PurePosixPath
 PROJECTS = Path.home() / ".claude/projects"
 TAIL_BYTES = 1024 * 1024   # read from the end; older turns are left out
 MAX_ENTRIES = 80
+# a compaction's notes turn (#287): the host's ask for notes (host.KEEP_ASK, a test pins the two
+# together) carries the cycle's id in its tag; the reply's block ends with the closing tag
+KEEP_ASKED = re.compile(r'with the line <keep id="[0-9a-f]+"> before them')
+KEEP_CLOSED = re.compile(r"^[ \t]*</keep>[ \t]*$", re.MULTILINE)
 TOOL_WIDTH = 90
 # tools that stop the session until the person answers in its tab. Their call is written
 # before the answer, so a call with no result yet means the session is waiting. Permission
@@ -62,7 +66,7 @@ OVERSIZE = "wheelhouse-oversize"
 
 @dataclass
 class Entry:
-    who: str     # you | claude | tool | note | stage | crew (a compaction's, #244)
+    who: str     # you | claude | tool | note | stage | crew | dock (a compaction's, #244, #287)
     text: str
     at: str = ""  # ISO timestamp, UTC
 
@@ -192,14 +196,35 @@ def persons(text: str, origin: str | None, full=None) -> str | None:
     return None
 
 
+class Notes:
+    """A compaction's notes turn (#287), folded to one dim line as it's read: from the
+    wheelhouse's ask for notes (KEEP_ASKED, the host's KEEP_ASK carrying the cycle's id) to the
+    next prompt or the compaction, Claude's reply and tool calls counted, not shown."""
+
+    def __init__(self, at: str):
+        self.entry, self.lines, self.closed = Entry("note", "", at), 0, False
+        self.say()
+
+    def take(self, text: str) -> None:
+        self.lines += sum(1 for line in text.splitlines() if line.strip())
+        self.closed = self.closed or bool(KEEP_CLOSED.search(text))
+        self.say()
+
+    def say(self) -> None:
+        verb = "wrote" if self.closed else "writing"
+        self.entry.text = f"{verb} its notes for after compaction · {self.lines} line{'' if self.lines == 1 else 's'}"
+
+
 def entries(recs: list[dict], full=None, agent: bool = False) -> list[Entry]:
     """full: the person's message by id, for one a notification cut short (general_text).
-    agent: a subagent's transcript, whose fork prompt keeps its directive (FORK)."""
-    out = []
+    agent: a subagent's transcript, whose fork prompt keeps its directive (FORK). A
+    compaction's notes turn shows as one dim line (Notes)."""
+    out, notes = [], None
     for rec in recs:
         kind, at = rec.get("type"), rec.get("timestamp", "")
         msg = rec.get("message") or {}
         if kind == "system" and rec.get("subtype") == "compact_boundary":
+            notes = None
             out.append(Entry("note", "conversation compacted", at))
         elif kind == OVERSIZE:
             out.append(Entry("note", "a turn too large to show here", at))
@@ -207,18 +232,29 @@ def entries(recs: list[dict], full=None, agent: bool = False) -> list[Entry]:
             if rec.get("isCompactSummary"):
                 continue
             text = _text(msg.get("content")).strip()
+            if not agent and KEEP_ASKED.search(text):
+                notes = Notes(at)
+                out.append(notes.entry)
+                continue
+            if text:   # a prompt, not a tool's result: the notes turn, if any, is over
+                notes = None
             if agent and text.startswith("<fork-boilerplate>"):
                 text = FORK.sub("", text, count=1).strip()
             if said := persons(text, (rec.get("origin") or {}).get("kind"), full):
                 out.append(Entry("you", said, at))
         elif kind == "attachment" and (queued := rec.get("attachment") or {}).get("type") == QUEUED:
-            if said := persons(_text(queued.get("prompt")).strip(), queued.get("commandMode"), full):
+            if not agent and KEEP_ASKED.search(text := _text(queued.get("prompt"))):   # the ask, taken into a running turn
+                notes = Notes(at)
+                out.append(notes.entry)
+            elif said := persons(text.strip(), queued.get("commandMode"), full):
                 out.append(Entry("you", said, at))
         elif kind == "assistant":
             for part in msg.get("content") or []:
                 if not isinstance(part, dict):
                     continue
-                if part.get("type") == "text" and part.get("text", "").strip():
+                if notes is not None:   # the notes turn's own: counted, not shown
+                    notes.take(part.get("text", "") if part.get("type") == "text" else "")
+                elif part.get("type") == "text" and part.get("text", "").strip():
                     if out and out[-1].who == "claude":   # one reply split across records
                         out[-1].text += "\n\n" + part["text"].strip()
                     else:
@@ -371,7 +407,7 @@ def entry_block(e: Entry, label: str | None = None) -> tuple[str, str]:
         return "tool", "`⚙ " + e.text.replace("`", "'") + "`"
     if e.who == "note":
         return "note", f"_{e.text}{_hhmm(e.at)}_"
-    if e.who in ("stage", "crew"):   # plain Text, never Markdown (#244): the app renders it as is
+    if e.who in ("stage", "crew", "dock"):   # plain Text, never Markdown (#244): the app renders it as is
         return e.who, e.text
     text = hard_breaks(e.text) if e.who == "you" else e.text
     return e.who, f"**{label or e.who}**{_hhmm(e.at)}\n\n{text}"

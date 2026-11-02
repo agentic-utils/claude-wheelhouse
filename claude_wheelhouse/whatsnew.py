@@ -151,7 +151,8 @@ FEATURES: tuple[Feature, ...] = (
             "Drag a pane by its title onto another to swap the two; Reset layout, in the command palette, puts them back.",
             "Drag a pane by its title onto another to swap them. Ctrl+P, Reset layout, puts them back."),
     Feature("doc-editor", UNRELEASED, ADVANCED,
-            note="A click on a doc opens an editor below it; Ctrl+Enter shows the edits rendered. Saving comes next."),
+            note="A click on a doc opens an editor below it; Ctrl+Enter shows the edits rendered, and Ctrl+S saves "
+                 "them to the file. The pane's title says when there are edits to save."),
     Feature("helper-chat", UNRELEASED, "principles",
             note="Alt+Q asks the wheelhouse how to do something: a chat that answers from its help and its source, "
                  "through Haiku on your own Claude Code login.",
@@ -222,8 +223,12 @@ FEATURES: tuple[Feature, ...] = (
     Feature("compacting-shown", UNRELEASED, "sessions", when="sdk",
             note="While a session is compacting, its Compact button is off, its inbox items and its Detail dim and "
                  "ignore clicks, and its busy eye in the session list turns blue. Its conversation opens as the "
-                 "compaction starts, the trash compactor's walls redrawn in place as they close in.",
+                 "compaction starts, the trash compactor pinned under it.",
             tip="A blue eye: the session is compacting; its items dim until it's done."),
+    Feature("compactor-dock", UNRELEASED, ADVANCED,
+            note="A running compaction's trash compactor is pinned above the answer box, big and animated: the walls "
+                 "grind in, the crew dodge, sparks fly and the dianoga grabs Luke. Its last frame stays in the "
+                 "conversation, and the session's notes for compaction fold to one line."),
     Feature("keepalive-50", UNRELEASED, ADVANCED,
             note="The keepalive comes every 50 minutes, ahead of Claude Code's idle compaction at about 54."),
     Feature("compact-at-keepalive-end", UNRELEASED, ADVANCED,
@@ -342,6 +347,12 @@ FEATURES: tuple[Feature, ...] = (
     Feature("decisions-follow", UNRELEASED, ADVANCED,
             note="The Decisions pane follows the selected session, as the PRs pane does: its repo's decisions "
                  "alone, or a line saying it has none; with no session selected, every repo's."),
+    Feature("inbox-search", UNRELEASED, ADVANCED,
+            note="Search the inbox by id or title: click the 🔍 at its top right, or just type while it has focus. "
+                 "Show hidden takes in the items off the inbox too; Enter or a click goes to the item."),
+    Feature("clickable-ids", UNRELEASED, ADVANCED,
+            note="An item's id in Detail (T3, Q25, PR276 in a doc, a conversation or a thread) is a link: a click "
+                 "goes to that item of the same session, as a search's pick does."),
 
 )
 

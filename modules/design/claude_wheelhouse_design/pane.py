@@ -95,8 +95,39 @@ def sorted_by(rows: list[dict], spec: str) -> list[dict]:
 
 
 class DecisionTable(api.KeepColours, DataTable):
-    """The decisions, a row each. A list, so a Tab stop after the inbox's (tui.tab_stops)."""
+    """The decisions, a row each. A list, so a Tab stop after the inbox's (tui.tab_stops).
+    Its highlight is hidden until a decision is picked, and again while Detail shows an item
+    (Decisions.showing, #281, as the PRs pane's #148), until a click, Enter or a moving key
+    brings it back, that decision shown: a click on the row the hidden highlight was on shows
+    it, never opening it full screen."""
     TAB_LIST = True
+
+    def reveal(self, row: int | None = None) -> None:
+        """The hidden highlight back, on row (else where it was), and its decision shown. Shown
+        or moved, the table posts no highlight of its own: the decision is picked here."""
+        with self.prevent(DataTable.RowHighlighted):
+            self.show_cursor = True
+            if row is not None:
+                self.move_cursor(row=row, animate=False)
+        if self.row_count:
+            row = self.cursor_row if row is None else row   # the move may land after a refresh
+            self.parent.pick(self.coordinate_to_cell_key((row, 0)).row_key.value)
+
+    async def _on_click(self, event) -> None:
+        # DataTable's runs after this one, and with the highlight hidden does nothing
+        row = event.style.meta.get("row", -1)
+        if not self.show_cursor and 0 <= row < self.row_count:
+            event.prevent_default()   # not DataTable's, which would open a click on the cursor's row
+            self.reveal(row)
+
+    def action_cursor_down(self) -> None:
+        self.reveal() if not self.show_cursor else super().action_cursor_down()
+
+    def action_cursor_up(self) -> None:
+        self.reveal() if not self.show_cursor else super().action_cursor_up()
+
+    def action_select_cursor(self) -> None:
+        self.reveal() if not self.show_cursor else super().action_select_cursor()
 
 
 class Decisions(Vertical):
@@ -137,7 +168,8 @@ class Decisions(Vertical):
         self.said: str | None = None         # what the note last said
 
     def compose(self):
-        yield DecisionTable(id="decision-list", cursor_type="row", zebra_stripes=False)
+        yield DecisionTable(id="decision-list", cursor_type="row", zebra_stripes=False,
+                            show_cursor=False)   # until a decision is picked
         yield Static(id="decisions-note", markup=False)
 
     def on_mount(self) -> None:
@@ -156,6 +188,11 @@ class Decisions(Vertical):
             self.where = where
             self.ask()
         self.settle()   # the session selected may have changed: the rows held filtered, never asked again
+
+    def doc_written(self, path: str) -> None:
+        """A doc saved from the editor (the app's each_pane): asked again at once, so a
+        decision's new title or status shows now, not at the next EVERY."""
+        self.ask()
 
     def ask(self) -> None:
         """The route asked again, on a worker thread (a remote call blocks); while an ask is
@@ -296,12 +333,25 @@ class Decisions(Vertical):
         """The cursor moved by the person (the table has focus): the decision in Detail. Not
         when the table is built again with the cursor where it was."""
         event.stop()
-        path = event.row_key.value
-        if not event.data_table.has_focus or path == self.shown or (r := self.row(path)) is None:
+        if event.data_table.has_focus and event.data_table.show_cursor and event.row_key.value != self.shown:
+            self.pick(event.row_key.value)
+
+    def pick(self, path: str) -> None:
+        """A decision picked by the person: shown in Detail, the inbox's highlight hidden (#281)."""
+        if (r := self.row(path)) is None:
             return
         self.shown = path
         if self.ctx.show_doc is not None:
             self.ctx.show_doc(path, title_of(r))
+
+    def showing(self, sid: str | None, ref: str | None) -> None:
+        """Detail shows an item or a conversation (api's showing hook): the highlight hidden,
+        not left on a decision Detail no longer shows, so a click on that decision is a fresh
+        pick (#281)."""
+        table = self.query_one(DecisionTable)
+        with table.prevent(DataTable.RowHighlighted):
+            table.show_cursor = False
+        self.shown = None
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         event.stop()

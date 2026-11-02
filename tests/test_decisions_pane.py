@@ -4,7 +4,7 @@ tests, for the app's fixtures (conftest.py). Skipped when it isn't installed."""
 import pytest
 
 from claude_wheelhouse import api
-from claude_wheelhouse.tui import LAYOUT, DocView, WheelhouseApp, tab_stops
+from claude_wheelhouse.tui import LAYOUT, DocView, LeaveEdits, ThreadView, WheelhouseApp, tab_stops
 from conftest import keeps_colours
 from test_tui import INBOX_STOPS, assert_one_current, by_name, pane_widget, pick, stop_id
 
@@ -65,6 +65,9 @@ async def test_the_pane_lists_and_shows_decisions(store, sid, decisions):
         table.focus()
         await pilot.pause()
         assert app._detail_text == before, "focus alone shows nothing"
+        await pilot.press("down")
+        await pilot.pause()
+        assert table.show_cursor and "Redis goes." in app._detail_text, "the first key: the hidden highlight back (#281)"
         await pilot.press("down")
         await pilot.pause()
         assert "Write-ahead logging." in app._detail_text and "0003 WAL" in app._detail_text, "the cursor's decision"
@@ -393,7 +396,7 @@ async def test_a_decision_edits_in_detail_as_queued_with_every_module(store, sid
     async with app.run_test(size=(160, 40)) as pilot:
         await settled(app, pilot)
         app.query_one("#decision-list").focus()
-        await pilot.press("down")
+        await pilot.press("down", "down")   # the hidden highlight back (#281), then the next row
         await pilot.pause()
         region = app.detail_scroll.scrollable_content_region
         row = next(y for y, t in enumerate(app.detail._layout(app.detail.size.width)[1]) if "Use SQLite" in t)
@@ -499,3 +502,160 @@ async def test_the_pane_follows_the_selected_session(store, tmp_path, monkeypatc
         p.tick()
         await pilot.pause()
         assert numbers(app) == ["0002", "0005", "0001"] and not p.compact, "unselected: every repo's again"
+
+
+async def click_inbox(app, pilot, key, times=1):
+    await pilot.click("#items", offset=(4, 1 + app.items_table.get_row_index(key)), times=times)
+    await pilot.pause()
+
+
+async def click_decision(app, pilot, n, times=1):
+    await pilot.click("#decision-list", offset=(2, 1 + numbers(app).index(n)), times=times)
+    await pilot.pause()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("steps, shown, full, desc", [
+    ("inbox adr", "adr", None, "inbox to ADR: the decision shows, the inbox's highlight cleared"),
+    ("adr inbox", "inbox", None, "ADR to inbox: the item shows, the Decisions' highlight cleared"),
+    ("inbox adr inbox", "inbox", None, "back to the inbox's previous pick: shown, not full screen"),
+    ("adr inbox adr", "adr", None, "back to the previous decision: shown, not full screen"),
+    ("inbox adr key-inbox", "inbox", None, "a key in the cleared inbox: its pick back, shown"),
+    ("adr inbox key-adr", "adr", None, "a key in the cleared Decisions: its pick back, shown"),
+    ("inbox adr double-inbox", "inbox", "thread", "a real double-click on the inbox's row: full screen"),
+    ("adr inbox double-adr", "adr", "doc", "a real double-click on a decision: full screen"),
+    ("unselect adr unselect", "note", None, "a PR no session made, picked over a decision with nothing selected"),
+])
+async def test_a_pick_in_the_inbox_or_decisions_clears_the_others(store, sid, decisions, steps, shown, full, desc):
+    """#281: a click on the other pane's previous pick showed nothing new, or went full screen."""
+    q = store.post_item(sid, "question", "Which way?", status="open")
+    key = f"{sid}|{q}"
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settled(app, pilot)
+        table = app.query_one("#decision-list")
+        for step in steps.split():
+            if step == "inbox":
+                await click_inbox(app, pilot, key)
+            elif step == "adr":
+                await click_decision(app, pilot, "0003")
+            elif step == "double-inbox":
+                await click_inbox(app, pilot, key, times=2)
+            elif step == "double-adr":
+                await click_decision(app, pilot, "0003", times=2)
+            elif step == "unselect":   # as the PRs pane's pick of a PR no session made
+                app.unselect("PR7 isn't an item.")
+                await pilot.pause()
+                assert not app.items_table.show_cursor and not table.show_cursor, f"{desc}: neither lit"
+                continue
+            else:
+                (app.items_table if step == "key-inbox" else table).focus()
+                await pilot.pause()
+                await pilot.press("down")
+                await pilot.pause()
+            assert app.items_table.show_cursor is not table.show_cursor, f"{desc}: after {step}, one pane lit"
+        if full == "thread":
+            assert isinstance(app.screen, ThreadView), f"{desc}: the item full screen"
+            return
+        if full == "doc":
+            assert isinstance(app.screen, DocView) and "Write-ahead logging." in app.screen.text, f"{desc}: the doc"
+            return
+        assert app.screen is app.screen_stack[0], f"{desc}: nothing full screen"
+        if shown == "note":
+            assert "PR7 isn't an item." in app._detail_text, f"{desc}: Detail says why"
+        elif shown == "adr":
+            assert "Write-ahead logging." in app._detail_text, f"{desc}: the decision in Detail"
+            assert table.show_cursor and not app.items_table.show_cursor, f"{desc}: the Decisions' lit alone"
+            assert pane.Decisions.key_at(table).endswith("0003-ACCEPTED-wal.md"), f"{desc}: on the decision"
+        else:
+            assert "Which way?" in app._detail_text and "Write-ahead" not in app._detail_text, f"{desc}: the item"
+            assert app.items_table.show_cursor and not table.show_cursor, f"{desc}: the inbox's lit alone"
+            assert app.items_table.cursor_key() == key, f"{desc}: on the item"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("route, hidden, desc", [
+    ("inbox", False, "the inbox's row clicked (a control: settle never pre-cleared the doc)"),
+    ("prs", False, "the PRs pane's row (show_item)"),
+    ("search", False, "a search's pick (go_to_item)"),
+    ("clicked-id", False, "an id clicked in Detail (go_to_item)"),
+    ("search", True, "a search's pick of a hidden item, gone to before (peeked)"),
+])
+async def test_the_item_picked_again_over_a_decision_shows(store, sid, decisions, route, hidden, desc):
+    """#281 (b889430's merge undid it): the selected item picked again, by any route, while a
+    decision shows over it showed nothing new and left the Decisions' highlight lit."""
+    if hidden:   # a dismissed task: the inbox hides it
+        q = store.post_item(sid, "task", "Which way?", status="dropped")
+        store.dismiss(sid, q)
+    else:
+        q = store.post_item(sid, "question", "Which way?", status="open")
+    key = f"{sid}|{q}"
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settled(app, pilot)
+        table = app.query_one("#decision-list")
+        if hidden:
+            app.searched((sid, q))
+        else:
+            await click_inbox(app, pilot, key)
+        await pilot.pause()
+        assert app.selected == (sid, q), f"{desc}: the item selected first"
+        await click_decision(app, pilot, "0003")
+        assert "Write-ahead logging." in app._detail_text, f"{desc}: the decision over it"
+        if route == "inbox":
+            await click_inbox(app, pilot, key)
+        else:
+            {"prs": lambda: app.show_item(sid, q), "search": lambda: app.searched((sid, q)),
+             "clicked-id": lambda: app.action_go_to_item(sid, q)}[route]()
+        await pilot.pause()
+        assert "Which way?" in app._detail_text and "Write-ahead" not in app._detail_text, f"{desc}: the item"
+        assert not table.show_cursor, f"{desc}: the Decisions' highlight cleared"
+        assert app.items_table.show_cursor is not hidden, f"{desc}: the inbox lit unless it hides the item"
+
+
+@pytest.mark.anyio
+async def test_a_decision_saved_shows_its_new_text_and_status_at_once(store, sid, tmp_path, monkeypatch):
+    """A decision edited in Detail: moving off it asks first, Keep editing coming back to it; a
+    save (Ctrl+S) shows in Detail and in the pane's status at once, not at its next ask."""
+    d = repo(tmp_path, {"0001-wal.md": "# WAL\n\nStatus: Proposed\n", "0002-db.md": "# DB\n\nStatus: Accepted\n"})
+    monkeypatch.setattr(api, "load", lambda: [api.Loaded("design", design.module)])
+    path = str((d / "0001-wal.md").resolve())
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settled(app, pilot)
+        p, table = app.query_one("#design"), app.query_one("#decision-list")
+        table.focus()
+        await pilot.pause()
+        assert numbers(app) == ["0001", "0002"], "the proposed one first"
+        for key in ("down", "up"):   # the first shown: a highlight moving onto it
+            await pilot.press(key)
+            await pilot.pause()
+        region = app.detail_scroll.scrollable_content_region
+        row = next(y for y, t in enumerate(app.detail._layout(app.detail.size.width)[1]) if "Proposed" in t)
+        await pilot.click(offset=(region.x + 2, region.y + row))
+        await pilot.pause()
+        editor = app.detail_editor
+        editor.delete((2, 8), (2, 16))
+        editor.insert("Accepted", (2, 8))
+        for time, keys in (("first", ("down",)), ("second", ("up", "down"))):   # up: onto the one edited, asking nothing
+            table.focus()
+            for key in keys:
+                await pilot.press(key)
+                await pilot.pause()
+            await pilot.pause()
+            assert isinstance(app.screen, LeaveEdits), f"{time}: moving off a decision with edits asks"
+            await pilot.press("escape")
+            for _ in range(3):
+                await pilot.pause()
+            assert app.shown_doc[0] == path and editor.display and editor.has_focus, f"{time}: Keep editing: back on it"
+        p.asked_at = 10 ** 9   # no ask of its own from here: only the save's
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        for _ in range(50):
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            if not p.asking:
+                break
+        assert (d / "0001-wal.md").read_text() == "# WAL\n\nStatus: Accepted\n"
+        assert "Status: Accepted" in app._detail_text and app.query_one("#detail-pane").border_title == "Detail"
+        assert p.row(path)["status"] == "ACCEPTED", "the pane asked again at once"

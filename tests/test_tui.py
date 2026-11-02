@@ -10090,8 +10090,10 @@ def test_stage_blocks_render_as_plain_text_never_markdown(width, who, text):
     from rich.console import Console
     from rich.segment import Segment
     console = Console(width=width, color_system=None)   # rendered as the app renders a block (_block_lines)
-    rendered = console.render(tui.stage_text(who, text), console.options.update_width(width))
+    rendered = console.render(tui.stage_text(who, text, width), console.options.update_width(width))
     shown = ["".join(seg.text for seg in line) for line in Segment.split_lines(rendered)]
+    if who == "stage" and width >= compactor.BIG_WIDTH:   # the big one's still, then its dim line (#287)
+        text = compactor.still(compactor.state_of(text)) + "\n" + text.split("\n")[-1]
     assert len(shown) == len(text.split("\n")), shown
     for line, want in zip(shown, text.split("\n")):
         assert line.rstrip() == want.rstrip() or (line.rstrip().endswith("…") and want.startswith(line.rstrip()[:-1])), (line, want)
@@ -10456,3 +10458,86 @@ async def test_detail_dims_with_a_compaction_and_finds_its_parts_once(store, sid
         assert app.detail.has_class("compacting") == dim, desc
         assert all(p.has_class("compacting") == dim and p.disabled == dim for p in parts), f"{desc}: the parts"
         assert "#detail-more, #detail-bar" not in queried, f"{desc}: found once, not at each paint"
+
+
+def dock_rows(app) -> list[str]:
+    """What the compactor dock draws now, as plain rows."""
+    return app.compactor_dock.render().plain.split("\n")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("moves, fps, docked, art, desc", [
+    ([], 10, "preparing", None, "requested: docked, drawn as preparing"),
+    (["preparing"], 10, "preparing", None, "preparing: docked, moving"),
+    (["preparing", "compacting"], 10, "compacting", None, "compacting: the dock moves on a stage"),
+    (["preparing", "compacting"], 0, "compacting", None, "animation off: a still, and no timer"),
+    (["preparing", "compacting", "completed"], 10, None, "completed", "compacted: closed, its last frame left in place"),
+    (["preparing", "failed"], 10, None, "failed", "failed: the same"),
+    (["preparing", "cancelled"], 10, None, "cancelled", "cancelled: the same"),
+])
+async def test_the_compactor_docks_while_its_cycle_runs(store, sid, monkeypatch, live, moves, fps, docked, art, desc):
+    """#287: while a cycle runs its art is pinned under the conversation, big and moving on a
+    timer of its own; when it ends the dock closes, the timer stops, and the final frame is in
+    the conversation where the art was drawn."""
+    from claude_wheelhouse import features
+    monkeypatch.setattr(features, "animation_fps", lambda: fps)
+    clock = [1000.0]
+    monkeypatch.setattr(tui.CompactorDock, "now", staticmethod(lambda: clock[0]))
+    store.command(sid, "compact")
+    cid = store.compaction(sid)["id"]
+    for m in moves:
+        store.move_compaction(sid, cid, m)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 50)) as pilot:
+        await pick(app, pilot, sid)
+        app.refresh_data()
+        await pilot.pause()
+        dock = app.compactor_dock
+        assert dock.display == bool(docked) and (dock.timer is not None) == bool(docked and fps), desc
+        if docked:
+            clock[0] = datetime.fromisoformat(store.stages(sid)[-1]["at"]).timestamp() + 3
+            dock.paint()
+            rows = dock_rows(app)
+            assert rows[:compactor.BIG_HEIGHT] == list(compactor.scene(docked, 3.0, animate=bool(fps))[0]), desc
+            assert rows[-1].startswith("asked for by you (Compact)"), f"{desc}: {rows[-1]}"
+            assert "\n".join(compactor.WALLS[docked].split("\n")[:2]) not in app._detail_text, f"{desc}: not in the conversation"
+            clock[0] += 1
+            dock.paint()
+            assert (dock_rows(app) != rows) == bool(fps), f"{desc}: moving only with the animation on"
+            store.move_compaction(sid, cid, "completed", "220k → 40k")
+            app.refresh_data()
+            await pilot.pause()
+            art = "completed"
+        assert not dock.display and dock.timer is None, f"{desc}: closed, its timer stopped"
+        assert compactor.WALLS[art] + "\n" in app._detail_text, f"{desc}: the final frame in the conversation"
+
+
+@pytest.mark.anyio
+async def test_a_dock_frame_never_repaints_the_inbox(store, sid, monkeypatch, live):
+    """#287, #268: a frame of the dock draws the dock alone: never the inbox or the sessions."""
+    store.post_item(sid, "question", "which db?")
+    store.command(sid, "compact")
+    store.move_compaction(sid, store.compaction(sid)["id"], "compacting")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 50)) as pilot:
+        await pick(app, pilot, sid)
+        app.refresh_data()
+        await pilot.pause()
+        painted, refreshed = [], set()
+        for name in ("paint_items", "paint_sessions", "paint_detail", "fill_items"):
+            if hasattr(app, name):
+                monkeypatch.setattr(app, name, lambda *a, n=name, **k: painted.append(n))
+        from textual.widget import Widget
+        real = Widget.refresh
+        monkeypatch.setattr(Widget, "refresh", lambda self, *a, **k: (refreshed.add(self), real(self, *a, **k))[1])
+        clock = [time.time()]
+        monkeypatch.setattr(tui.CompactorDock, "now", staticmethod(lambda: clock[0]))
+        took = []
+        for _ in range(12):   # the dock's own timer firing, a frame each time
+            clock[0] += 1 / compactor.TICKS
+            start = time.perf_counter()
+            app.compactor_dock.paint()
+            app.compactor_dock.render_lines(app.compactor_dock.region.reset_offset)
+            took.append(time.perf_counter() - start)
+        assert painted == [] and refreshed == {app.compactor_dock}, (painted, refreshed)
+        print(f"dock frame: median {sorted(took)[6] * 1000:.2f} ms")

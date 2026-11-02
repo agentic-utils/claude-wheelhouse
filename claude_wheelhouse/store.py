@@ -111,7 +111,9 @@ DECISION_FIELDS = (("why", "Why"),)
 # session mid-operation, and an older host keeps it warm. With it, command items and the
 # suggest_command tool (#257), with a protocol rule to use it rather than a code block to copy:
 # an older session never posts one, and isn't told to.
-PROTOCOL_VERSION = 26
+# 27: a protocol rule on where an ADR's status is read from (#283), so a session changing one
+# edits the place the Decisions pane reads: an older session isn't told.
+PROTOCOL_VERSION = 27
 # the least time between two compactions a session asks for itself (request_compact), so a
 # confused one can't loop: seconds since its last accepted request
 MODEL_COMPACT_GAP = 30 * 60
@@ -2048,6 +2050,11 @@ class Store:
 
     def item(self, sid: str, ref: str) -> sqlite3.Row | None:
         return self._one("SELECT * FROM items WHERE session_id = ? AND ref = ?", (sid, ref))
+
+    def doc_paths(self) -> list[str]:
+        """Every doc item's file, as posted: what the doc editor may save besides the modules'
+        doc roots (docroots.write)."""
+        return [r["body"] for r in self._all("SELECT DISTINCT body FROM items WHERE kind = 'doc'", ())]
 
     def items(self, sid: str | None = None, include_closed: bool = True) -> list[sqlite3.Row]:
         sql = """SELECT i.*, s.name AS session_name FROM items i JOIN sessions s ON s.id = i.session_id

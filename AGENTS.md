@@ -99,12 +99,17 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   module off from the next start. Module routes run off the hub's thread, waited on
   `daemon.MODULE_WAIT` then 504; `fingerprint.code` covers the installed modules too.
 - `docroots.py`: the doc roots' allow-list (`confine`: a path resolved, symlinks and `..`,
-  and kept to a `.md` file under a root; stage 8 writes through it too), and where a repo's
+  and kept to a `.md` file under a root; `write`, the doc editor's save (`POST /docs/write`), writes through it, or to a doc item's file, `permitted`), and where a repo's
   decisions are (`doc_dirs`: `docs/adr` under its git root, a linked worktree's main
   repository's (`main_root`), unless a session declared others with `set_doc_dirs`, Q114, which may be in another git
   repo beside it, #191; `decision_dirs` pairs each with the repo that looks there). A session in no git repo
   may still name one, absolute or relative to its directory (#220), listed under the repo the directory is in.
   Never imports Textual.
+- `search.py`: the inbox's search (#273): which items a query matches, best first (`find`),
+  for the popover (`tui.SearchItems`, opened by `WheelhouseApp.action_search`); a pick goes
+  through `WheelhouseApp.go_to_item`. And the ids in Detail's text that name the session's
+  items (#274, `linked`), made links to `LINK` that `tui.clickable_ids` turns into clicks
+  going there too. Never imports Textual.
 - `away.py`: the card of what happened while the person was away (#223,
   `.plan/since-you-were-away.md`): its groups read from the items (`card`), and the sessions
   that went quiet, which `Hub.note_quiet` notes as each refresh sees them (`observe`, the
@@ -140,12 +145,14 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
 - `docblocks.py`: a doc rendered block by block, exactly as Rich renders it whole, with its
   map (`DocMap`: each block's source lines and rendered rows), for the viewer
   (`Transcript.line_at`, `Transcript.row_of`; `.plan/modules.md`, Q106), and its editor's
-  (`tui.DocEditor`: opened by a click on a doc, in Detail and `DocView`; saving is stage 8's).
+  (`tui.DocEditor`: opened by a click on a doc, in Detail and `DocView`; saved through the daemon, `POST /docs/write`, `docroots.write`, `WheelhouseApp.save_doc`).
   A doc item's thread and layout there, split or tabbed (`tui.DocPanes`, Ctrl+L):
   `.plan/docs-section.md`.
   Never imports Textual.
 - `compactor.py`: a compaction's stage lines (art B, the trash compactor) and the crew's
-  excerpts, drawn per cycle without repeats (`schedule`, seeded by the cycle's id) (#244).
+  excerpts, drawn per cycle without repeats (`schedule`, seeded by the cycle's id) (#244); the
+  big animated art (`scene`, 60 by 12 cells in every frame), which the app's `CompactorDock`
+  pins under the conversation from the hub's `dock` entry while a cycle runs (#287).
   Never imports Textual.
 - `splitter.py`, `knurl.py`, `emoji.py`, `unsent.py`: TUI pieces (dividers, scrollbars,
   emoji shortcodes, unsent text).

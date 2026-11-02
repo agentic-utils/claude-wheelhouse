@@ -1,4 +1,4 @@
-<!-- fact sheet stamp: version 127, 2026-11-01T17:18:57Z, source 793dc9f7bec07b53 (make facts restamps it: AGENTS.md) -->
+<!-- fact sheet stamp: version 150, 2026-11-02T05:23:45Z, source 9495c4ac367dac40 (make facts restamps it: AGENTS.md) -->
 # Wheelhouse fact sheet
 
 What the helper chat knows before any question. The guide below is written by hand; the
@@ -27,6 +27,9 @@ daemon running.
 - Session info: with a session selected, the ⓘ at the stats pane's top right opens its id
   (C copies it), user, machine, directory, branch, model, mode, start, transcript, and its
   MCP server's pid and code, flagged when it is stale (relaunch the session after a pull).
+- Inbox search: the 🔍 at the inbox's top right, or any plain character typed in the inbox,
+  opens a search on ids and titles (the selected session's items, or every session's);
+  Show hidden takes in items off the inbox. Enter or a click goes to the item.
 - The footer lists the main keys; F1 lists every key and button.
 
 ## Words the app uses
@@ -51,6 +54,10 @@ daemon running.
   task in the inbox ("Compact <name>: <k>k context", done once compacted) and blue lines in the
   conversation, and the session's eye is blue meanwhile; what you send it waits until it's done.
 - Tour: the guided tour, resumed with Alt+T while the title bar shows its badge.
+- Doc editor: a click on a doc (an item's or a decision, in Detail or full screen) opens an
+  editor below it. Ctrl+S saves to the file; the pane's title says `edited · Ctrl+S saves`
+  while there are unsaved edits, and leaving them (Esc, or selecting something else) asks
+  Save, Discard or Keep editing. A file changed on disk since asks Overwrite, Reload or Cancel.
 
 ## Where to look in the source
 
@@ -213,11 +220,11 @@ This fact sheet describes claude-wheelhouse 0.2.0.dev0.
 
 ### A doc's editor
 
-- **Ctrl+Enter or Ctrl+J**: Show the edits rendered in the doc above
+- **Ctrl+Enter or Ctrl+J**: Show the edits rendered in the doc above; in Immediate mode, save them too
 
-- **Ctrl+S**: Says writing the doc comes next; never sends the session's queue
+- **Ctrl+S**: Save the doc to its file; never sends the session's queue
 
-- **Esc**: Close the editor, asking first with unsaved edits: Close and keep them, Discard or Keep editing
+- **Esc**: Close the editor, asking first with unsaved edits: Save, Discard or Keep editing
 
 ### The helper (Alt+Q)
 
@@ -237,7 +244,7 @@ Tab goes round the session list, the card of what happened while you were away w
 
 ### Mouse
 
-Click selects a row; in the session list, a click on the selected session or the list's title past its columns unselects it, for all sessions' items, as Esc does. A click on a column header sorts by it. Ctrl+click marks rows and Shift+click a range (Windows Terminal may keep Shift+click for itself: Ctrl+Space and Shift+Up/Down do the same), and Ctrl+A every finished row; then Delete or Backspace closes them together, the highlight going to the row above the topmost one taken, and Ctrl+R reopens the finished ones (Ctrl+Z undoes either). An item with children (its subagents and docs, under it) has a - at the right-hand end of its row: a click there hides them, and the + it becomes shows them again. A click on a doc opens its editor below it there, as a click on it moves it while it's open. A click on a line of the card of what happened while you were away jumps to it, and its ✕ dismisses it. A click on a row's first column pins it (📌) or clears its pin, as Alt+P does. A click on an emoji suggestion under the answer box takes it in place of the code typed. A click on the ⓘ at the stats pane's top right opens the selected session's info: its id (C copies it), user and machine, directory, branch, model, mode, start, transcript and its MCP server, flagged when stale. Double-click selects a word, but on what Detail shows (an item, a doc) it opens it full screen, as Enter on its inbox row does, and on a full-screen item's thread or doc it goes back, as Esc does. Right-click on a session in the session list selects it and opens a menu of its buttons; elsewhere right-click copies the selection, or with none pastes into the answer box, as a terminal does. Drag the lines between the panes to resize them (they light up under the pointer); the sizes are kept for next time, and a double-click on a line puts its default back. Drag a pane by its title onto another to swap the two (Esc cancels); Reset layout, in the command palette (Ctrl+P), puts every pane and line back; Session steps there has what the wheelhouse tells a session at each event.
+Click selects a row; in the session list, a click on the selected session or the list's title past its columns unselects it, for all sessions' items, as Esc does. A click on a column header sorts by it. Ctrl+click marks rows and Shift+click a range (Windows Terminal may keep Shift+click for itself: Ctrl+Space and Shift+Up/Down do the same), and Ctrl+A every finished row; then Delete or Backspace closes them together, the highlight going to the row above the topmost one taken, and Ctrl+R reopens the finished ones (Ctrl+Z undoes either). An item with children (its subagents and docs, under it) has a - at the right-hand end of its row: a click there hides them, and the + it becomes shows them again. A click on a doc opens its editor below it there, as a click on it moves it while it's open. A click on a line of the card of what happened while you were away jumps to it, and its ✕ dismisses it. A click on a row's first column pins it (📌) or clears its pin, as Alt+P does. A click on an emoji suggestion under the answer box takes it in place of the code typed. A click on the 🔍 at the inbox's top right opens its search, as typing in the inbox does. A click on an item's id in Detail (a doc, a conversation, a thread) goes to that item of the same session. A click on the ⓘ at the stats pane's top right opens the selected session's info: its id (C copies it), user and machine, directory, branch, model, mode, start, transcript and its MCP server, flagged when stale. Double-click selects a word, but on what Detail shows (an item, a doc) it opens it full screen, as Enter on its inbox row does, and on a full-screen item's thread or doc it goes back, as Esc does. Right-click on a session in the session list selects it and opens a menu of its buttons; elsewhere right-click copies the selection, or with none pastes into the answer box, as a terminal does. Drag the lines between the panes to resize them (they light up under the pointer); the sizes are kept for next time, and a double-click on a line puts its default back. Drag a pane by its title onto another to swap the two (Esc cancels); Reset layout, in the command palette (Ctrl+P), puts every pane and line back; Session steps there has what the wheelhouse tells a session at each event.
 
 ### Buttons
 
@@ -262,6 +269,10 @@ The buttons under the session list act on the session highlighted there, and onl
 - Park (Alt+P in the session list): a running session writes its handoff notes into its items, then stops; it stays, dimmed, at the foot of the list, its items off the inbox, until Unpark. Off while it's asked; on again after 30 s, pressed again to cancel it
 
 - Stop & Forget, or Forget (Delete or Backspace in the session list): a running session asks first, Let it know (Alt+L: it does its own end steps, then stops) or Just stop it (Alt+J: stopped now, told nothing), the first by default while its prompt cache is warm, the second once cold, as its end steps would re-read its whole context; its wheelhouse data is deleted either way, queued answers with it. One not running is deleted at once, once you confirm. Adopt brings a forgotten one back. Off while it's asked; on again after 30 s, pressed again to cancel it
+
+### Searching the inbox
+
+Any character typed in the item list (no modifier) opens the inbox's search with it typed, as the 🔍 at the inbox's top right does: the selected session's items, or every session's with none selected, matched on id and title as you type. Up and Down move the highlight, Enter or a click goes to the item; Tab reaches Show hidden (Space flips it), which takes in the items off the inbox too. Esc closes it, back to the inbox.
 
 ### Sending
 
@@ -341,7 +352,7 @@ The app's command line args (make args). Give them to make run in ARGS, for exam
 - A session can tell the wheelhouse where its repo keeps its decisions, when that isn't docs/adr (set_doc_dirs).
 - A Decisions pane under the inbox lists every repo's design decisions (docs/adr), shown in Detail.
 - Drag a pane by its title onto another to swap the two; Reset layout, in the command palette, puts them back.
-- A click on a doc opens an editor below it; Ctrl+Enter shows the edits rendered. Saving comes next.
+- A click on a doc opens an editor below it; Ctrl+Enter shows the edits rendered, and Ctrl+S saves them to the file. The pane's title says when there are edits to save.
 - Alt+Q asks the wheelhouse how to do something: a chat that answers from its help and its source, through Haiku on your own Claude Code login.
 - The helper chat moved from Alt+G, which opens Gemini on some desktops, to Alt+Q (Q for question).
 - After an update, the tour shows only what's new, pane by pane, with no demo; Esc ends it at any time, and after quitting mid-tour, Alt+T or the title bar's badge resumes it.
@@ -361,6 +372,7 @@ The app's command line args (make args). Give them to make run in ARGS, for exam
 - Mark PRs in the PRs pane as in the inbox (Ctrl+click, Shift+click, Ctrl+Space, Shift+Up/Down) and act on them all; Close closes a PR unmerged, asked first, as Merge is.
 - A PR's buttons that can't apply are greyed, and say why on hover (Merge on a PR awaiting review, say), and Mark ready or Make draft switches a PR between draft and ready for review.
 - The wheelhouse tells a session before it ends or resumes (and, in SDK mode, compacts), so its own instructions can act, and can keep a handoff doc for it. Session steps, in the command palette, has every switch; the first press asks once.
+- A running compaction's trash compactor is pinned above the answer box, big and animated: the walls grind in, the crew dodge, sparks fly and the dianoga grabs Luke. Its last frame stays in the conversation, and the session's notes for compaction fold to one line.
 - The keepalive comes every 50 minutes, ahead of Claude Code's idle compaction at about 54.
 - A session run in the wheelhouse that was being kept warm is compacted when the keepalive's hours run out, while its cache is warm; a tab idle-compacts then, past 150k tokens.
 - Sessions keep a handoff with the write_handoff tool, shown as their handoff doc; Stop & Forget and Compact ask for one.
@@ -387,3 +399,5 @@ The app's command line args (make args). Give them to make run in ARGS, for exam
 - Shell (Alt+H, from anywhere) opens a quick shell in a new terminal tab, in the directory the session in context works in now, or home. Handing a session run in the wheelhouse to a Claude Code tab is now Handover to Claude Code in a shell, in its right-click menu.
 - A session can suggest a shell command for you to run: a C item with a Run button that opens it in an editable box and runs it in a new terminal tab, sending the output back if you tick it.
 - The Decisions pane follows the selected session, as the PRs pane does: its repo's decisions alone, or a line saying it has none; with no session selected, every repo's.
+- Search the inbox by id or title: click the 🔍 at its top right, or just type while it has focus. Show hidden takes in the items off the inbox too; Enter or a click goes to the item.
+- An item's id in Detail (T3, Q25, PR276 in a doc, a conversation or a thread) is a link: a click goes to that item of the same session, as a search's pick does.

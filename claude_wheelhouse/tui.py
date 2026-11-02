@@ -66,7 +66,7 @@ from textual.widgets import (
     TextArea,
 )
 
-from . import api, away, callout, quickshell, columns, docblocks, docroots, emoji, features, helper, models, ordering, prs, steps, subagents, transcript, transcript_usage, tutorial, whatsnew
+from . import api, away, callout, compactor, quickshell, columns, docblocks, docroots, emoji, features, helper, models, ordering, prs, search, steps, subagents, transcript, transcript_usage, tutorial, whatsnew
 from .rows import KIND_COLOUR, KeepColours, RowTips, faded, marked, plain
 from .callout import TourCallout
 from .client import LocalClient, Unreachable
@@ -108,7 +108,12 @@ UNDO_LANDING = "{key}: the undo is still putting rows back, try again in a momen
 # the person's words in terminal green, Claude's in white as in the Claude app
 VOICE = {"you": MATRIX, "claude": "#e8e8e8", "pr": "#e8e8e8", "head": "#05d9e8",
          "warn": "bold #ffd300", "note": "#777777", "tool": "#777777", "doc": "#e8e8e8",
-         "stage": "#2f8cff", "crew": "#2f8cff"}   # a compaction's stage lines and crew (#244): its eye's blue
+         "stage": "#2f8cff", "crew": "#2f8cff", "dock": "#2f8cff"}   # a compaction's stage lines and crew (#244): its eye's blue
+# the big compactor's roles (compactor.ROLES, #287): the walls and crew in the compaction blue,
+# sparks and the hatch light in amber, the dianoga in green
+ART_STYLE = {"wall": "#2f8cff", "seam": "#1f5daa", "crew": "bold #9cc8ff", "sludge": "#1f5daa",
+             "spark": "bold #ffb000", "hatch": "bold #ffb000", "dianoga": "bold #6fcf3f", "text": "#2f8cff"}
+DOCK_FPS = 6   # the dock's frames a second (#287), no more than the app's own rate (features.animation_fps)
 # a doc block (doc_blocks) longer than this is rendered on a thread (Transcript._layout): a
 # 42 KB one takes Rich a second or two, which the loop would otherwise stall for
 RENDER_OFF_LOOP = 2000
@@ -586,14 +591,32 @@ def _block_lines(who: str, md: str, width: int, console) -> list:
     """A block's rendered segments at one width: rendered once, though Textual measures a
     widget's height and then draws it, and a new turn leaves every older block as it was."""
     r = Text(md.strip("`"), style=VOICE[who]) if who == "tool" else pr_text(md) if who == "pr" \
-        else stage_text(who, md) if who in ("stage", "crew") else RichMarkdown(md, style=VOICE[who])
+        else stage_text(who, md, width) if who in ("stage", "crew") else RichMarkdown(md, style=VOICE[who])
     return list(console.render(r, console.options.update_width(width)))
 
 
-def stage_text(who: str, text: str) -> Text:
+def art_text(rows: tuple[str, ...], roles: tuple[str, ...]) -> Text:
+    """A big compactor frame (compactor.scene) as Text, each run of cells in its role's colour."""
+    out = Text(no_wrap=True, overflow="ellipsis")
+    for i, (row, role) in enumerate(zip(rows, roles)):
+        if i:
+            out.append("\n")
+        start = 0
+        for j in range(1, len(row) + 1):
+            if j == len(row) or role[j] != role[start]:
+                out.append(row[start:j], style=ART_STYLE[compactor.ROLES[role[start]]])
+                start = j
+    return out
+
+
+def stage_text(who: str, text: str, width: int = 0) -> Text:
     """A compaction's stage lines or crew excerpt (#244) as plain Text, never Markdown (which
     would turn its art into rules and bullets): each line cut with an ellipsis, not wrapped; a
-    stage's last line (who asked or what came of it, and when) dim under its art (#277)."""
+    stage's last line (who asked or what came of it, and when) dim under its art (#277). A
+    stage's art in a pane at least compactor.BIG_WIDTH wide is the big one's still (#287)."""
+    if who == "stage" and width >= compactor.BIG_WIDTH and (state := compactor.state_of(text)):
+        line = text[len(compactor.WALLS[state]) + 1:]
+        return art_text(*compactor.scene(state, 0.0, animate=False)).append("\n" + line, style=VOICE[who] + " dim")
     out = Text(no_wrap=True, overflow="ellipsis")
     lines = text.split("\n")
     for i, line in enumerate(lines):
@@ -695,9 +718,28 @@ def _block_strips(who: str, md: str, width: int, console) -> tuple[tuple[Strip, 
         lines, doc_map = docblocks.render(md, VOICE[who], width, console)
     else:
         lines, doc_map = list(Segment.split_lines(_block_lines(who, md, width, console))), None
-    lines = lines + [[]]
+    lines = [clickable_ids(line) for line in lines] + [[]]
     return (tuple(Strip(line).crop_extend(0, width, None) for line in lines),
             tuple("".join(seg.text for seg in line).rstrip() for line in lines), doc_map)
+
+
+LINKED = ("claude", "you", "note", "doc")   # the blocks whose ids link (WheelhouseApp.link_ids, #274)
+
+
+def clickable_ids(line: list[Segment]) -> list[Segment]:
+    """A rendered line with each item's id linked by search.linked (a markdown link to
+    search.LINK) a click going to the item (WheelhouseApp.go_to_item, #274), not a link the
+    terminal would open; its look the markdown link's, as a doc's other links."""
+    if not any(seg.style is not None and search.target(seg.style.link) for seg in line):
+        return line
+    out, made = [], {}
+    for seg in line:
+        if seg.style is not None and (to := search.target(seg.style.link)):
+            if to not in made:   # one style for the id's every segment: hovered as one
+                made[to] = Style.from_meta({"@click": f"app.go_to_item({to[0]!r}, {to[1]!r})"})
+            seg = Segment(seg.text, seg.style.update_link(None) + made[to], seg.control)
+        out.append(seg)
+    return out
 
 
 def agreed(a: list, b: list) -> int:
@@ -737,6 +779,7 @@ class Transcript(Widget, can_focus=False):
         self.warming: set[tuple] = set()   # ... and those under way
         self.doc_key = None   # the doc shown (its session and ref), set by whoever shows one
         self.doc_path: str | None = None   # ... and its file's path
+        self.doc_mtime: int | None = None   # ... and its mtime as read, a save's base (DocEditor.mtime)
         self.stand_in: tuple | None = None   # (doc_key, strips, texts): its last render, shown while the next one renders
         self.doc_at: tuple[int, docblocks.DocMap] | None = None   # the doc block's first row and map, as laid out
         self.on_laid: Callable[[], None] | None = None   # told once a doc rendered off the loop is laid out (DocEditor)
@@ -828,7 +871,8 @@ class Transcript(Widget, can_focus=False):
     def on_click(self, event: events.Click) -> None:
         """A click on a doc (a left click, not one ending a drag, which leaves a selection)
         opens its editor there. The event goes on: a double click still selects a word."""
-        if self.doc_at is not None and event.button == 1 and event.chain == 1 and self.text_selection is None:
+        if self.doc_at is not None and event.button == 1 and event.chain == 1 and self.text_selection is None \
+                and "@click" not in event.style.meta:   # an item's id (#274): the item, not the editor
             self.post_message(self.DocClicked(self, event.y, event.screen_offset))
 
     def render_off_loop(self, key: tuple) -> None:
@@ -1490,6 +1534,30 @@ class AwayCard(OptionList):
                 Binding("escape", "app.dismiss_away", "Dismiss", show=False)]
 
 
+class SearchGlass(Static):
+    """The magnifying glass at the inbox's top right, on its border (#273): a click opens the
+    search popover (SearchItems). Its press is its own, never the pane's title drag (Slot)."""
+
+    def on_mount(self) -> None:
+        self.tooltip = "Search the inbox (or type while it has focus)"
+
+    def _on_mouse_down(self, event: events.MouseDown) -> None:
+        event.stop()
+
+    def on_click(self, event: events.Click) -> None:
+        event.stop()
+        self.app.action_search()
+
+
+class InboxPane(Vertical):
+    """The inbox's pane, keeping its magnifying glass (SearchGlass) on its top border at the
+    right whatever its width."""
+
+    def on_resize(self) -> None:
+        for glass in self.query(SearchGlass):
+            glass.styles.offset = (max(0, self.size.width - 5), -1)
+
+
 class ItemList(SinkList):
     """The inbox's items, with a multi-selection to close questions in one go, by row key
     so it survives refreshes. Ctrl+click toggles a row, Shift+click takes the range from the
@@ -1634,6 +1702,14 @@ class ItemList(SinkList):
     def _post_selected_message(self) -> None:
         # a double-click's selection, which opens the item, as the session list's click
         self.app.call_next(select_now, self)
+
+    def on_key(self, event: events.Key) -> None:
+        """A printable key no binding took (every inbox binding has a modifier, #189): the
+        search popover opened with it typed (#273). Not Space, which would search for nothing."""
+        if event.is_printable and event.character and not event.character.isspace():
+            event.stop()
+            event.prevent_default()
+            self.app.action_search(event.character)
 
     def action_toggle_mark(self) -> None:
         if self.show_cursor and self.cursor_key():
@@ -1828,6 +1904,71 @@ def under_way(button: str, s, status: str, relaunching: bool) -> bool:
     if button == "relaunch":
         return relaunching or status == "starting"
     return False
+
+
+class CompactorDock(Widget, can_focus=False):
+    """The compactor pinned under the conversation while its session's cycle runs (#287): big
+    and moving where the pane is compactor.BIG_WIDTH wide, the #277 art below that, and a still
+    per stage with the app's animation off. Its own timer, at DOCK_FPS (or the app's rate if
+    lower), runs only while it shows, and draws only this widget: never the inbox (#268)."""
+    DEFAULT_CSS = "CompactorDock { height: auto; display: none; padding: 0 1; }"
+    timer = None
+    shown: tuple[str, float, str] | None = None
+    drawn = None   # what the last frame drew (paint): the same again draws nothing
+    fps = 0.0   # its rate, read as it opens (dock)
+
+    @staticmethod
+    def now() -> float:
+        """The animation's clock, epoch seconds as a stage's start is (a test runs it on its own)."""
+        return time.time()
+
+    def dock(self, text: str | None) -> None:
+        """Show a dock entry's stage (compactor.dock_text), or with None close: hidden, its timer stopped."""
+        if text is None:
+            if self.timer is not None:
+                self.timer.stop()
+                self.timer = None
+            self.shown = self.drawn = None
+            self.display = False
+            return
+        shown = compactor.docked(text)
+        if shown != self.shown:
+            self.shown, self.drawn, self.display = shown, None, True
+            self.paint()
+        if self.timer is None:   # the rate read as it opens, never at each frame (it reads the .env files)
+            self.fps = min(DOCK_FPS, features.animation_fps())
+        fps = self.fps
+        if fps and self.timer is None:
+            self.timer = self.set_interval(1 / fps, self.paint)
+
+    def frame(self) -> tuple:
+        """What this moment draws: the stage, big or not, and its frame number (compactor.TICKS)."""
+        state, since, _ = self.shown
+        big = self.content_size.width >= compactor.BIG_WIDTH
+        moving = big and self.fps > 0
+        return state, big, int(max(0.0, self.now() - since) * compactor.TICKS) if moving else -1
+
+    def paint(self) -> None:
+        """The frame for now, drawn only if it differs from the last."""
+        if self.shown is None:
+            return
+        frame = self.frame()
+        if frame != self.drawn:   # a new size (big or not, a new stage's line) lays it out again
+            resized = self.drawn is None or frame[:2] != self.drawn[:2]
+            self.drawn = frame
+            self.refresh(layout=resized)
+
+    def render(self) -> Text:
+        if self.shown is None or self.drawn is None:
+            return Text()
+        (state, big, f), line = self.drawn, self.shown[2]
+        if not big:
+            return stage_text("stage", compactor.WALLS[state] + "\n" + line)
+        art = art_text(*compactor.scene(state, max(f, 0) / compactor.TICKS, animate=f >= 0))
+        return art.append("\n" + line, style=VOICE["stage"] + " dim")
+
+    def on_resize(self) -> None:
+        self.paint()
 
 
 class ConversationScroll(VerticalScroll, can_focus=False):
@@ -2295,6 +2436,8 @@ class DocPanes:
         it, or with none (doc None) the doc's widgets put away. Whether the layout changed."""
         found = app.client.thread(doc["session_id"], doc["ref"]) if doc is not None else None
         blocks = doc_thread_blocks(found)
+        if doc is not None and self.viewer is app.detail:   # Detail's: its ids clickable (#274)
+            blocks = app.link_ids(blocks, doc["session_id"])
         text = "\n\n".join(md for _, md in blocks)
         if text != self.text:
             scroll = self.thread_scroll
@@ -2417,13 +2560,13 @@ class DocView(Screen):
         if self.file:
             read = self.app.client.read_doc(self.file[0])
             blocks, gone = file_blocks(*self.file, read), (read.get("gone") or "" if read else "")
-            view.doc_path = os.path.realpath(self.file[0])
+            view.doc_path, view.doc_mtime = os.path.realpath(self.file[0]), mtime_of(read)
         else:
             item, doc = self.app.client.item(self.sid, self.ref), self.app.client.document(self.sid, self.ref)
             blocks, gone = doc_blocks(item, doc), (doc["gone"] or "" if doc else "")
-            view.doc_path = doc_path(item, doc)
+            view.doc_path, view.doc_mtime = doc_path(item, doc), mtime_of(doc)
         view.doc_key = ("file", self.file[0]) if self.file else (self.sid, self.ref)
-        blocks = editor.shown_in(blocks, view.doc_path, gone)
+        blocks = editor.shown_in(blocks, view.doc_path, gone, view.doc_mtime)
         text = "\n\n".join(md for _, md in blocks)
         if text != self.text:
             self.text = text
@@ -2435,14 +2578,22 @@ class DocView(Screen):
 @dataclasses.dataclass(frozen=True)
 class DocEdit:
     """A doc's unsaved edits, kept by its path (DocEditor.edits): the file's text they began
-    from, the buffer, the buffer as last rendered (Ctrl+Enter), the cursor, and whether the
-    file has changed on disk since `base` was read (said once, and kept for stage 8's save)."""
+    from and its mtime then (a save's base), the buffer, the buffer as last rendered
+    (Ctrl+Enter), the cursor, and whether the file has changed on disk since `base` was read
+    (said once; the save then asks Overwrite, Reload or Cancel)."""
     base: str
     text: str
     shown: str
     cursor: tuple[int, int]
     changed: bool = False
     gone: str = ""   # the file gone since ("gone"), or no longer a regular file: why, till it's back
+    mtime: int | None = None   # the file's mtime_ns when base was read; None if it wasn't there
+
+
+def mtime_of(doc) -> int | None:
+    """A doc's mtime_ns as read (its stamp, mtime_ns:size), None if it couldn't be."""
+    stamp = doc.get("stamp") if isinstance(doc, dict) and not doc.get("gone") else None
+    return int(stamp.split(":")[0]) if isinstance(stamp, str) and ":" in stamp else None
 
 
 def carried(old: str, new: str, line: int, added: int | None = -1) -> int | None:
@@ -2459,7 +2610,7 @@ def carried(old: str, new: str, line: int, added: int | None = -1) -> int | None
     return len(a)
 
 
-SAVING_NEXT = "Saving comes next: the edits stay in the editor until it closes."
+EDITED = ("edited", "Ctrl+S saves")   # the pane's title while there are unsaved edits: what they are, what to do
 # Ctrl+S with text in the focused box, likely a Ctrl+Enter missed (Doug, #271): the first press says so
 # and sends nothing; a second within CTRL_S_AGAIN seconds (the toast's life), the text unchanged, sends
 CTRL_S_HINT = "Did you mean Ctrl+Enter? Hit Ctrl+S again if you meant to send the queue"
@@ -2472,9 +2623,11 @@ class DocEditor(TextArea):
     layout.editor, opened by a click on the rendered doc with its cursor on the clicked
     block's first source line. While it's open the viewer renders its buffer as of the last
     Ctrl+Enter (shown_in), not the file. `pane` is the selector of the pane whose title says
-    `edited` while there are unsaved edits; `immediate` says whether the doc's session sends at
-    once (a doc of no session's, a module's, behaves as Queued); `repaint` paints the viewer
-    again. Saving is stage 8's: here Ctrl+S, and Ctrl+Enter in Immediate mode, say so.
+    `edited · Ctrl+S saves` while there are unsaved edits; `immediate` says whether the doc's
+    session sends at once (a doc of no session's, a module's, behaves as Queued); `repaint`
+    paints the viewer again. Ctrl+S saves (WheelhouseApp.save_doc), and Ctrl+Enter in
+    Immediate mode; Esc with unsaved edits asks Save, Discard or Keep editing, as the
+    selection moving off the doc does (follow).
 
     The two keep step: the viewer scrolled moves the editor's scroll (never its cursor) to
     the block at the viewer's middle; the cursor moved into another block scrolls the viewer
@@ -2483,7 +2636,7 @@ class DocEditor(TextArea):
     returns while the other's mark is set, so one sync is one scroll on each side."""
     BINDINGS = [Binding("ctrl+enter", "render_edits", "Show the edits", show=False),
                 Binding("ctrl+j", "render_edits", "Show the edits", show=False),   # Ctrl+Enter, as most terminals send it
-                Binding("ctrl+s", "save_doc", "Not yet", show=False),   # the doc's, never the session's queue
+                Binding("ctrl+s", "save_doc", "Save", show=False),   # the doc's, never the session's queue
                 Binding("escape", "close_editor", "Close the editor", show=False)]
 
     def __init__(self, viewer: str, pane: str, immediate: Callable[[], bool], repaint: Callable[[], None], **kwargs):
@@ -2494,6 +2647,8 @@ class DocEditor(TextArea):
         self.key = None   # the doc open, as its viewer's doc_key; None while closed
         self.path: str | None = None   # ... and its file, which its kept buffer goes by (edits)
         self.base = ""   # the doc's text when the editor opened: edits are what differs from it
+        self.mtime: int | None = None   # ... and its file's mtime_ns then, or at the last save: a save's base
+        self.came: tuple[str, str] | None = None   # the module's doc (path, title) it opened on, to go back to
         self.shown: str | None = None   # the buffer the viewer renders (the last Ctrl+Enter's)
         self.syncing: str | None = None   # the side driving a sync under way: "viewer" or "editor"
         self.block: tuple[int, int] | None = None   # the rows of the block the cursor was last in
@@ -2543,7 +2698,7 @@ class DocEditor(TextArea):
         if self.text != self.base:
             old = self.edits.get(self.path)
             self.edits[self.path] = DocEdit(self.base, self.text, self.shown, self.cursor_location,
-                                            bool(old and old.changed), old.gone if old else "")
+                                            bool(old and old.changed), old.gone if old else "", self.mtime)
         else:
             self.edits.pop(self.path, None)
 
@@ -2562,22 +2717,51 @@ class DocEditor(TextArea):
         if self.key != view.doc_key:
             self.key, self.path = view.doc_key, view.doc_path
             kept = self.edits.get(self.path)
-            if kept is not None:   # edits kept from before: the buffer, and edited, back
-                self.base, self.shown, cursor = kept.base, kept.shown, kept.cursor
-                self.load_text(kept.text)
-            else:
-                self.base = self.shown = next((md for who, md in view.blocks if who == "doc"), "")
-                self.load_text(self.base)
-            splitter = self.splitter
-            splitter.display = self.display = True
-            splitter.apply(share(self.app.client.setting(LAYOUT + splitter.key)))
-            self.paint_title()
+            cursor = self.opened(view) or cursor
             self.call_after_refresh(self.reveal, row, row + 1, "viewer")   # once the viewer has shrunk
         self.focus()
         # the clicked block's line in the buffer (the viewer shows `shown`); one the edits
         # took out, the cursor where it was. Once the editor has its height
         at = carried(self.text, self.shown, line, added=None)
         self.call_after_refresh(self.place, *((at, 0) if at is not None else cursor))
+
+    def opened(self, view: Transcript) -> tuple[int, int] | None:
+        """Opened on the doc the viewer shows: its kept edits' buffer, base and cursor (which it
+        returns) if it has them, else the file's text as shown, with the mtime it was read at."""
+        self.key, self.path = view.doc_key, view.doc_path
+        kept, cursor = self.edits.get(self.path), None
+        if kept is not None:   # edits kept from before: the buffer, and edited, back
+            self.base, self.shown, self.mtime, cursor = kept.base, kept.shown, kept.mtime, kept.cursor
+            self.load_text(kept.text)
+        else:
+            self.base = self.shown = next((md for who, md in view.blocks if who == "doc"), "")
+            self.mtime = view.doc_mtime
+            self.load_text(self.base)
+        splitter = self.splitter
+        splitter.display = self.display = True
+        splitter.apply(share(self.app.client.setting(LAYOUT + splitter.key)))
+        self.paint_title()
+        return cursor
+
+    def resume(self, path: str, came: tuple[str, str] | None = None) -> None:
+        """Opened again on the doc at `path`, which its viewer shows, with the edits kept for
+        it, the cursor where it was: Keep editing, once the selection has gone back to it
+        (WheelhouseApp.leaving). came: a module's doc's path and title, gone back to again if
+        the selection moves off. One that couldn't be gone back to (gone, its session
+        compacting) says where its edits are, never leaving them unsaid."""
+        if path not in self.edits or not self.live:
+            return
+        if self.view.doc_path != path:
+            self.app.notify(f"{os.path.basename(path)} couldn't be shown again: its unsaved edits are kept, and "
+                            "show when you open it", severity="warning")
+            return
+        if self.key is not None:
+            return
+        cursor = self.opened(self.view)
+        self.came = came
+        self.app.repaint_doc()   # laid out for it now, as a click opening it is: the box hidden, not at the next tick
+        self.focus()
+        self.call_after_refresh(self.place, *cursor)
 
     def place(self, line: int, column: int = 0) -> None:
         """The cursor to a place in the source, scrolled to the editor's middle: driven by
@@ -2592,14 +2776,18 @@ class DocEditor(TextArea):
 
     def follow(self, key) -> None:
         """The viewer shows a doc (key, its doc_key, or None): a different one closes the
-        editor, its edits kept (stash) for when it opens on this one again. The same one,
-        edited meanwhile in another editor (full screen's), takes those edits up, or closes
-        if they were discarded there."""
+        editor; with unsaved edits, kept (stash) while the app asks Save, Discard or Keep
+        editing (WheelhouseApp.leaving), so they're never left in a hidden editor. The same
+        one, edited meanwhile in another editor (full screen's), takes those edits up, or
+        closes if they were discarded there."""
         if self.key is None or not self.live:
             return
         if key != self.key:
+            left, path, back = self.edited, self.path, ("show", *self.came) if self.came else ("item", *self.key)
             self.stash()
             self.close()
+            if left:
+                self.app.call_later(self.app.leaving, self, path, back)
         elif (kept := self.edits.get(self.path)) is None and self.text != self.base:
             self.close()
         elif kept is not None and (kept.text, kept.shown) != (self.text, self.shown):
@@ -2613,20 +2801,22 @@ class DocEditor(TextArea):
         if self.key is None:
             return
         refocus = self.has_focus
-        self.key = self.path = self.shown = self.block = self.anchor = None
+        self.key = self.path = self.shown = self.block = self.anchor = self.mtime = self.came = None
         self.splitter.display = self.display = False
         self.paint_title()
         self.repaint()
         if refocus and self.view.can_focus:
             self.view.focus()
 
-    def shown_in(self, blocks: list[tuple[str, str]], path: str | None, gone: str = "") -> list[tuple[str, str]]:
+    def shown_in(self, blocks: list[tuple[str, str]], path: str | None, gone: str = "",
+                 mtime: int | None = None) -> list[tuple[str, str]]:
         """A doc's blocks as the viewer shows them: the doc's text (at `path`) its buffer as
         of the last Ctrl+Enter, while the editor is open on it or its edits are kept. The
         file changed on disk meanwhile: kept edits stay, said once and in the title; with
         none, the editor open takes up the file's new text. The file gone, or no longer a
         regular file (`gone`, as the read says), likewise, as `file gone`, until it's back,
-        when what it's back with is checked as a change."""
+        when what it's back with is checked as a change. `mtime`: the file's as read, the
+        base an editor taking up its text saves against."""
         on_disk = next((md for who, md in blocks if who == "doc"), None)
         if not self.live:   # not mounted yet, or gone: the blocks as they are
             return blocks
@@ -2634,9 +2824,16 @@ class DocEditor(TextArea):
                 and on_disk is not None and on_disk != self.base:
             cursor = self.cursor_location
             self.base = self.shown = on_disk
+            self.mtime = mtime
             self.load_text(on_disk)
             self.move_cursor(cursor)
+        same = path is not None and not gone and mtime is not None and on_disk is not None
+        if same and path == self.path and self.key is not None and on_disk == self.base and mtime != self.mtime:
+            self.mtime = mtime   # rewritten unchanged (a touch, a session posting it again): no change to ask about
+            self.stash()
         kept = self.edits.get(path) if path is not None else None
+        if same and kept is not None and on_disk == kept.base and kept.mtime != mtime:
+            kept = self.edits[path] = dataclasses.replace(kept, mtime=mtime)
         if kept is not None and gone and kept.gone != gone:
             kept = self.edits[path] = dataclasses.replace(kept, gone=gone)
             what = "has gone from disk" if gone == "gone" else "is no longer a regular file"
@@ -2656,16 +2853,18 @@ class DocEditor(TextArea):
         return out if any(who == "doc" for who, _ in blocks) else out + [("doc", text)]
 
     def paint_title(self) -> None:
-        """`edited` in the pane's title while the doc it shows has unsaved edits, open here
-        or kept, and `file changed` (or `file gone`) once its file has changed on disk since."""
+        """`edited · Ctrl+S saves` in the pane's title while the doc it shows has unsaved edits,
+        open here or kept, and `file changed` (or `file gone`) once its file has changed on
+        disk since."""
         if not self.live:
             return
         pane = self.held[1]
         if self.title is None:
             self.title = self.titled = pane.border_title or ""
         kept = self.edits.get(self.view.doc_path) if self.view.doc_path else None
-        marks = ("edited",) if self.edited or kept else ()
+        marks = EDITED[:1] if self.edited or kept else ()
         marks += ("file gone",) if kept and kept.gone else ("file changed",) if kept and kept.changed else ()
+        marks += EDITED[1:] if marks else ()
         title = " · ".join(t for t in (self.title, *marks) if t) or None
         if title != self.titled:   # set only when it changes: setting it redraws the pane
             self.titled = pane.border_title = title
@@ -2696,36 +2895,48 @@ class DocEditor(TextArea):
         self.mark("editor")
         self.view.parent.scroll_to(y=max(rows[0] - at, 0), animate=False, immediate=True)
 
-    def action_save_doc(self) -> None:
-        self.app.notify(SAVING_NEXT)
+    def action_save_doc(self, then: Callable[[], None] | None = None) -> None:
+        """Ctrl+S: the buffer saved to the doc's file through the daemon (WheelhouseApp.save_doc),
+        against the mtime it was read at; then `then`, once saved."""
+        if self.key is None:
+            return
+        self.stash()
+        self.app.save_doc(self.path, self.text, self.mtime, then)
 
     def action_close_editor(self) -> None:
-        """Esc: closed, asking first with unsaved edits: Close, keeping them (the default),
-        Discard (their buffer dropped) or Keep editing."""
+        """Esc: closed, asking first with unsaved edits: Save (the default), and closed once
+        saved, Discard (their buffer dropped) or Keep editing."""
         if not self.edited:
             self.discard()
             return
 
         def answered(choice: str | None) -> None:
-            if choice == "close":
-                self.stash()
-                self.close()
+            if choice == "save":
+                self.action_save_doc(self.close)
             elif choice == "discard":
                 self.discard()
         self.app.push_screen(LeaveEdits(), answered)
 
     def discard(self) -> None:
-        """Closed, its buffer dropped, and every view of the doc at once: an editor open on
-        it elsewhere (Detail's, under full screen) closed too, and each viewer shows the
-        file again."""
-        path = self.path
-        self.edits.pop(path, None)
-        editors = [e for screen in self.app.screen_stack for e in screen.query(DocEditor)]
-        for editor in editors:
-            if editor is self or (path is not None and editor.path == path):
-                editor.close()
-            else:
-                editor.repaint()
+        """Closed, its buffer dropped, and every view of the doc at once (dropped)."""
+        if self.path is not None:
+            dropped(self.app, self.path)
+        self.close()
+
+    def saved(self, path: str, text: str, mtime: int | None, reloaded: bool = False) -> None:
+        """Its doc, at `path`, now `text` on disk at `mtime` (a save, or a Reload): the base
+        a save goes from. Saved, the buffer stays as it is, the viewer showing it; reloaded,
+        the buffer is the file's text."""
+        if self.key is None or self.path != path:
+            return
+        self.base = text
+        self.mtime = mtime
+        if reloaded or self.text != text:
+            cursor = self.cursor_location
+            self.load_text(text)
+            self.move_cursor(cursor)
+        self.shown = text
+        self.paint_title()
 
     # keeping step
 
@@ -3196,6 +3407,90 @@ class Ask(Dialog):
     @on(Button.Pressed, "#ask-cancel")
     def cancel(self) -> None:
         self.action_answer(None)
+
+
+class SearchItems(Dialog):
+    """The inbox's search popover (#273), over the inbox: a box, the Show hidden checkbox and
+    the matches (search.find), on ref and title, updated on every key. Up and Down in the box
+    move the highlight, Enter or a click picks; the answer is the item's (session, ref). The
+    items are the scope's (the selected session's, else every session's), each with whether
+    the inbox shows it now; hidden ones list only with Show hidden on, dimmed."""
+    BINDINGS = [Binding("down", "move(1)", show=False), Binding("up", "move(-1)", show=False)]
+
+    def __init__(self, title: str, pool: list[tuple], names: dict[str, str] | None, typed: str,
+                 hidden: bool, at: Region) -> None:
+        super().__init__()
+        self.heading, self.pool, self.names, self.typed, self.hidden, self.at = title, pool, names, typed, hidden, at
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label(Text(self.heading), classes="dialog-title")
+            yield Input(self.typed, id="search-text", placeholder="An id or words of a title",
+                        select_on_focus=False)   # the key that opened it kept, the next typed after it
+            yield Checkbox("Show hidden", self.hidden, id="search-hidden", compact=True)
+            yield OptionList(id="search-results")
+            yield Static(id="search-more")
+
+    def on_mount(self) -> None:
+        box = self.query_one("#dialog")
+        box.styles.offset = (self.at.x, self.at.y)
+        box.styles.width = max(40, self.at.width)
+        box.styles.max_height = max(12, self.at.height)
+        self.set_focus(self.query_one("#search-text", Input))
+        self.list_matches()
+
+    def list_matches(self) -> None:
+        """The matches for what's typed, from those the toggle lets in."""
+        hidden = {item_key(it) for it, gone in self.pool if gone}
+        items = [it for it, gone in self.pool if self.hidden or not gone]
+        found, more = search.find(items, self.query_one("#search-text", Input).value)
+        options = self.query_one("#search-results", OptionList)
+        options.clear_options()
+        options.add_options([Option(self.row(it, item_key(it) in hidden), id=item_key(it)) for it in found])
+        if found:
+            options.highlighted = 0
+        self.query_one("#search-more", Static).update(
+            f"{more} more matched" if more else "" if found else "Nothing matches")
+
+    def row(self, it, gone: bool) -> Text:
+        """A match's line: its ref in its kind's colour, title, status, and its session's name
+        when searching every session; dimmed if the inbox doesn't show it."""
+        parts = [ref_text(it), " ", it["title"], ("  " + it["status"], "dim")]
+        if self.names is not None:
+            parts.append(("  " + self.names.get(it["session_id"], ""), "italic"))
+        line = Text.assemble(*parts)
+        if gone:
+            line.stylize("dim")
+        return line
+
+    @on(Input.Changed, "#search-text")
+    def typed_more(self) -> None:
+        self.list_matches()
+
+    @on(Checkbox.Changed, "#search-hidden")
+    def toggled(self, event: Checkbox.Changed) -> None:
+        self.hidden = event.value
+        self.app.search_hidden = event.value   # for the run of the app, not saved
+        self.list_matches()
+
+    def action_move(self, step: int) -> None:
+        options = self.query_one("#search-results", OptionList)
+        if options.option_count:
+            options.highlighted = max(0, min(options.option_count - 1, (options.highlighted or 0) + step))
+
+    @on(Input.Submitted, "#search-text")
+    def enter(self) -> None:
+        options = self.query_one("#search-results", OptionList)
+        if options.highlighted is not None and options.option_count:
+            self.pick(options.get_option_at_index(options.highlighted).id)
+
+    @on(OptionList.OptionSelected, "#search-results")
+    def picked(self, event: OptionList.OptionSelected) -> None:
+        self.pick(event.option.id)
+
+    def pick(self, key: str) -> None:
+        sid, ref = key.split("|")
+        self.action_answer((sid, ref))
 
 
 MODEL_WARNING = ("Changing model drops the prompt cache: the session's next request re-reads the whole "
@@ -3807,28 +4102,87 @@ class Confirm(Dialog):
         self.action_answer(event.button.id == "yes")
 
 
+def dropped(app, path: str) -> None:
+    """A doc's unsaved edits dropped, and every view of it at once: an editor open on it
+    anywhere (Detail's, under full screen) closed, and each viewer shows the file again."""
+    app.doc_edits.pop(path, None)
+    for editor in [e for screen in app.screen_stack for e in screen.query(DocEditor)]:
+        if editor.path == path:
+            editor.close()
+        else:
+            editor.repaint()
+
+
 class LeaveEdits(Dialog):
-    """Esc in a doc's editor with unsaved edits: close it keeping them (the default, on
-    Enter), discard them, or keep editing (Esc). Saving is stage 8's, so no Save until then."""
-    BINDINGS = [Binding("alt+c", "answer('close')", show=False), Binding("alt+d", "answer('discard')", show=False)]
-    ACTION = "close"   # Enter keeps the edits: a reflex Enter loses nothing
+    """A doc's unsaved edits about to be left: Esc in its editor, or the selection moving off
+    it (WheelhouseApp.leaving). Save them (the default, on Enter), discard them, or keep
+    editing (Esc), which for a selection moved goes back to the doc."""
+    BINDINGS = [Binding("alt+s", "answer('save')", show=False), Binding("alt+d", "answer('discard')", show=False)]
+    ACTION = "save"   # Enter saves: a reflex Enter loses nothing
     CANCEL = "keep"
+
+    def __init__(self, prompt: str = "This doc has unsaved edits.") -> None:
+        super().__init__()
+        self.prompt = prompt
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
-            yield Label("This doc has unsaved edits. Closing the editor keeps them, while the app runs.",
-                        classes="dialog-prompt")
+            yield Label(self.prompt, classes="dialog-prompt", markup=False)
             with Horizontal(classes="buttons"):
-                yield Button(Text("Close, keep edits [Alt+C]"), variant="success", id="close")
+                yield Button(Text("Save [Alt+S]"), variant="success", id="save")
                 yield Button(Text("Discard [Alt+D]"), variant="error", id="discard")
                 yield Button(Text("Keep editing [Esc]"), id="keep")
 
     def on_mount(self) -> None:
-        self.set_focus(self.query_one("#close", Button))
+        self.set_focus(self.query_one("#save", Button))
 
     @on(Button.Pressed)
     def pressed(self, event: Button.Pressed) -> None:
         self.action_answer(event.button.id)
+
+
+class SaveTrouble(Dialog):
+    """A doc's save that didn't land (WheelhouseApp.save_doc), and what to do: CHOICES, each
+    (id, label, key), the last the cancel. No ACTION: Enter presses only the focused button,
+    the cancel to begin with, so a reflex Enter neither overwrites nor loses the edits."""
+    CHOICES: tuple[tuple[str, str, str | None], ...] = (("cancel", "OK", None),)
+
+    def __init__(self, prompt: str) -> None:
+        super().__init__()
+        self.prompt = prompt
+        self.CANCEL = self.CHOICES[-1][0]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label(self.prompt, classes="dialog-prompt", markup=False)
+            with Horizontal(classes="buttons"):
+                for i, (choice, label, key) in enumerate(self.CHOICES):
+                    last = i == len(self.CHOICES) - 1
+                    yield Button(Text(f"{label} [{key or 'Esc'}]"), id=choice,
+                                 variant="default" if last else "error" if i == 0 else "primary")
+
+    def on_mount(self) -> None:
+        self.set_focus(self.query_one(f"#{self.CANCEL}", Button))
+
+    @on(Button.Pressed)
+    def pressed(self, event: Button.Pressed) -> None:
+        self.action_answer(event.button.id)
+
+
+class SaveConflict(SaveTrouble):
+    """The file changed on disk since the editor read it (409)."""
+    BINDINGS = [Binding("alt+o", "answer('overwrite')", show=False), Binding("alt+r", "answer('reload')", show=False)]
+    CHOICES = (("overwrite", "Overwrite", "Alt+O"), ("reload", "Reload", "Alt+R"), ("cancel", "Cancel", None))
+
+
+class SaveGone(SaveTrouble):
+    """The file gone from disk since the editor read it (404)."""
+    BINDINGS = [Binding("alt+w", "answer('anew')", show=False)]
+    CHOICES = (("anew", "Write it anew", "Alt+W"), ("cancel", "Cancel", None))
+
+
+class SaveFailed(SaveTrouble):
+    """A save refused: the path outside what may be written, or the filesystem refusing it."""
 
 
 class SessionMenu(Dialog):
@@ -4239,9 +4593,9 @@ DESCRIBE = {
     "choose(-1)": "While an emoji code is typed, choose the suggestion before (Tab or Enter takes it); else up a line",
     "choose(1)": "While an emoji code is typed, choose the next suggestion; else down a line",
     "leave": "Back to the inbox; with the doc's editor open, close it first",
-    "render_edits": "Show the edits rendered in the doc above",
-    "save_doc": "Says writing the doc comes next; never sends the session's queue",
-    "close_editor": "Close the editor, asking first with unsaved edits: Close and keep them, Discard or Keep editing",
+    "render_edits": "Show the edits rendered in the doc above; in Immediate mode, save them too",
+    "save_doc": "Save the doc to its file; never sends the session's queue",
+    "close_editor": "Close the editor, asking first with unsaved edits: Save, Discard or Keep editing",
     "app.press('rename')": "Rename the highlighted session",
     "app.press('relaunch')": "Relaunch it, or Unpark a parked one",
     "app.press('park')": "Park it, or Unpark a parked one",
@@ -4375,6 +4729,8 @@ MOUSE = ("Click selects a row; in the session list, a click on the selected sess
          "dismisses it. "
          "A click on a row's first column pins it (📌) or clears its pin, as Alt+P does. "
          "A click on an emoji suggestion under the answer box takes it in place of the code typed. "
+         "A click on the 🔍 at the inbox's top right opens its search, as typing in the inbox does. "
+         "A click on an item's id in Detail (a doc, a conversation, a thread) goes to that item of the same session. "
          "A click on the ⓘ at the stats pane's top right opens the selected session's info: its id (C copies it), "
          "user and machine, directory, branch, model, mode, start, transcript and its MCP server, flagged when stale. "
          "Double-click selects a word, but on what Detail shows (an item, a doc) it opens it full screen, as Enter on its "
@@ -4388,6 +4744,10 @@ TOUR_HELP = ("Esc ends the tour at any time, once you confirm, from any of its b
              "shows a badge, Alt+T, or a click on it, resumes a tour the wheelhouse quit in the middle of, or offers "
              "what's new since you last looked: a top-up showing only the new tips, pane by pane, with no demo session, "
              "then the release notes. {again} at the next start.")
+SEARCH = ("Any character typed in the item list (no modifier) opens the inbox's search with it typed, as the 🔍 at "
+          "the inbox's top right does: the selected session's items, or every session's with none selected, matched "
+          "on id and title as you type. Up and Down move the highlight, Enter or a click goes to the item; Tab reaches "
+          "Show hidden (Space flips it), which takes in the items off the inbox too. Esc closes it, back to the inbox.")
 DIALOGS = ("Esc, or a click outside the box, cancels a dialog (not the tutorial offer, which is all but outside). Enter presses the focused button; with focus on a "
            "one-line box or a checkbox, or nothing, it takes the dialog's one action (Launch, Rename, Fork, Park and "
            "the like), but in a list, a set of choices or a multi-line box it does what it does there. A dialog of "
@@ -4456,7 +4816,7 @@ def keys_help(sdk: bool = False, shown=(), panes=()) -> str:
     buttons = [text for id_, text in BUTTONS.items() if id_ not in SDK_BUTTONS or id_ in offered]
     out += ["## Tab order", TABS.format(slider=SLIDER_TAB if sdk else ""), "## Mouse", MOUSE, "## Buttons", whose,
             *[f"- {text}" for text in buttons],
-            "## Sending", SEND_RULES, "## Dialogs", DIALOGS,
+            "## Searching the inbox", SEARCH, "## Sending", SEND_RULES, "## Dialogs", DIALOGS,
             "## Tour", TOUR_HELP.format(again=tutorial.AGAIN),
             "Esc, Enter, F1 or a click outside closes this list."]
     return "\n\n".join(out)
@@ -4494,6 +4854,12 @@ class WheelhouseApp(App):
     PaneMenu #dialog {{ width: auto; min-width: 18; padding: 0 1; margin: 1 0 0 0; constrain: inside inflect; }}
     PaneMenu #dialog Button {{ width: 100%; }}
     Ask #ask-suggestions {{ height: auto; max-height: 8; margin: 1 0 0 0; }}
+    /* the inbox's search (#273): its glass on the pane's top border, its popover over the inbox */
+    #search-glass {{ position: absolute; overlay: screen; width: 2; height: 1; }}
+    SearchItems {{ align: left top; }}
+    SearchItems #dialog {{ padding: 0 1; constrain: inside inside; }}
+    SearchItems #search-results {{ height: auto; max-height: 1fr; }}
+    SearchItems #search-more {{ color: $text-muted; height: auto; }}
     #title-row {{ height: 1; background: #12122a; }}
     #title {{ width: 1fr; height: 1; background: #12122a; content-align: center middle; }}
     #tour-badge {{ width: auto; height: 1; padding: 0 1; color: #ffd300; display: none; }}
@@ -4738,6 +5104,8 @@ class WheelhouseApp(App):
         # then, kept here, not as updated_at, which places it among the settled (#70)
         self.brought_back: dict[str, datetime] = {}
         self.collapsed: set[str] = set()   # the parent rows whose children are hidden, for this run alone
+        self.search_hidden = False   # the search popover's Show hidden, for this run alone (#273)
+        self.peeked: str | None = None   # an item search showed in Detail though the inbox hides it: kept hidden (#273)
         # each list's sort (ordering.py), kept per TUI under layout.sort.*: read as the app starts
         self.item_sort, self.session_sort = ordering.ITEMS_DEFAULT, ordering.SESSIONS_DEFAULT
         # each list's rows that change sides (an item settling, a session parked) fall or rise
@@ -4817,8 +5185,9 @@ class WheelhouseApp(App):
             yield Splitter("sessions-pane", "#col-left", "#col-right", "x", default=self.column_width)
             with Vertical(id="col-middle", classes="column"):
                 with slot("middle.top"):
-                    with Vertical(id="items-pane", classes="panel") as pane:
+                    with InboxPane(id="items-pane", classes="panel") as pane:
                         pane.border_title = "Inbox"
+                        yield SearchGlass("🔍", id="search-glass")
                         with hidden(Vertical(id="away-card")):   # after a gap (away.py, #223)
                             with Horizontal(id="away-head"):
                                 yield Static(id="away-title")
@@ -4838,6 +5207,7 @@ class WheelhouseApp(App):
                     with ConversationScroll(id="detail-scroll"):
                         yield Transcript(NOTHING_SELECTED, id="detail")
                         yield Vertical(id="detail-more")   # a module's part, scrolling with the thread (detail_parts)
+                    yield CompactorDock(id="compactor-dock")   # a running compaction's art, pinned (#287)
                     yield Vertical(id="detail-bar")   # a module's part, under it: its buttons (detail_parts)
                     yield hidden(Splitter("editor", "#detail-editor", "#detail-scroll", "y", label="editing"))
                     yield DocEditor("#detail", "#detail-pane", self.detail_doc_sends_now, self.paint_detail,
@@ -4863,6 +5233,7 @@ class WheelhouseApp(App):
         self.items_table = self.query_one("#items", ItemList)
         self.detail = self.query_one("#detail", Transcript)
         self.detail_scroll = self.query_one("#detail-scroll", VerticalScroll)
+        self.compactor_dock = self.query_one("#compactor-dock", CompactorDock)
         # held: a query walks every doc block
         self.answer_splitter = next(s for s in self.query("#detail-pane > Splitter") if s.key == "answer")
         self.detail_editor = self.query_one("#detail-editor", DocEditor)
@@ -5704,7 +6075,8 @@ class WheelhouseApp(App):
         if self.select_new in table.rows:   # just launched or forked here: the app's pick, not theirs
             sid, picked, self.select_new = self.select_new, self.picked, None
             # not if they've picked another meanwhile, nor under text they're typing (#116)
-            if self.selected == self.select_from and not isinstance(self.focused, (TextArea, Input)):
+            if self.selected == self.select_from and not isinstance(self.focused, (TextArea, Input)) \
+                    and not self.editing_doc():
                 self.follow(sid)
                 self.picked = picked   # so no turn of its first run counts as one the person watched (saw)
 
@@ -5732,11 +6104,7 @@ class WheelhouseApp(App):
         names = self.session_names()
         found, processing, queued, awaiting = self.client.inbox(self.filter_sid)
         busy = queued | awaiting
-        if self.going:   # a Delete under way: its rows gone already (#234)
-            found = [it for it in found if item_key(it) not in self.going]
-        if self.autocleanse and not self.show_finished:   # completed a while ago: off until Alt+V (#235)
-            at, held = datetime.now(timezone.utc), under_way_parents(found, busy)
-            found = [it for it in found if item_key(it) in held or not self.completed_hidden(it, busy, at)]
+        found = self.listable(found, busy)   # a Delete's rows gone already (#234); autocleanse's hidden (#235)
         compacting, dead = self.compacting(), self.lifeless_sids()
         cuts = self.cutoffs()
         every = self.client.all_items() if self.item_sort == ordering.ITEMS_DEFAULT else None
@@ -5816,7 +6184,7 @@ class WheelhouseApp(App):
             self.deleted = set()
         if not pending:   # where the app put it; an arrow pending stays pending
             self.items_cursor = table.cursor_key()
-        if rebuilt and key not in table.rows and table.row_count:   # its item went: take the one now
+        if rebuilt and key not in table.rows and table.row_count and (key is None or key != self.peeked):   # its item went: take the one now
             # under the cursor, the list going with it: one current session (D22)
             self.select_row(table.coordinate_to_cell_key((table.cursor_row, 0)).row_key.value)
         if not table.row_count:   # its item (or followed session) went and none is left: nothing selected
@@ -5876,7 +6244,7 @@ class WheelhouseApp(App):
         with what it read from the hub, what tells a paint that would change nothing (#268)."""
         table = self.items_table
         return (self.filter_sid, self.item_sort, self.show_finished, self.autocleanse, self.selected, self.pin,
-                frozenset(self.collapsed), frozenset(self.going), frozenset(table.marked), frozenset(self.deleted),
+                self.peeked, frozenset(self.collapsed), frozenset(self.going), frozenset(table.marked), frozenset(self.deleted),
                 tuple(self.brought_back.items()), self.item_sink.sunk is None,
                 tuple(str(c.label) for c in table.ordered_columns), tuple(table.keys()), table.cursor_key(),
                 self.items_cursor)
@@ -5899,7 +6267,8 @@ class WheelhouseApp(App):
         stays under the cursor until the selection moves on."""
         if not completed(item, busy) or standing(item, busy) != "settled":   # a finished one: Alt+V's already
             return False
-        if self.selected and self.selected[1] and (item["session_id"], item["ref"]) == tuple(self.selected[:2]):
+        if self.selected and self.selected[1] and (item["session_id"], item["ref"]) == tuple(self.selected[:2]) \
+                and item_key(item) != self.peeked:   # one search showed hidden stays hidden (#273)
             return False
         since = max(datetime.fromisoformat(item["updated_at"]), self.brought_back.get(item_key(item), datetime.min.replace(tzinfo=timezone.utc)))
         return (at - since).total_seconds() >= self.autocleanse * 60
@@ -6150,8 +6519,91 @@ class WheelhouseApp(App):
         from under a doc root (/docs), in place of what's selected until the selection moves:
         as a doc item shows, with no answer box."""
         self.shown_doc = (path, title)
+        self.items_table.show_cursor = False   # picked elsewhere: a click on the inbox's row is a fresh pick (#281)
         self.paint_sendbar()
         self.paint_detail()
+
+    def action_search(self, typed: str = "") -> None:
+        """The search popover over the inbox (SearchItems, #273), typed already holding what
+        opened it: the selected session's items, or every session's with none selected."""
+        if self.screen is not self.screen_stack[0]:
+            return
+        self.settle()
+        names = self.session_names()
+        title = f"Search {names.get(self.filter_sid, self.filter_sid)}" if self.filter_sid else "Search all sessions"
+        pane = self.query_one("#items-pane")
+        self.push_screen(SearchItems(title, self.search_pool(), None if self.filter_sid else names, typed,
+                                     self.search_hidden, pane.region), self.searched)
+
+    def search_pool(self) -> list[tuple]:
+        """What search looks through: the scope's items, each with whether the inbox hides it
+        now (inbox_shows): a finished one with F off, one autocleanse hid, a parked session's."""
+        sid = self.filter_sid
+        _, _, queued, awaiting = inbox = self.client.inbox(sid)
+        items = inbox.items if sid else self.client.all_items()
+        shows = self.inbox_shows(inbox.items, queued | awaiting)
+        return [(it, item_key(it) not in shows) for it in items]
+
+    def inbox_shows(self, found, busy) -> set[str]:
+        """The keys of the items the inbox lists now, a collapsed parent's children counted
+        (paint_items' filter): not being deleted, not hidden by autocleanse, and not finished
+        unless pinned or F shows the finished."""
+        found = self.listable(found, busy)
+        return {item_key(it) for it in found
+                if self.show_finished or pinned(it) or standing(it, busy) != "finished"}
+
+    def listable(self, found, busy) -> list:
+        """The items paint_items starts from: those of a Delete under way gone (#234), and, F
+        off, those autocleanse hides (#235)."""
+        if self.going:
+            found = [it for it in found if item_key(it) not in self.going]
+        if self.autocleanse and not self.show_finished:
+            at, held = datetime.now(timezone.utc), under_way_parents(found, busy)
+            found = [it for it in found if item_key(it) in held or not self.completed_hidden(it, busy, at)]
+        return found
+
+    def searched(self, picked: tuple[str, str] | None) -> None:
+        """The search popover closed: its pick gone to (go_to_item), and focus on the inbox."""
+        self.items_table.focus()
+        if picked is not None:
+            self.go_to_item(*picked)
+
+    def action_go_to_item(self, sid: str, ref: str) -> None:
+        """A click on an item's id in Detail (clickable_ids, #274): the item gone to, as a
+        search's pick goes."""
+        self.go_to_item(sid, ref)
+
+    def go_to_item(self, sid: str, ref: str) -> None:
+        """An item gone to (#273, #274): one the inbox shows highlighted there, scrolled to, and in
+        Detail, as a click on its row; its parents' children shown if they were hidden. One
+        it hides shown in Detail alone, the inbox unchanged, Detail saying it's hidden. One of
+        a compacting session isn't, as its row isn't picked (#150)."""
+        item = self.client.item(sid, ref)
+        if item is None:
+            self.notify(f"{ref} has gone", severity="warning")
+            return
+        key, table = item_key(item), self.items_table
+        if key in table.locked or self.locks(item, self.cutoffs()):
+            self.notify(COMPACTING_LOCKED, severity="warning")
+            return
+        _, _, queued, awaiting = inbox = self.client.inbox(self.filter_sid)
+        if key in self.inbox_shows(inbox.items, queued | awaiting):
+            parent, seen = parent_of(item), set()
+            while parent and (up := f"{sid}|{parent}") not in seen:   # under a collapsed parent: shown
+                seen.add(up)
+                self.collapsed.discard(up)
+                parent = parent_of(above) if (above := self.client.item(sid, parent)) is not None else None
+            self.paint_items()
+        if key in table.rows:
+            self.peeked = None
+            self.show_item(sid, ref)
+            self.paint_items()
+            return
+        self.peeked = key
+        table.show_cursor = False
+        self.select_row(key)
+        self.paint_items()
+        self.paint_sendbar()
 
     def show_item(self, sid: str, ref: str) -> bool:
         """A module's pick of an item (api.Context.show_item, the PRs pane's row that is one):
@@ -6164,7 +6616,7 @@ class WheelhouseApp(App):
         if key in table.locked or (hidden and self.locks(item, self.cutoffs())):   # one autocleanse hid too
             self.notify(COMPACTING_LOCKED, severity="warning")
             return False
-        self.shown_doc = None
+        self.peeked = None
         if hidden:   # autocleanse hid it (a Landed line, a merged PR): selected, it's back (#235)
             self.select_row(key)
             self.paint_items()
@@ -6180,11 +6632,13 @@ class WheelhouseApp(App):
     def unselect(self, note: str) -> None:
         """A module's pick of something that isn't an item (api.Context.unselect, a PR no
         session made): nothing selected, the inbox's highlight hidden, and Detail saying why."""
-        self.shown_doc = None
+        doc, self.shown_doc = self.shown_doc, None
         self.items_table.show_cursor = False
         if self.selected is not None:
             self.selected = None
             self.retarget()
+            self.each_pane("showing", None, None)
+        elif doc is not None:   # a decision shown with nothing selected: its pane's highlight hidden too (#281)
             self.each_pane("showing", None, None)
         self.detail_note = note
         self.paint_detail()
@@ -6249,6 +6703,8 @@ class WheelhouseApp(App):
         before = ClickOpened(editor, time.monotonic(), event.at, target, self.doc_quotes.get(target), panes,
                              panes.tab if panes is not None else None)
         closed = editor.key is None
+        if closed:   # a module's doc, shown in Detail, is gone back to by its path and title (leaving)
+            editor.came = self.shown_doc if editor is self.detail_editor else None
         if doc is not None and line is not None:
             md = next((md for who, md in event.view.blocks if who == "doc"), "")
             self.doc_quotes[(doc["session_id"], doc["ref"])] = quote_of(md, line)
@@ -6258,6 +6714,77 @@ class WheelhouseApp(App):
         if doc is not None and editor.key is not None and self.doc_layout == TABBED:
             panes.tab = EDITOR_TAB
         self.repaint_doc()
+
+    def save_doc(self, path: str, text: str, mtime: int | None, then: Callable[[], None] | None = None,
+                 force: bool = False, failed: Callable[[], None] | None = None) -> None:
+        """A doc's buffer saved through the daemon (client.write_doc, POST /docs/write) against
+        mtime, the file's when its text was read. Saved: every editor on it and every view of it
+        shows the new text at once, the panes are told (doc_written), and `then` runs. The file
+        changed since: Overwrite (saved with force), Reload (the file's text replaces the
+        buffer, the edits lost) or Cancel. Gone: written anew, or not. Refused (outside what
+        may be written, or the filesystem refusing it): said in a prompt, path and reason.
+        `failed` runs when it ends unsaved with the edits kept (Cancel, or refused)."""
+        name = os.path.basename(path)
+        again = functools.partial(self.save_doc, path, text, mtime, then, True, failed)
+        answer = self.client.write_doc(path, text, mtime, force)
+        if answer.get("conflict"):
+            def chose(choice: str | None) -> None:
+                if choice == "overwrite":
+                    again()
+                elif choice == "reload":
+                    self.doc_written(path, answer.get("text", ""), answer.get("mtime_ns"), reloaded=True)
+                elif failed is not None:
+                    failed()
+            self.push_screen(SaveConflict(f"{name} has changed on disk since you started editing. Overwrite it "
+                                          "with your edits, Reload it (your edits are lost), or Cancel?"), chose)
+        elif answer.get("gone"):
+            self.push_screen(SaveGone(f"{name} has gone from disk since you started editing. Write it anew "
+                                      "with your edits, or Cancel?"),
+                             lambda choice: again() if choice == "anew" else failed and failed())
+        elif "refused" in answer:
+            self.push_screen(SaveFailed(f"{name} wasn't saved: {answer['refused']}"), lambda _: failed and failed())
+        else:
+            self.doc_written(path, text, answer.get("mtime_ns"))
+            self.notify(f"Saved {name}")
+            if then is not None:
+                then()
+
+    def doc_written(self, path: str, text: str, mtime: int | None, reloaded: bool = False) -> None:
+        """A doc's file now `text` (saved, or reloaded over the edits): its kept edits dropped,
+        every editor on it taking that as its base, every view of it painted again at once, and
+        the panes told (a pane's doc_written: the Decisions pane asks again for the statuses)."""
+        self.doc_edits.pop(path, None)
+        for editor in [e for screen in self.screen_stack for e in screen.query(DocEditor)]:
+            editor.saved(path, text, mtime, reloaded)
+            editor.repaint()
+        self.each_pane("doc_written", path)
+
+    def leaving(self, editor: "DocEditor", path: str, back: tuple[str, str, str]) -> None:
+        """The selection moved off a doc with unsaved edits (DocEditor.follow): Save, Discard,
+        or Keep editing, which goes back to it (`back`: ("item", sid, ref) for a doc item,
+        ("show", path, title) for a module's doc) and opens its editor again where the cursor
+        was."""
+        if path not in self.doc_edits or editor.view.doc_path == path:   # saved or discarded meanwhile, or
+            return   # the same file shown by another way (a doc item of the same path): its edits show there
+
+        def go_back() -> None:
+            if back[0] == "show":
+                self.show_doc(*back[1:])
+            elif back[1] != "file":   # ("item", "file", path): a module's doc of no known title stays left
+                self.go_to_item(*back[1:])
+            self.call_after_refresh(editor.resume, path, tuple(back[1:]) if back[0] == "show" else None)
+
+        def answered(choice: str | None) -> None:
+            edit = self.doc_edits.get(path)
+            if edit is None:
+                return
+            if choice == "save":   # not saved after all (Cancel, refused): back to the edits, never left hidden
+                self.save_doc(path, edit.text, edit.mtime, failed=go_back)
+            elif choice == "discard":
+                dropped(self, path)
+            else:
+                go_back()
+        self.push_screen(LeaveEdits(f"{os.path.basename(path)} has unsaved edits."), answered)
 
     def paint_quote(self) -> None:
         """The answer box's title, Detail's and a full-screen doc's: the line its comment on a
@@ -6304,19 +6831,28 @@ class WheelhouseApp(App):
         if shown:   # a module's doc, in place of what's selected
             read = self.client.read_doc(shown[0])
             blocks, gone = file_blocks(*shown, read), (read.get("gone") or "" if read else "")
-            self.detail.doc_path = os.path.realpath(shown[0])
+            self.detail.doc_path, self.detail.doc_mtime = os.path.realpath(shown[0]), mtime_of(read)
         elif self.viewing:
             blocks = self.conversation(self.viewing)
         elif doc:   # the file rendered, in place of a thread
             document = self.client.document(*self.selected)
             blocks, gone = doc_blocks(doc, document), (document["gone"] or "" if document else "")
-            self.detail.doc_path = doc_path(doc, document)
+            self.detail.doc_path, self.detail.doc_mtime = doc_path(doc, document), mtime_of(document)
         elif self.selected:
             blocks, agent = self.item_blocks(*self.selected)
         else:   # what was shown has gone (a followed session ended, say): not left standing
             blocks = [("note", self.detail_note or NOTHING_SELECTED)]
+        if not shown and not self.viewing and self.selected and self.selected[1] and blocks and blocks[0][0] == "head" \
+                and (table := getattr(self, "items_table", None)) is not None \
+                and f"{self.selected[0]}|{self.selected[1]}" not in table.rows:
+            blocks[0] = ("head", blocks[0][1] + " · *Hidden from the inbox*")   # picked by search, or a module (#273)
         if editor is not None:
-            blocks = editor.shown_in(blocks, self.detail.doc_path, gone)
+            blocks = editor.shown_in(blocks, self.detail.doc_path, gone, self.detail.doc_mtime)
+        # a running compaction's art pinned under the conversation, not in it (#287)
+        docked = next((md for who, md in blocks if who == "dock"), None) if self.viewing and not shown else None
+        blocks = [b for b in blocks if b[0] != "dock"]
+        if (dock := getattr(self, "compactor_dock", None)) is not None:
+            dock.dock(docked)
         for part in self.detail_boxes():   # a pane's parts go with an item, or a note: not a doc's
             part.display = not (shown or self.viewing or doc)
         if not agent and not isinstance(self.screen, ThreadView):   # which may follow one itself
@@ -6334,18 +6870,29 @@ class WheelhouseApp(App):
         thread = None if shown or self.viewing or doc else self.selected
         same, self._detail_thread = thread is not None and thread == getattr(self, "_detail_thread", None), thread
         text = "\n\n".join(md for _, md in blocks)
+        # its items' ids clickable (#274): the session it belongs to, a module's doc none
+        blocks = self.link_ids(blocks, None if shown else self.viewing or (self.selected and self.selected[0]))
         # something else shown (another doc or item, a conversation): from its top (#177)
         shows = (shown[0] if shown else None, self.viewing, None if shown or self.viewing else self.selected)
         fresh, self._detail_shows = shows != getattr(self, "_detail_shows", None), shows
-        if fresh or text != getattr(self, "_detail_text", None):
+        if fresh or text != getattr(self, "_detail_text", None) or blocks != getattr(self, "_detail_linked", None):
             following = ((self.detail_follows or same)
                          and self.detail_scroll.scroll_y >= self.detail_scroll.max_scroll_y - 1)
-            self._detail_text = text
+            self._detail_text, self._detail_linked = text, blocks
             self.detail.update(render(blocks), top=fresh)   # a doc posted again: where it was scrolled to stays
             if following:   # stay at the newest turn or reply, unless the person has scrolled up to read
                 self.call_after_refresh(self.detail_scroll.scroll_end, animate=False)
         if hasattr(self, "detail_panes"):
             self.paint_doc_thread(doc if not shown and not self.viewing else None)
+
+    def link_ids(self, blocks: list[tuple[str, str]], sid: str | None) -> list[tuple[str, str]]:
+        """Blocks with the ids of sid's items in them clickable (search.linked, #274): its
+        people's and Claude's words, its notes and a doc's text, not a heading, a tool line or
+        a PR's link. With no session, as they are."""
+        if not sid:
+            return blocks
+        refs = frozenset(it["ref"] for it in self.client.inbox(sid).items)
+        return [(who, search.linked(md, sid, refs) if who in LINKED else md) for who, md in blocks]
 
     def paint_doc_thread(self, doc) -> None:
         """Detail's doc item: its thread, and Detail laid out for it (DocPanes)."""
@@ -6838,7 +7385,8 @@ class WheelhouseApp(App):
         Not on the app's first refresh with the sessions loaded (a cycle already under way isn't news), never focus
         taken from a text box with something typed in it (the row selected all the same, but for
         the answer box: selecting would swap its text under the person, retarget), nor from a
-        dialog or full screen in front. Several at once: the last listed."""
+        dialog or full screen in front. Nor at all while Detail's doc editor has the focus or
+        unsaved edits (editing_doc). Several at once: the last listed."""
         if not self.client.sessions_loaded():
             return   # the daemon's list not fetched yet (unreachable, busy): no baseline from nothing
         cycles = {(s["id"], s["compaction_id"]) for s in self.sessions
@@ -6850,12 +7398,19 @@ class WheelhouseApp(App):
         main = self.screen is self.main_screen
         typing = isinstance(self.focused, (TextArea, Input)) and bool(self.focused.text if isinstance(self.focused, TextArea)
                                                                        else self.focused.value)
-        if typing and self.focused is self.answer:
+        if typing and self.focused is self.answer or self.editing_doc():
             return
         if self.filter_sid != sid or self.selected != (sid, None):
             self.follow(sid)
         if main and not typing:
             self.items_table.focus()
+
+    def editing_doc(self) -> bool:
+        """Detail's doc editor open with the focus or unsaved edits: a selection the app moves on
+        its own (a compaction starting, a session just launched) would close it under the person,
+        and with edits put Save, the Enter default, under their next keystroke (#282)."""
+        editor = getattr(self, "detail_editor", None)
+        return editor is not None and editor.key is not None and (editor.edited or editor.has_focus)
 
     def compacting(self) -> set[str]:
         """The running sessions being compacted (hub.compacting_now, from the store): what locks and
@@ -7555,7 +8110,10 @@ class WheelhouseApp(App):
 
     def select_row(self, key: str) -> None:
         sid, ref = key.split("|")
-        if self.selected != (sid, ref or None):
+        if key != self.peeked:
+            self.peeked = None
+        if self.selected != (sid, ref or None) or self.shown_doc is not None:
+            self.shown_doc = None   # a module's doc gives way, even to the item it showed over (#281)
             self.selected = (sid, ref or None)   # an unseen decision is seen once looked at (dwelt)
             self.detail_note = None
             self.retarget()
