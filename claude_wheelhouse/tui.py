@@ -4102,6 +4102,11 @@ class Confirm(Dialog):
         self.action_answer(event.button.id == "yes")
 
 
+class QuitConfirm(Confirm):
+    """Quitting asked (WheelhouseApp.action_quit): a Confirm, on No, that Ctrl+Q again answers Yes."""
+    BINDINGS = [Binding("ctrl+q", "answer(True)", show=False)]   # a modal screen hides the app's Ctrl+Q
+
+
 def dropped(app, path: str) -> None:
     """A doc's unsaved edits dropped, and every view of it at once: an editor open on it
     anywhere (Detail's, under full screen) closed, and each viewer shows the file again."""
@@ -4579,7 +4584,7 @@ DESCRIBE = {
     "doc_tab(1)": "With a doc shown tabbed: the tab after",
     "tour": ("The tour, while the title bar's badge shows: resume a tour quit in the middle where it was, or take what's new "
              "(Alt+T, or a click on the badge)"),
-    "quit": "Quit the wheelhouse (sessions carry on without it)",
+    "quit": "Quit the wheelhouse (sessions carry on without it): asked first, on No; Ctrl+Q again quits",
     "toggle_mark": "Mark or unmark the highlighted row",
     "app.mark_finished": "Mark every finished (dimmed) row shown but the pinned, for Delete to clear them together",
     "app.delete_completed": ("Delete every completed item in the inbox (done, answered, seen, merged), those hidden after "
@@ -8022,27 +8027,30 @@ class WheelhouseApp(App):
             self.refresh_data()
 
     async def action_quit(self) -> None:
-        """Quit, but not silently out from under a relaunch: a host stopped and not yet
-        started again would stay dead. Any whose host has gone is started now; for one still
-        stopping, the person chooses. The daemon carries a Relaunch on by itself, so through
-        it there's nothing to ask."""
+        """Ctrl+Q, or the palette's Quit: always asked first, on No, so a mistaken Ctrl+Q (meant
+        as Alt+Q), and the Enter or typing behind it, quits nothing (#296). Ctrl+Q again, while
+        it asks, quits. The one dialog says what quitting leaves: unsaved doc edits lost, and a
+        relaunch not yet carried through (a host stopped and not yet started again would stay
+        dead; any whose host has gone is started now). The daemon carries a Relaunch on by
+        itself, so through it that isn't said."""
         self.refresh_data()
-        if not self.relaunching or self.client.remote:
-            self.exit()
-            return
-        stopping = ", ".join(self.display_name(self.row(sid)) for sid in self.relaunching
+        said = ["Quit the wheelhouse? Sessions carry on without it."]
+        if self.doc_edits:
+            said.append(f"Unsaved edits in {', '.join(sorted(os.path.basename(p) for p in self.doc_edits))} "
+                        "will be lost.")
+        relaunching = set() if self.client.remote else self.relaunching
+        stopping = ", ".join(self.display_name(self.row(sid)) for sid in relaunching
                              if sid not in self.client.compacting)
-        compacting = ", ".join(self.display_name(self.row(sid)) for sid in self.relaunching
+        compacting = ", ".join(self.display_name(self.row(sid)) for sid in relaunching
                                if sid in self.client.compacting)
-        said = []
         if stopping:
-            said.append(f"Still relaunching {stopping}: its host hasn't stopped yet. Quit anyway, and leave it "
-                        "stopped? (Relaunch brings it back.)")
+            said.append(f"Still relaunching {stopping}: its host hasn't stopped yet, and quitting leaves it "
+                        "stopped. (Relaunch brings it back.)")
         if compacting:
             said.append(f"{'Also c' if stopping else 'C'}ompacting {compacting} first, to relaunch it once "
-                        f"compacted. {'' if stopping else 'Quit anyway? '}It keeps running; it is relaunched "
-                        f"only if the wheelhouse is open within {COMPACT_RELAUNCH_WAIT // 60} minutes of Relaunch.")
-        self.push_screen(Confirm(" ".join(said)), lambda yes: yes and self.exit())
+                        f"compacted. It keeps running; it is relaunched only if the wheelhouse is open within "
+                        f"{COMPACT_RELAUNCH_WAIT // 60} minutes of Relaunch.")
+        self.push_screen(QuitConfirm(" ".join(said)), lambda yes: yes and self.exit())
 
     def follow(self, sid: str) -> None:
         """Filter the items to the session and highlight its conversation row, so the right

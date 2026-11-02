@@ -1751,8 +1751,8 @@ async def test_a_raw_burst_then_a_click_on_a_shorter_list_ends_as_typed_slowly(t
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("keys, desc", [
-    (("ctrl+q", "alt+a"), "Ctrl+Q then Alt+A: no Adopt dialog opening as the app shuts down"),
-    (("ctrl+q", "down", "tab", "enter"), "Ctrl+Q then a burst that opens a thread"),
+    (("ctrl+q", "ctrl+q", "alt+a"), "Ctrl+Q twice then Alt+A: no Adopt dialog opening as the app shuts down"),
+    (("ctrl+q", "ctrl+q", "down", "tab", "enter"), "Ctrl+Q twice then a burst that opens a thread"),
 ])
 async def test_keys_after_quit_are_dropped(store, sid, keys, desc):
     """Review 17: once Q has the app exiting, the keys typed after it don't act."""
@@ -1768,7 +1768,7 @@ async def test_keys_after_quit_are_dropped(store, sid, keys, desc):
         raw_keys(app, *keys)
         for _ in range(6):
             await pilot.pause()
-    assert app.return_code == 0 and opened == [], f"{desc}: opened {opened}"
+    assert app.return_code == 0 and opened == ["QuitConfirm"], f"{desc}: opened {opened}"
 
 
 @pytest.mark.anyio
@@ -1929,16 +1929,16 @@ async def test_a_raw_burst_acts_in_the_order_typed(store, tmp_path, monkeypatch,
     ("items", "qa", ("enter", "q"), ("ThreadView", "q", [], False, "park"), "review 15 (1): raw Enter Q doesn't quit"),
     ("items", "conversation", ("enter", "h", "i"), ("Screen", "hi", [], False, "park"),
      "Enter on the conversation row goes to its box, and the letters behind it land there"),
-    ("session-list", "gone", ("enter", "alt+n", "ctrl+q"), ("Screen", "", [], True, "park"),
-     "Enter on a dead session offers a relaunch: Alt+N declines it, then Ctrl+Q quits"),
-    ("items", "qa", ("delete", "alt+n", "ctrl+q"), ("Screen", "", [], True, "park"),
-     "review 15 (2): Delete's Confirm takes Alt+N, then Ctrl+Q quits"),
+    ("session-list", "gone", ("enter", "alt+n", "ctrl+q", "ctrl+q"), ("Screen", "", [], True, "park"),
+     "Enter on a dead session offers a relaunch: Alt+N declines it, then Ctrl+Q twice quits"),
+    ("items", "qa", ("delete", "alt+n", "ctrl+q", "ctrl+q"), ("Screen", "", [], True, "park"),
+     "review 15 (2): Delete's Confirm takes Alt+N, then Ctrl+Q twice quits"),
     ("items", "qa", ("delete", "alt+y", "alt+y"), ("Screen", "", [], False, "park"),
      "review 15 (2): a second Alt+Y once the dialog has closed doesn't dismiss it again"),
     ("items", "qa", ("delete", "alt+n", "alt+n"), ("NewSession", "", [], False, "park"),
      "review 15 (2): a second Alt+N once the dialog has closed is the inbox's: New session"),
-    ("session-list", "alpha", ("alt+p", "alt+c", "ctrl+q"), ("Screen", "", [], True, None),
-     "review 15 (2): Alt+P on a session asked to park offers the Choice, Alt+C cancels the request, then Ctrl+Q quits"),
+    ("session-list", "alpha", ("alt+p", "alt+c", "ctrl+q", "ctrl+q"), ("Screen", "", [], True, None),
+     "review 15 (2): Alt+P on a session asked to park offers the Choice, Alt+C cancels the request, then Ctrl+Q twice quits"),
     ("session-list", "alpha", ("alt+p", "alt+c", "alt+c"), ("CompactSession", "", [], False, None),
      "review 15 (2): a second Alt+C once the Choice has closed is the inbox's: Compact"),
     ("items", "qa", ("f1", "f1"), ("Screen", "", [], False, "park"),
@@ -2015,7 +2015,7 @@ async def burst_outcome(store, tmp_path, monkeypatch, focus, at, burst, desc, sl
 @pytest.mark.parametrize("focus, at, burst, want, desc", [
     ("items", "qa", ("delete", "enter", "alt+y"), {"stack": ("Screen",), "open": ["which db?"]},
      "review 16 (1): Delete's Confirm opens on No, so Enter answers No, and the Y behind it isn't a Yes"),
-    ("items", "qa", ("delete", "enter", "ctrl+q"), {"stack": ("Screen",), "open": ["which db?"], "quit": True},
+    ("items", "qa", ("delete", "enter", "ctrl+q", "ctrl+q"), {"stack": ("Screen",), "open": ["which db?"], "quit": True},
      "review 16 (1): Enter on No answers No, then Q quits"),
     ("session-list", "gone", ("enter", "enter", "alt+y"), {"stack": ("Screen",), "launched": []},
      "review 16 (1): Relaunch's Confirm opens on No, so Enter declines, and the Y behind it doesn't relaunch"),
@@ -2023,7 +2023,7 @@ async def burst_outcome(store, tmp_path, monkeypatch, focus, at, burst, desc, sl
      "review 16 (1): the Choice opens on Cancel request: Enter cancels the request, and the F behind it isn't Force"),
     ("session-list", "alpha", ("alt+p", "enter", "escape"), {"stack": ("Screen",), "pending": None},
      "review 16 (1): Enter cancels the request, and the Esc behind it isn't Leave it"),
-    ("session-list", "alpha", ("alt+r", "x", "enter", "ctrl+q"), {"stack": ("Screen",), "names": ["gone", "x"], "quit": True},
+    ("session-list", "alpha", ("alt+r", "x", "enter", "ctrl+q", "ctrl+q"), {"stack": ("Screen",), "names": ["gone", "x"], "quit": True},
      "review 16 (1): Rename takes X, Enter renames to it, then Q quits"),
     ("session-list", "alpha", ("alt+r", "enter", "enter"), {"stack": ("Screen",), "names": ["alpha", "gone"]},
      "review 16 (2): Enter closes Rename once, and the second Enter is the session list's"),
@@ -2035,7 +2035,7 @@ async def burst_outcome(store, tmp_path, monkeypatch, focus, at, burst, desc, sl
      "C cancels the request before the P behind it, which asks afresh: Park's dialog, as alpha runs in the wheelhouse"),
     ("session-list", "alpha", ("alt+m", "down", "enter"), {"stack": ("Screen",), "model": "claude-sonnet-5-5"},
      "M opens Model, Down moves to the next model before Enter takes it"),
-    ("items", "qa", ("alt+m", "enter", "ctrl+q"), {"stack": ("Screen",), "model": "claude-opus-5-5", "quit": True},
+    ("items", "qa", ("alt+m", "enter", "ctrl+q", "ctrl+q"), {"stack": ("Screen",), "model": "claude-opus-5-5", "quit": True},
      "Model's Enter takes the highlighted model, then the Q behind it quits"),
     ("session-list", "alpha", ("alt+m", "escape", "alt+m", "escape"), {"stack": ("Screen",), "model": None},
      "Esc leaves the model as it was, each time"),
@@ -2057,14 +2057,14 @@ async def test_a_key_lands_before_the_next_acts(store, tmp_path, monkeypatch, fo
     ("items", "qa", ("alt+h", "enter", "alt+y"), "a focused button's Enter, then a dialog key"),
     ("session-list", "alpha", ("alt+p", "enter", "escape"), "the Choice's Enter, then Esc"),
     ("session-list", "alpha", ("alt+p", "alt+c", "alt+p"), "a dialog's answer, then a key that reads what it did"),
-    ("session-list", "alpha", ("alt+r", "x", "enter", "ctrl+q"), "an input's Enter, then a key on the screen behind"),
+    ("session-list", "alpha", ("alt+r", "x", "enter", "ctrl+q", "ctrl+q"), "an input's Enter, then a key on the screen behind"),
     ("session-list", "alpha", ("alt+r", "x", "enter", "enter"), "an input's Enter twice"),
     ("session-list", "alpha", ("alt+n", "tab", "enter", "escape", "tab", "a"), "the picker opened and closed by keys"),
-    ("session-list", "alpha", ("alt+n", "a", "b", "escape", "ctrl+q"), "typing in a dialog, then closing it"),
+    ("session-list", "alpha", ("alt+n", "a", "b", "escape", "ctrl+q", "ctrl+q"), "typing in a dialog, then closing it"),
     ("session-list", "gone", ("enter", "enter", "alt+y"), "Enter on a dead session's relaunch offer declines it"),
     ("items", "qa", ("enter", "x", "escape", "tab", "y"), "a thread left with Esc, then the inbox's box"),
     ("items", "qa", ("tab", "a", "b", "backspace", "ctrl+enter", "down"), "typing, editing and sending"),
-    ("items", "qa", ("f1", "f1", "ctrl+q"), "F1 opens and closes the keys, then Ctrl+Q quits"),
+    ("items", "qa", ("f1", "f1", "ctrl+q", "ctrl+q"), "F1 opens and closes the keys, then Ctrl+Q twice quits"),
     ("session-list", "alpha", ("alt+m", "down", "down", "enter", "alt+m", "escape"), "Model chosen by keys, opened again"),
     ("stats", "alpha", ("right", "right", "left", "tab", "right"), "the slider's arrows, then Tab on round"),
 ])
@@ -7736,7 +7736,11 @@ async def test_quitting_through_the_daemon_leaves_a_relaunch_to_it(store, sid, s
         monkeypatch.setattr(app.client, "refresh", lambda: None)
         await app.action_quit()
         await pilot.pause()
-        assert exits == [True] and not isinstance(app.screen, Confirm), "nothing to ask: the daemon carries it on"
+        assert exits == [] and app.screen.prompt == "Quit the wheelhouse? Sessions carry on without it.", \
+            "asked, but not about the relaunch: the daemon carries it on (#296)"
+        await pilot.press("ctrl+q")
+        await pilot.pause()
+        assert exits == [True] and not isinstance(app.screen, Confirm), "Ctrl+Q again quits"
 
 
 # the idle app draws only what changes (#16)
