@@ -3026,6 +3026,43 @@ async def test_an_undo_that_shrinks_the_answer_box_keeps_the_cursor_in_it(store,
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("extra, keys, desc", UNDONE_ACROSS_THE_SCROLLBAR)
+async def test_an_undo_that_shrinks_a_dialogs_text_box_keeps_the_cursor_in_it(extra, keys, desc):
+    """The same for the dialogs' text boxes (a new session's brief, Compact's notes, Run's text)."""
+    class Box(App):
+        CSS = "UndoInBounds { height: 8; }"
+
+        def compose(self) -> ComposeResult:
+            yield tui.UndoInBounds()
+
+    app = Box()
+    async with app.run_test(size=(80, 24)) as pilot:
+        box = app.query_one(tui.UndoInBounds)
+        box.focus()
+        await undone_across_the_scrollbar(pilot, box, extra, keys, desc)
+
+
+@pytest.mark.anyio
+async def test_a_redone_suggestion_leaves_the_cursor_after_it(store, sid):
+    """A taken suggestion keeps the selection's offset, so its redo lands the cursor
+    relative to where it is: not moved first, it stays after the emoji (#301's review)."""
+    store.post_item(sid, "question", "which db?")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.query_one("#items", DataTable).move_cursor(row=0)
+        await pilot.pause()
+        app.answer.focus()
+        await pilot.press(*"go", "space", "colon", *"star", "enter")
+        await pilot.pause()
+        taken = (app.answer.text, app.answer.cursor_location)
+        assert ":" not in taken[0], f"the suggestion taken: {taken}"
+        await pilot.press("ctrl+z", "ctrl+y")
+        await pilot.pause()
+        assert (app.answer.text, app.answer.cursor_location) == taken, "redone: the cursor after the emoji again"
+
+
+@pytest.mark.anyio
 async def test_a_pasted_code_converts_on_send(store, sid):
     store.post_item(sid, "question", "which db?")
     app = WheelhouseApp(store)
