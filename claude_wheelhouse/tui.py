@@ -6567,6 +6567,7 @@ class WheelhouseApp(App):
         as a doc item shows, with no answer box."""
         self.shown_doc = (path, title)
         self.items_table.show_cursor = False   # picked elsewhere: a click on the inbox's row is a fresh pick (#281)
+        self.each_pane("showing", None, None)   # no item in Detail: the PRs pane's highlight hidden too (#305)
         self.paint_sendbar()
         self.paint_detail()
 

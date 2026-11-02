@@ -766,6 +766,51 @@ async def test_a_pick_in_one_pane_clears_the_others_highlight(store, sid, github
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("first, then, desc", [
+    ("prs", "adr", "a PR picked in the pane, then a decision in the Decisions pane"),
+    ("inbox", "adr", "a PR picked in the inbox, then a decision in the Decisions pane"),
+    ("prs", "item", "a PR picked in the pane, then a decision item in the inbox"),
+    ("inbox", "item", "a PR picked in the inbox, then a decision item in the inbox"),
+])
+async def test_a_decision_shown_hides_the_prs_highlight(store, sid, github, tmp_path, monkeypatch, first, then, desc):
+    """#305: Detail showing a decision left the PRs pane's highlight on the PR it showed
+    before, two panes lit at once; picking the PR again lights it, alone, and shows it."""
+    design = pytest.importorskip("claude_wheelhouse_design", reason="installed without the design module")
+    (tmp_path / ".git").mkdir(exist_ok=True)
+    (tmp_path / "docs" / "adr").mkdir(parents=True)
+    (tmp_path / "docs" / "adr" / "0003-ACCEPTED-wal.md").write_text("# WAL\n\nWrite-ahead logging.\n")
+    monkeypatch.setattr(api, "load", lambda: [api.Loaded("prs", prs.module), api.Loaded("design", design.module)])
+    d = store.post_item(sid, "decision", "Chose WAL", why="durability")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(200, 50)) as pilot:
+        await settled(app, pilot)
+        app.each_pane("tick")   # the Decisions pane asks again once the hub has read its sessions
+        decisions = app.query_one("#decision-list")
+        await until(pilot, lambda: decisions.row_count == 1, "the decision listed")
+        table = app.query_one("#pr-list")
+        if first == "prs":
+            await on_pr(app, pilot, URL.format(109))
+        else:
+            await pick_in_inbox(app, pilot, f"{sid}|PR109")
+        await until(pilot, lambda: table.show_cursor, f"{desc}: PR109 lit")
+        if then == "adr":
+            await pilot.click("#decision-list", offset=(2, 1))
+            await pilot.pause()
+            assert "Write-ahead logging." in app._detail_text, f"{desc}: the decision in Detail"
+            assert decisions.show_cursor, f"{desc}: the Decisions' lit"
+        else:
+            await pick_in_inbox(app, pilot, f"{sid}|{d}")
+            assert app.selected == (sid, d), f"{desc}: the decision item in Detail"
+        assert not table.show_cursor, f"{desc}: the PRs pane's highlight hidden"
+        await pilot.click("#pr-list", offset=(2, 1 + table.get_row_index(URL.format(109))))
+        await pilot.pause()
+        assert app.selected == (sid, "PR109") and "Write-ahead" not in app._detail_text, f"{desc}: PR109 back"
+        assert table.show_cursor and pane.Prs.key_at(table) == URL.format(109), f"{desc}: PR109 lit again"
+        assert not decisions.show_cursor, f"{desc}: the Decisions' hidden in turn"
+        assert app.items_table.show_cursor, f"{desc}: the inbox on PR109 too"
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize("size", [(160, 40), (100, 30)])
 @pytest.mark.parametrize("follow, scope, listed, title, desc", [
     (None, "mine", ["PR108", "PR109", "PR5"], "PRs · mine", "none selected: every session's"),
