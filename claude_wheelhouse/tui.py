@@ -5141,9 +5141,9 @@ class WheelhouseApp(App):
         self.undoing = False   # a Ctrl+Z's calls under way (action_undo): Delete and Ctrl+Delete refused meanwhile
         self.deleting = 0   # those Deletes and Ctrl+Zs, counted: Ctrl+Z, Ctrl+R and a pin wait for them (behind_deletes)
         self.behind: list[tuple[set, int, Callable[[], None]]] = []   # what waits, in the order asked: the calls it waits for, its number
-        self.undo: tuple[str, list] | None = None   # what Ctrl+Z undoes, said, and the rows as they stood (undoable)
-        self.typed = itertools.count()   # each act on the inbox numbered as typed (#312): the last typed is the one Ctrl+Z undoes
-        self.undo_typed = -1   # self.undo's number
+        self.typed = itertools.count()   # each act on the inbox numbered as typed (#312): Ctrl+Z undoes the last typed before it
+        self.undos: dict[int, tuple[str, list]] = {}   # what Ctrl+Z undoes, by the act's number: said, and the rows as they stood (undoable)
+        self.undo_waits: set[int] = set()   # the numbers of the Ctrl+Zs waiting for a Delete to land (action_undo)
         self.acting: int | None = None   # the number of the act landing or let through now (as_typed)
         self.ranks: dict[str, tuple] = {}   # each item's rank as last shown
         self.sort_keys: dict[tuple, tuple] = {}   # each item's sort key as it stands (sort_key)
@@ -8586,10 +8586,12 @@ class WheelhouseApp(App):
 
     def undoable(self, said: str, rows: list) -> None:
         """The person's last act on the inbox, for Ctrl+Z: what it did, said, and each row it
-        changed as it stood before (restore). One step: the next act replaces it."""
-        at = next(self.typed) if self.acting is None else self.acting
-        if at > self.undo_typed:   # not a Delete landing after one typed later (#312)
-            self.undo, self.undo_typed = (said, rows), at
+        changed as it stood before (restore). One step: the next act replaces it. Kept by the
+        act's number as typed (#312), Deletes landing in any order: the last typed, and for each
+        Ctrl+Z still waiting, the last typed before it."""
+        self.undos[next(self.typed) if self.acting is None else self.acting] = (said, rows)
+        keep = {max(self.undos)} | {max(below) for n in self.undo_waits if (below := [k for k in self.undos if k < n])}
+        self.undos = {k: v for k, v in self.undos.items() if k in keep}
 
     def restore(self, item, acted: list) -> None:
         """Ctrl+Z, on its worker thread (action_undo): an item put back as it stood, from its row
@@ -8621,17 +8623,21 @@ class WheelhouseApp(App):
         if isinstance(self.focused, (TextArea, Input)) or self.screen is not self.screen_stack[0]:
             return
         if self.behind_deletes(self.undo_now):   # its act isn't the last until it lands
+            self.undo_waits.add(self.behind[-1][1])
             self.notify("Ctrl+Z: once the undo under way lands" if self.undoing else "Ctrl+Z: once the delete under way lands")
             return
         self.undo_now()
 
     def undo_now(self) -> None:
-        """Ctrl+Z's undo, at once or once the delete it followed has landed (behind_deletes),
-        before a Delete typed after it can become the last act."""
-        if self.undo is None:
+        """Ctrl+Z's undo, at once or once the delete it followed has landed (behind_deletes): the
+        last act typed before it, never one typed after. Once: that act and any before it gone."""
+        self.undo_waits.discard(self.acting)
+        before = [k for k in self.undos if self.acting is None or k < self.acting]
+        if not before:
             self.notify("nothing to undo")
             return
-        (said, rows), self.undo = self.undo, None
+        said, rows = self.undos[max(before)]
+        self.undos = {k: v for k, v in self.undos.items() if k > max(before)}
         at = datetime.now(timezone.utc)
         for item in rows:   # back in sight for autocleanse's minutes afresh
             self.brought_back[item_key(item)] = at

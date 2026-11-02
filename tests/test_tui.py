@@ -9531,6 +9531,8 @@ async def test_delete_takes_rows_at_once_and_the_hub_call_lands_after(store, sid
      "Ctrl+R on the marked T2, T1 marked after: only T2 back, T1's mark kept"),
     ("delete ctrl+z to-T3 delete", False, {"T1", "T3"}, set(), set(),
      "Ctrl+Z typed after Delete on T2, then Delete on T3: T2's delete undone, T3's stands"),
+    ("delete ctrl+z to-T3 delete", True, {"T1", "T3"}, set(), set(),
+     "the same, T3's Delete landing first: still T2's undone, the act typed before the Ctrl+Z"),
     ("delete to-T3 delete ctrl+z", True, {"T1", "T2"}, set(), set(),
      "Ctrl+Z after Deletes on T2 then T3, T3's landing first: T3's undone, the last typed"),
     ("delete alt+p to-T1", False, {"T1", "T2"}, {"T2"}, set(),
