@@ -961,10 +961,6 @@
 "Cat: What is it with you monkeys? Tokens in, tokens out. Just lick it clean!"
 ],
 [
-"Rimmer: I've written to the Space Corps about this compaction.",
-"Holly: They've compacted your letter."
-],
-[
 "Lister: The summary says we \"ran some tests\".",
 "Kryten: We ran four hundred, sir. Mostly into walls."
 ],
@@ -1032,15 +1028,15 @@
 [
 0,
 [
-"Rimmer: I've written to the Space Corps about this compaction.",
-"Holly: They've compacted your letter."
+"Lister: The summary says we \"ran some tests\".",
+"Kryten: We ran four hundred, sir. Mostly into walls."
 ]
 ],
 [
 22.647538602976795,
 [
-"Kryten: I could compact it faster with my groinal attachment, sir.",
-"Lister: Kryten. No."
+"Ace: Stand back, chaps. I'll compact this one myself.",
+"Lister: What a guy!"
 ]
 ],
 [
@@ -1104,8 +1100,8 @@
 [
 276.61144314435137,
 [
-"Ace: Stand back, chaps. I'll compact this one myself.",
-"Lister: What a guy!"
+"Kryten: How do you feel, Holly?",
+"Holly: Lighter. Like a haircut, only on the inside."
 ]
 ],
 [

@@ -72,7 +72,6 @@ EXCERPTS: tuple[tuple[str, ...], ...] = (
     ("Kryten: Sirs! The scroll bar! It's tiny!", "Cat: Hey, I've seen smaller. Not on me, though."),
     ("Kryten: A whole session in a paragraph, sir? Like a duvet into an egg cup!",),
     ("Cat: What is it with you monkeys? Tokens in, tokens out. Just lick it clean!",),
-    ("Rimmer: I've written to the Space Corps about this compaction.", "Holly: They've compacted your letter."),
     ("Lister: The summary says we \"ran some tests\".", "Kryten: We ran four hundred, sir. Mostly into walls."),
     ("Lister: Can't we compact in Better Than Life instead?",
      "Kryten: Sir, in there the summary would say you won."),
