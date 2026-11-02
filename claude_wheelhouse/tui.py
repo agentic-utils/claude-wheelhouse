@@ -1806,6 +1806,17 @@ class Compose(TextArea):
         self.focus()
         return True
 
+    def edit(self, edit):
+        # Textual moves the cursor, and scrolls to it, before it grows the box's virtual size
+        # for the edit, so the scroll is clamped to the old height: Enter on the last row
+        # visible, or a line wrapping past it, left the new row out of sight (#298). Once
+        # the size is right, the same scroll again, for an edit that moved the cursor
+        before = self.selection
+        result = super().edit(edit)
+        if self.selection != before:
+            self.scroll_cursor_visible()
+        return result
+
     async def _on_key(self, event) -> None:
         # Enter here; Tab is a binding, which acts before the box sees its key (take_key),
         # so cycle_focus takes the suggestion there
