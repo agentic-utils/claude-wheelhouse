@@ -544,3 +544,41 @@ async def test_a_file_rewritten_unchanged_is_no_change_to_ask_about(store, sid, 
         await pilot.pause()
         assert not isinstance(app.screen, SaveConflict), "no 409: the base's mtime taken up"
         assert doc[1].read_text().startswith("# The plan\n\nKept. ")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("trigger, edits, focus, desc", [
+    ("compaction", True, "editor", "typing in the editor: half-typed edits never saved by the next Enter"),
+    ("compaction", True, "viewer", "unsaved edits, the focus on the viewer: the editor stays open on them"),
+    ("compaction", False, "editor", "a clean editor with the focus: left open"),
+    ("launch", True, "viewer", "a launch, unsaved edits, the focus on the viewer (the editor's own: a text box's guard)"),
+])
+async def test_the_app_never_moves_the_selection_off_a_doc_being_edited(store, sid, doc, tmp_path, monkeypatch,
+                                                                         trigger, edits, focus, desc):
+    """#282 (#277 with #290): a compaction starting in another session, or a session just
+    launched, moved the selection, closing Detail's editor; LeaveEdits' Save, the Enter default,
+    then wrote half-typed text to the file. Neither selection nor focus moves while it's edited."""
+    from claude_wheelhouse import liveness
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
+    other = store.create_session(str(tmp_path), name="alpha", runner="sdk")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        view, editor = await shown(app, pilot, doc[0])
+        await click(pilot, view, row_with(view, "Build it."))
+        if edits:
+            editor.insert("Typing ")
+        (view if focus == "viewer" else editor).focus()
+        await pilot.pause()
+        if trigger == "compaction":
+            store.command(other, "compact")
+        else:   # just launched here: the app's pick (select_new), not the person's
+            app.select_new, app.select_from = other, app.selected
+        app.refresh_data()
+        await pilot.pause()
+        await pilot.pause()
+        assert app.selected == (sid, doc[0]), f"{desc}: the selection kept, {app.selected}"
+        assert not isinstance(app.screen, LeaveEdits) and editor.display, f"{desc}: the editor open, nothing asked"
+        assert app.focused is (view if focus == "viewer" else editor), f"{desc}: the focus kept, {app.focused}"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert doc[1].read_text() == DOC, f"{desc}: nothing written"

@@ -6074,7 +6074,8 @@ class WheelhouseApp(App):
         if self.select_new in table.rows:   # just launched or forked here: the app's pick, not theirs
             sid, picked, self.select_new = self.select_new, self.picked, None
             # not if they've picked another meanwhile, nor under text they're typing (#116)
-            if self.selected == self.select_from and not isinstance(self.focused, (TextArea, Input)):
+            if self.selected == self.select_from and not isinstance(self.focused, (TextArea, Input)) \
+                    and not self.editing_doc():
                 self.follow(sid)
                 self.picked = picked   # so no turn of its first run counts as one the person watched (saw)
 
@@ -6597,7 +6598,6 @@ class WheelhouseApp(App):
             self.show_item(sid, ref)
             self.paint_items()
             return
-        self.shown_doc = None
         self.peeked = key
         table.show_cursor = False
         self.select_row(key)
@@ -6615,7 +6615,6 @@ class WheelhouseApp(App):
         if key in table.locked or (hidden and self.locks(item, self.cutoffs())):   # one autocleanse hid too
             self.notify(COMPACTING_LOCKED, severity="warning")
             return False
-        self.shown_doc = None
         self.peeked = None
         if hidden:   # autocleanse hid it (a Landed line, a merged PR): selected, it's back (#235)
             self.select_row(key)
@@ -7385,7 +7384,8 @@ class WheelhouseApp(App):
         Not on the app's first refresh with the sessions loaded (a cycle already under way isn't news), never focus
         taken from a text box with something typed in it (the row selected all the same, but for
         the answer box: selecting would swap its text under the person, retarget), nor from a
-        dialog or full screen in front. Several at once: the last listed."""
+        dialog or full screen in front. Nor at all while Detail's doc editor has the focus or
+        unsaved edits (editing_doc). Several at once: the last listed."""
         if not self.client.sessions_loaded():
             return   # the daemon's list not fetched yet (unreachable, busy): no baseline from nothing
         cycles = {(s["id"], s["compaction_id"]) for s in self.sessions
@@ -7397,12 +7397,19 @@ class WheelhouseApp(App):
         main = self.screen is self.main_screen
         typing = isinstance(self.focused, (TextArea, Input)) and bool(self.focused.text if isinstance(self.focused, TextArea)
                                                                        else self.focused.value)
-        if typing and self.focused is self.answer:
+        if typing and self.focused is self.answer or self.editing_doc():
             return
         if self.filter_sid != sid or self.selected != (sid, None):
             self.follow(sid)
         if main and not typing:
             self.items_table.focus()
+
+    def editing_doc(self) -> bool:
+        """Detail's doc editor open with the focus or unsaved edits: a selection the app moves on
+        its own (a compaction starting, a session just launched) would close it under the person,
+        and with edits put Save, the Enter default, under their next keystroke (#282)."""
+        editor = getattr(self, "detail_editor", None)
+        return editor is not None and editor.key is not None and (editor.edited or editor.has_focus)
 
     def compacting(self) -> set[str]:
         """The running sessions being compacted (hub.compacting_now, from the store): what locks and
