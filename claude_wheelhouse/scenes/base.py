@@ -20,7 +20,8 @@ WIDTH = 28
 BIG_WIDTH, BIG_HEIGHT = 60, 12   # 11 rows of art and the caption
 TICKS = 6
 # a frame's cells, cell for cell, carry the role each is drawn in, so the app colours it without
-# parsing the art (tui.ART_STYLE)
+# parsing the art (tui.ART_STYLE). One palette for every scene, named for the first: a scene
+# draws its own pieces in whichever of these colours suits them
 ROLES = {"w": "wall", "s": "seam", "c": "crew", "g": "sludge", "k": "spark", "h": "hatch", "d": "dianoga", " ": "text"}
 
 Frame = tuple[tuple[str, ...], tuple[str, ...]]   # rows, and each row's roles

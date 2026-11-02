@@ -61,16 +61,17 @@ def detail(state: str, origin: str | None, note: str, stamp: str) -> str:
 
 
 def dock_text(scene: Scene, state: str, since: float, origin: str | None, note: str, stamp: str) -> str:
-    """The running cycle's "dock" entry (#287): its scene, its stage (requested drawn as
-    preparing), when that stage began (epoch, the animation's time zero) and its dim line, one a
-    line (docked)."""
+    """The running cycle's "dock" entry (#287): its stage (requested drawn as preparing), when
+    that stage began (epoch, the animation's time zero), its dim line and its scene (#304, last,
+    so an app on older code reads the first three as it always has), one a line (docked)."""
     shown = state if state in scene.walls else "preparing"
-    return "\n".join((scene.name, shown, repr(since), detail(state, origin, note, stamp)))
+    return "\n".join((shown, repr(since), detail(state, origin, note, stamp), scene.name))
 
 
 def docked(text: str) -> tuple[Scene, str, float, str]:
-    """A dock entry's scene, stage, start and dim line (dock_text)."""
-    name, state, since, line = (text.split("\n", 3) + ["", "", ""])[:4]
+    """A dock entry's scene, stage, start and dim line (dock_text). One from a daemon on older
+    code has no scene line: the first registered scene (Star Wars, then the only one)."""
+    state, since, line, name = (text.split("\n", 3) + ["", "", ""])[:4]
     scene = SCENES.get(name) or next(iter(SCENES.values()))
     try:
         return scene, state, float(since), line

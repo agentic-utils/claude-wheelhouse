@@ -179,6 +179,16 @@ def test_dock_text_and_state_of_round_trip(scene, state):
     assert compactor.state_of("Han: hello") is None
 
 
+@pytest.mark.parametrize("text, want, desc", [
+    ("compacting\n1761990000.5\nasked for by you (Compact) · 23:30Z", (SW, "compacting", 1761990000.5, "asked for by you (Compact) · 23:30Z"), "a daemon on older code: no scene line, Star Wars"),
+    ("compacting\n1761990000.5\n\nstar_wars", (SW, "compacting", 1761990000.5, ""), "no dim line, the scene still read"),
+    ("preparing\nnot a time\n\nunknown", (SW, "preparing", 0.0, ""), "a scene no longer registered, a bad time: the first scene, time zero"),
+])
+def test_docked_reads_every_dock_entry(text, want, desc):
+    """#304: the scene goes last, so the stage, start and line stay where older code reads them."""
+    assert compactor.docked(text) == want, desc
+
+
 def test_failed_cheers_and_cancelled_is_caught_pulling_back():
     """#287 review: a failure's crew all have their arms up; a cancelled still shows the walls
     part way back out, not as open as preparing's."""
