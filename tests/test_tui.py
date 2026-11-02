@@ -2990,6 +2990,41 @@ async def test_the_answer_box_follows_the_cursor_down(store, sid, tmp_path, box,
             f"{desc}: the cursor's row {row} in sight, rows {area.scroll_offset.y} to {area.scroll_offset.y + height - 1}"
 
 
+async def undone_across_the_scrollbar(pilot, area, extra: str, keys: list[str], desc: str) -> None:
+    """#301: a box as full as it shows (plus `extra`), the cursor at the end, then `keys`,
+    whose last undo or redo takes the box back to just what it shows, its scrollbar
+    going: no ValueError, and the text and cursor as before the first key."""
+    base = "\n".join(["line"] * area.scrollable_content_region.height)
+    area.text = base + extra
+    area.move_cursor(area.document.end)
+    await pilot.pause()
+    for key in keys:
+        await pilot.press(key)
+        await pilot.pause()
+    assert area.text == base, f"{desc}: the text as it was"
+    assert area.cursor_location == area.document.end, f"{desc}: the cursor at its end"
+
+
+UNDONE_ACROSS_THE_SCROLLBAR = [
+    ("", ["enter", "ctrl+z"], "Enter undone"),
+    ("", ["enter", "ctrl+z", "ctrl+y", "ctrl+z"], "Enter undone, redone and undone again"),
+    ("\n", ["backspace", "ctrl+z", "ctrl+y"], "a line joined, undone and redone"),
+]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("extra, keys, desc", UNDONE_ACROSS_THE_SCROLLBAR)
+async def test_an_undo_that_shrinks_the_answer_box_keeps_the_cursor_in_it(store, sid, extra, keys, desc):
+    store.post_item(sid, "question", "which db?")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.query_one("#items", DataTable).move_cursor(row=0)
+        await pilot.pause()
+        app.answer.focus()
+        await undone_across_the_scrollbar(pilot, app.answer, extra, keys, desc)
+
+
 @pytest.mark.anyio
 async def test_a_pasted_code_converts_on_send(store, sid):
     store.post_item(sid, "question", "which db?")

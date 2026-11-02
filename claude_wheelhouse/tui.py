@@ -1739,6 +1739,23 @@ class FollowsCursor(TextArea):
             self.scroll_cursor_visible()
         return result
 
+    # Textual sizes the box for an undo or redo before it puts the selection back, so the
+    # cursor is still where the batch left it: an undone Enter's row, gone. When the box
+    # shrinks past its scrollbar, the scrollbar's going scrolls to that row and raises
+    # ValueError (#301). So the cursor goes first to where the batch starts, which every
+    # edit in it leaves in place; Textual then puts the selection back as before
+    def undo(self) -> None:
+        self.cursor_to_start(self.history.undo_stack)
+        super().undo()
+
+    def redo(self) -> None:
+        self.cursor_to_start(self.history.redo_stack)
+        super().redo()
+
+    def cursor_to_start(self, stack: list) -> None:
+        if stack:
+            self.selection = Span.cursor(min(edit.top for edit in stack[-1]))
+
 
 class Compose(FollowsCursor):
     """An answer box. Ctrl+A selects all of it, as in other editors (TextArea's own is line
