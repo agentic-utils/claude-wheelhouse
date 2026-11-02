@@ -217,9 +217,9 @@ async def test_edits_in_detail_show_full_screen(store, sid, doc):
         assert full_editor.text == editor.text, "its editor opens on the same buffer"
         full_editor.insert("More. ")
         await pilot.pause()
-        for key in ("escape", "enter", "escape"):   # asked, Save, and out
-            await pilot.press(key)
-            await pilot.pause()
+        await pressed(pilot, "escape", lambda: isinstance(app.screen, LeaveEdits))   # asked,
+        await pressed(pilot, "enter", lambda: "More. " in doc[1].read_text())   # Save,
+        await pressed(pilot, "escape", lambda: not isinstance(app.screen, tui.DocView))   # and out
         assert not isinstance(app.screen, tui.DocView), "full screen left, its edits saved"
         app.refresh_data()
         await pilot.pause()
@@ -267,8 +267,7 @@ async def test_the_cursor_into_another_block_scrolls_the_viewer_the_least(store,
         view, editor = await shown(app, pilot, long_doc)
         await click(pilot, view, row_with(view, "Section 0"))
         top = view.parent.scroll_y
-        await pilot.press("down")
-        await pilot.pause()
+        await pressed(pilot, "down", lambda: editor.cursor_location[0] == 1)
         assert view.parent.scroll_y == top, "within one block, or into one in view, nothing moves"
         bottom = round(view.parent.scroll_y) + view.parent.scrollable_content_region.height
         hidden = next(i for i in range(40) if row_with(view, f"Section {i}") >= bottom)
@@ -294,9 +293,8 @@ async def test_a_render_keeps_the_cursors_block_on_its_row(store, sid, long_doc)
         editor.move_cursor((0, 0))
         editor.insert("## A new first section\n\nWith prose.\n\n")
         editor.move_cursor((52, 0))   # Section 12's heading, four lines down
-        await pilot.press("ctrl+j")
-        await pilot.pause()
-        await pilot.pause()
+        await pressed(pilot, "ctrl+j", lambda: "A new first section" in text_of(view))
+        await pilot.pause()   # anchored, after the refresh
         assert view.block_rows(52)[0] - round(view.parent.scroll_y) == before, "the block on its row, the rows above grown"
 
 
@@ -312,9 +310,7 @@ async def test_a_click_on_a_block_the_edits_took_out_keeps_the_cursor(store, sid
         await pilot.pause()
         app.items_table.move_cursor(row=item_row(app, q))
         await pilot.pause()
-        await pilot.press("escape")   # Keep editing: back on the doc
-        await pilot.pause()
-        await pilot.pause()
+        await pressed(pilot, "escape", lambda: editor.display and editor.cursor_location == (2, 3))   # Keep editing
         assert editor.display and editor.cursor_location == (2, 3), "open again where it was"
         assert not app.answer.display, "laid out for it at once, no tick needed: the box gone from under it"
         view.parent.scroll_to(y=row_with(view, "one"), animate=False, immediate=True)   # in the viewer's smaller room
@@ -332,9 +328,8 @@ async def test_discard_full_screen_clears_detail_at_once(store, sid, doc):
         await edited(app, pilot, view, editor)
         full, full_editor = await shown(app, pilot, doc[0], full=True)
         await click(pilot, full, row_with(full, "The plan"))
-        for key in ("escape", "alt+d"):
-            await pilot.press(key)
-            await pilot.pause()
+        await pressed(pilot, "escape", lambda: isinstance(app.screen, LeaveEdits))
+        await pressed(pilot, "alt+d", lambda: editor.key is None)
         assert not editor.display and editor.key is None, "Detail's editor on it closed too"
         assert app.screen_stack[0].query_one("#detail-pane").border_title == "Detail", "its title at once"
         assert "Kept" not in "\n".join(view._layout(view.size.width)[1]), "and its viewer the file's"
@@ -571,6 +566,10 @@ async def test_the_app_never_moves_the_selection_off_a_doc_being_edited(store, s
         assert app.selected == (sid, doc[0]), f"{desc}: the selection kept, {app.selected}"
         assert not isinstance(app.screen, LeaveEdits) and editor.display, f"{desc}: the editor open, nothing asked"
         assert app.focused is (view if focus == "viewer" else editor), f"{desc}: the focus kept, {app.focused}"
-        await pilot.press("enter")
-        await pilot.pause()
+        typed = editor.text
+        if focus == "editor":   # Enter types a line there: landed once the buffer has it
+            await pressed(pilot, "enter", lambda: editor.text != typed)
+        else:   # Enter does nothing on the viewer: landed once a Ctrl+A behind it has selected the doc
+            await pilot.press("enter")
+            await pressed(pilot, "ctrl+a", lambda: view.text_selection is not None)
         assert doc[1].read_text() == DOC, f"{desc}: nothing written"
