@@ -1454,6 +1454,7 @@ async def test_a_raw_burst_acts_on_the_cursors_session(store, sid, tmp_path, fil
         if isinstance(app.screen, Confirm):   # Delete on an open question asks first (#151): yes
             await pilot.press("alt+y")
             await pilot.pause()
+        await landed(app, pilot)   # Delete's call goes off the UI thread (delete_off_thread): landed before it's read
         desc = f"{arrow.title()}, {burst} from the {where} list, {'following A' if filtered else 'unfiltered'}"
         # the session acted on: following A, Down goes to A's question; unfiltered, Up goes to B and the list's Down picks A
         ctx = sid if (where, filtered) in (("items", True), ("sessions", False)) else other
@@ -3479,6 +3480,10 @@ async def test_an_unseen_decision_is_seen_only_after_the_dwell(store, sid, tmp_p
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         await dwell_steps(pilot, app, keys, steps, clock)
+        # through the daemon the dwell's seen mark (#268) and Delete's call (delete_off_thread) go off the
+        # UI thread: landed before the store is read
+        await app.workers.wait_for_complete([w for w in app.workers if w.group == "seen"])
+        await landed(app, pilot)
         assert store.item(sid, d)["status"] == want, f"{desc}: {store.item(sid, d)['status']}"
         if "session B" in steps:
             assert app.selected == (other, None), f"{desc}: B's conversation followed"
@@ -3646,6 +3651,7 @@ async def test_items_that_tie_to_the_second_keep_one_order(store, sid, clock, po
                         await pilot.press(key)
                 for _ in range(4):
                     await pilot.pause()
+                await landed(app, pilot)   # a Delete, and the Ctrl+R behind it (behind_deletes), landed
                 await clock.finish_moves(pilot, app)
         await pilot.pause()
         table.focus()
@@ -4030,7 +4036,7 @@ async def test_delete_closes_the_marked_questions_and_ctrl_r_reopens_them(store,
         await pilot.pause()
         assert isinstance(app.screen, Confirm) and "2 are open questions" in app.screen.prompt, "asked once"
         await pilot.press("alt+y")
-        await pilot.pause()
+        await landed(app, pilot)   # each Delete and Ctrl+R here lands off the UI thread (delete_off_thread)
         assert [store.item(sid, r)["status"] for r in (q1, q2, q3, t)] == ["closed", "open", "closed", "running"]
         assert items.marked == set()
         await pilot.press("alt+v")
@@ -4038,16 +4044,16 @@ async def test_delete_closes_the_marked_questions_and_ctrl_r_reopens_them(store,
         items.set_marks({f"{sid}|{q1}", f"{sid}|{q2}", f"{sid}|{q3}"})
         await pilot.pause()
         await pilot.press("ctrl+r")
-        await pilot.pause()
+        await landed(app, pilot)
         assert [store.item(sid, r)["status"] for r in (q1, q2, q3)] == ["answered", "open", "answered"], \
             "Ctrl+R reopens the finished ones marked, and leaves the open one"
         assert items.marked == set()
         items.set_marks({f"{sid}|{q1}", f"{sid}|{q3}"})
         await pilot.press("delete")
-        await pilot.pause()
+        await landed(app, pilot)
         items.set_marks({f"{sid}|{q1}", f"{sid}|{q3}"})
         await pilot.press("delete")
-        await pilot.pause()
+        await landed(app, pilot)
         assert [store.item(sid, r)["status"] for r in (q1, q3)] == ["closed", "closed"], \
             "all finished: Delete only ever closes, so they stay closed"
         assert items.marked == {f"{sid}|{q1}", f"{sid}|{q3}"}, "nothing to act on: the marks stay"

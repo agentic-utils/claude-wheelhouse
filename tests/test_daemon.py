@@ -7,6 +7,7 @@ import os
 import signal
 import socket
 import sqlite3
+import threading
 import time
 import uuid
 
@@ -635,20 +636,26 @@ async def test_a_slow_disk_never_holds_up_the_sessions(daemon, tmp_path, monkeyp
 
 
 async def test_a_slow_transcript_never_holds_up_the_hub(daemon, sid, monkeypatch):
+    """A read held until the command has answered (a mount gone slow): the command answers
+    while the read is still under way, on events, not a wall-clock bound a loaded runner misses
+    (#307). Were the command held behind the read, the read would give up waiting first."""
     read = daemon_mod.Hub.conversation
+    reading_now, answered, released = threading.Event(), threading.Event(), []
 
     def slow(hub, sid):
-        time.sleep(0.5)   # a mount gone slow
+        reading_now.set()
+        released.append(answered.wait(10))   # False: it gave up, the command never answered meanwhile
         return read(hub, sid)
     monkeypatch.setattr(daemon_mod.Hub, "conversation", slow)
     async with client(daemon) as c:
         reading = asyncio.create_task(c.get(f"/sessions/{sid}/conversation"))
-        await asyncio.sleep(0.05)
-        started = time.monotonic()
+        with anyio.fail_after(10):   # the read under way
+            while not reading_now.is_set():
+                await asyncio.sleep(0.01)
         r = await c.post(f"/sessions/{sid}/rename", json={"name": "x"}, headers={"Idempotency-Key": "k1"})
-        assert r.status_code == 200 and time.monotonic() - started < 0.25, "a command answered while it reads"
-        assert not reading.done()
-        assert (await reading).status_code == 200
+        assert r.status_code == 200 and not released, "a command answered while it reads"
+        answered.set()
+        assert (await reading).status_code == 200 and released == [True], "the read waited for it"
 
 
 async def test_a_signal_to_stop_ends_the_streams_first(daemon, monkeypatch):
