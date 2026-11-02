@@ -5141,7 +5141,7 @@ class WheelhouseApp(App):
         self.undoing = False   # a Ctrl+Z's calls under way (action_undo): Delete and Ctrl+Delete refused meanwhile
         self.deleting = 0   # those Deletes and Ctrl+Zs, counted: Ctrl+Z, Ctrl+R and a pin wait for them (behind_deletes)
         self.behind: list[tuple[set, int, Callable[[], None]]] = []   # what waits, in the order asked: the calls it waits for, its number
-        self.typed = itertools.count()   # each act on the inbox numbered as typed (#312): Ctrl+Z undoes the last typed before it
+        self.act_numbers = itertools.count()   # each act on the inbox numbered as typed (#312): Ctrl+Z undoes the last typed before it
         self.undos: dict[int, tuple[str, list]] = {}   # what Ctrl+Z undoes, by the act's number: said, and the rows as they stood (undoable)
         self.undo_waits: set[int] = set()   # the numbers of the Ctrl+Zs waiting for a Delete to land (action_undo)
         self.acting: int | None = None   # the number of the act landing or let through now (as_typed)
@@ -8409,7 +8409,7 @@ class WheelhouseApp(App):
         self.deleting += 1
         made = threading.Event()
         self.calls.append(made)
-        at = next(self.typed) if self.acting is None else self.acting
+        at = next(self.act_numbers) if self.acting is None else self.acting
         self.paint_items()
 
         def call(item, family):
@@ -8482,7 +8482,7 @@ class WheelhouseApp(App):
                 self.behind = [(waits | started, n, later) for waits, n, later in self.behind]
 
     def as_typed(self, at: int, act: Callable[[], None]) -> None:
-        """act done now as the act numbered `at` (self.typed): what it makes undoable replaces
+        """act done now as the act numbered `at` (self.act_numbers): what it makes undoable replaces
         only an act typed before it, whatever order the calls land in (undoable)."""
         acting, self.acting = self.acting, at
         try:
@@ -8498,7 +8498,7 @@ class WheelhouseApp(App):
         pressed (#312): a later Delete isn't waited for, nor a move of the cursor followed."""
         if not self.calls:
             return False
-        self.behind.append((set(self.calls), next(self.typed), act))
+        self.behind.append((set(self.calls), next(self.act_numbers), act))
         return True
 
     def close_pinned(self, item, family: list) -> None:
@@ -8589,7 +8589,7 @@ class WheelhouseApp(App):
         changed as it stood before (restore). One step: the next act replaces it. Kept by the
         act's number as typed (#312), Deletes landing in any order: the last typed, and for each
         Ctrl+Z still waiting, the last typed before it."""
-        self.undos[next(self.typed) if self.acting is None else self.acting] = (said, rows)
+        self.undos[next(self.act_numbers) if self.acting is None else self.acting] = (said, rows)
         keep = {max(self.undos)} | {max(below) for n in self.undo_waits if (below := [k for k in self.undos if k < n])}
         self.undos = {k: v for k, v in self.undos.items() if k in keep}
 
