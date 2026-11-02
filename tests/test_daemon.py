@@ -830,7 +830,7 @@ def every_route(daemon):
 
 def test_every_route_is_covered_by_the_token_tests(daemon):
     routes = every_route(daemon)
-    assert len(routes) == len(set(routes)) == 47 and not [p for _, p in routes if "{" in p], routes
+    assert len(routes) == len(set(routes)) == 48 and not [p for _, p in routes if "{" in p], routes
     assert ("GET", "/events") in routes and ("POST", "/shutdown") in routes
 
 
@@ -1406,6 +1406,57 @@ async def test_a_doc_unchanged_is_answered_same(moduled):
     first = (await call(daemon, "GET", f"/docs?path={tmp}/root/a.md")).json()
     r = await call(daemon, "GET", f"/docs?path={tmp}/root/a.md&have={first['stamp']}")
     assert r.json() == {"same": True}
+
+
+@pytest.mark.parametrize("name, mtime, force, status, after, desc", [
+    ("root/a.md", "now", False, 200, "# New\n", "saved: the file's mtime as read"),
+    ("root/a.md", "old", False, 409, "# A\n", "changed since: 409, the file untouched"),
+    ("root/a.md", "old", True, 200, "# New\n", "changed since, forced: Overwrite"),
+    ("root/new.md", 123, False, 404, None, "gone since: 404, nothing made"),
+    ("root/new.md", 123, True, 200, "# New\n", "gone since, forced: written anew"),
+    ("root/new.md", None, False, 200, "# New\n", "not there when read: made"),
+    ("root/a.md", None, False, 409, "# A\n", "there now, not when read: 409"),
+    ("out/c.md", "now", False, 403, "# C\n", "outside every doc root"),
+    ("root/link.md", "now", False, 403, "# C\n", "a symlink out of the root"),
+    ("item.txt", "now", False, 200, "# New\n", "a doc item's file, under no root"),
+    ("root/a.md", "text", False, 400, "# A\n", "an mtime that isn't a number"),
+])
+async def test_a_doc_is_written_only_where_and_when_it_may_be(moduled, store, sid, name, mtime, force, status, after,
+                                                              desc):
+    daemon, tmp = moduled
+    (tmp / "item.txt").write_text("# Item\n")
+    store.post_doc(sid, "an item's doc", str(tmp / "item.txt"))
+    path = tmp / name
+    if path.exists():
+        path.chmod(0o640)
+    st = path.stat() if path.exists() else None
+    mtime_ns = {"now": st and st.st_mtime_ns, "old": st and st.st_mtime_ns - 1}.get(mtime, mtime)
+    r = await call(daemon, "POST", "/docs/write", {"path": str(path), "text": "# New\n", "mtime_ns": mtime_ns,
+                                                   "force": force})
+    assert r.status_code == status, f"{desc}: {r.text}"
+    assert (path.read_text() if path.exists() else None) == after, desc
+    if status == 200:
+        now = path.stat()
+        assert r.json() == {"path": str(path.resolve()), "mtime_ns": now.st_mtime_ns,
+                            "stamp": f"{now.st_mtime_ns}:{now.st_size}"}, f"{desc}: the new mtime, the save's base"
+        assert st is None or (now.st_mode & 0o777) == 0o640, f"{desc}: its mode kept"
+    if status == 409:
+        assert (r.json()["mtime_ns"], r.json()["text"]) == (st.st_mtime_ns, "# A\n"), f"{desc}: the file's mtime and text"
+    assert not [p.name for p in (tmp / "root").iterdir() if p.name.endswith(".tmp")], f"{desc}: no temporary file left"
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root writes anywhere")
+async def test_a_write_the_daemons_user_cant_make_says_where_and_why(moduled):
+    daemon, tmp = moduled
+    path = tmp / "root" / "a.md"
+    (tmp / "root").chmod(0o555)
+    try:
+        r = await call(daemon, "POST", "/docs/write", {"path": str(path), "text": "# New\n",
+                                                       "mtime_ns": path.stat().st_mtime_ns})
+    finally:
+        (tmp / "root").chmod(0o755)
+    assert r.status_code == 403 and r.json()["error"] == f"{path} can't be written: Permission denied", r.text
+    assert path.read_text() == "# A\n"
 
 
 async def test_settings_say_which_modules_are_off(moduled):

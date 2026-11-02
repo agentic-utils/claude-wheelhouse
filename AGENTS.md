@@ -99,7 +99,7 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   module off from the next start. Module routes run off the hub's thread, waited on
   `daemon.MODULE_WAIT` then 504; `fingerprint.code` covers the installed modules too.
 - `docroots.py`: the doc roots' allow-list (`confine`: a path resolved, symlinks and `..`,
-  and kept to a `.md` file under a root; stage 8 writes through it too), and where a repo's
+  and kept to a `.md` file under a root; `write`, the doc editor's save (`POST /docs/write`), writes through it, or to a doc item's file, `permitted`), and where a repo's
   decisions are (`doc_dirs`: `docs/adr` under its git root, a linked worktree's main
   repository's (`main_root`), unless a session declared others with `set_doc_dirs`, Q114, which may be in another git
   repo beside it, #191; `decision_dirs` pairs each with the repo that looks there). A session in no git repo
@@ -145,7 +145,7 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
 - `docblocks.py`: a doc rendered block by block, exactly as Rich renders it whole, with its
   map (`DocMap`: each block's source lines and rendered rows), for the viewer
   (`Transcript.line_at`, `Transcript.row_of`; `.plan/modules.md`, Q106), and its editor's
-  (`tui.DocEditor`: opened by a click on a doc, in Detail and `DocView`; saving is stage 8's).
+  (`tui.DocEditor`: opened by a click on a doc, in Detail and `DocView`; saved through the daemon, `POST /docs/write`, `docroots.write`, `WheelhouseApp.save_doc`).
   A doc item's thread and layout there, split or tabbed (`tui.DocPanes`, Ctrl+L):
   `.plan/docs-section.md`.
   Never imports Textual.

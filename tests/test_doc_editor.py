@@ -1,11 +1,14 @@
 """A doc's editor (tui.DocEditor, .plan/modules.md, "Viewing and editing a doc", Q106): opened
 by a click on the rendered doc, in Detail and full screen, re-rendered on Ctrl+Enter, kept in
-step with the viewer both ways, and closed on Esc. Saving is stage 8's."""
+step with the viewer both ways, closed on Esc, and saved with Ctrl+S through the client
+(client.write_doc), asking before edits are left or a changed file overwritten."""
+
+import os
 
 import pytest
 
 from claude_wheelhouse import tui
-from claude_wheelhouse.tui import DocEditor, LeaveEdits, WheelhouseApp
+from claude_wheelhouse.tui import DocEditor, LeaveEdits, SaveConflict, SaveFailed, SaveGone, WheelhouseApp
 from test_tui import item_list_rows, item_row
 
 DOC = "# The plan\n\nBuild it.\n\n- one\n- two\n\n```py\nx = 1\n```\n\n| alpha | beta |\n|---|---|\n| 1 | 2 |\n"
@@ -79,8 +82,9 @@ async def test_a_row_between_blocks_takes_the_nearest(store, sid, doc):
 
 
 @pytest.mark.anyio
+@pytest.mark.both
 @pytest.mark.parametrize("immediate", [False, True])
-async def test_ctrl_enter_re_renders_and_saving_comes_next(store, sid, doc, immediate):
+async def test_ctrl_enter_re_renders_and_ctrl_s_saves(store, sid, doc, immediate):
     if immediate:
         store.set_mode(sid, "immediate")
     store.queue(sid, "an answer")
@@ -92,20 +96,31 @@ async def test_ctrl_enter_re_renders_and_saving_comes_next(store, sid, doc, imme
         app.notify = lambda message, **_: notes.append(message)
         editor.insert("Rebuild it. ")
         await pilot.pause()
-        assert app.query_one("#detail-pane").border_title == "Detail · edited", "the title says edited"
+        assert app.query_one("#detail-pane").border_title == "Detail · edited · Ctrl+S saves", "the title says so"
         assert "Rebuild" not in "\n".join(view._layout(view.size.width)[1]), "nothing re-renders as it's typed"
         await pilot.press("ctrl+j")
         await pilot.pause()
         assert "Rebuild it. Build it." in "\n".join(view._layout(view.size.width)[1]), "Ctrl+Enter renders the buffer"
         app.refresh_data()
         await pilot.pause()
-        assert "Rebuild" in app._detail_text, "a refresh keeps rendering the buffer, not the file"
-        assert notes == ([tui.SAVING_NEXT] if immediate else []), "Immediate saves on Ctrl+Enter, here saying so"
+        assert "Rebuild" in app._detail_text, "a refresh keeps rendering the buffer"
+        saved = DOC.replace("Build it.", "Rebuild it. Build it.")
+        assert doc[1].read_text() == (saved if immediate else DOC), "Immediate saves on Ctrl+Enter, Queued doesn't"
+        editor.insert("Then ")
         await pilot.press("ctrl+s")
         await pilot.pause()
-        assert notes[-1] == tui.SAVING_NEXT, "Ctrl+S saves the doc, here saying saving comes next"
-        assert doc[1].read_text() == DOC, "the file untouched"
+        saved = DOC.replace("Build it.", "Rebuild it. Then Build it.")
+        assert doc[1].read_text() == saved and notes[-1] == "Saved plan.md", "Ctrl+S saves the buffer"
+        assert app.query_one("#detail-pane").border_title == "Detail", "nothing left to save"
+        assert "Then Build it." in app._detail_text and editor.display, "Detail shows what was saved, the editor open"
+        app.refresh_data()
+        await pilot.pause()
+        assert editor.text == saved and str(doc[1]) not in app.doc_edits, "the saved text its base"
         assert store.sessions()[0]["drafts"] == 1, "Ctrl+S in the editor doesn't send the session's queue"
+        editor.insert("Again. ")
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert doc[1].read_text().startswith("# The plan\n\nRebuild it. Then Again. "), "a second save, from the new base"
 
 
 @pytest.mark.anyio
@@ -119,29 +134,29 @@ async def test_esc_closes_asking_first_with_edits(store, sid, doc, full):
         await pilot.pause()
         assert not editor.display and view.has_focus, "no edits: Esc closes it, the viewer focused"
         await click(pilot, view, row_with(view, "Build it."))
-        editor.insert("Not yet. ")
-        await pilot.press("ctrl+j")
-        await pilot.pause()
+        editor.insert("Saved. ")
         await pilot.press("escape")
         await pilot.pause()
         assert isinstance(app.screen, LeaveEdits), "edits: Esc asks first"
         await pilot.press("escape")
         await pilot.pause()
-        assert editor.display and editor.text.startswith("# The plan\n\nNot yet."), "Keep editing keeps them"
+        assert editor.display and editor.text.startswith("# The plan\n\nSaved."), "Keep editing keeps them"
         await pilot.press("escape")
         await pilot.pause()
         await pilot.press("enter")
         await pilot.pause()
-        assert not editor.display and str(doc[1]) in app.doc_edits, "Close, the default, keeps the edits"
-        title = "#detail-pane" if not full else "#docview-scroll"
-        assert app.screen.query_one(title).border_title.endswith("edited"), "and the title says so"
+        assert not editor.display and doc[1].read_text().startswith("# The plan\n\nSaved. Build it."), \
+            "Save, the default, saves and closes"
+        assert str(doc[1]) not in app.doc_edits and "Saved. Build it." in "\n".join(view._layout(view.size.width)[1])
         await click(pilot, view, row_with(view, "Build it."))
+        editor.insert("Not yet. ")
         await pilot.press("escape")
         await pilot.pause()
         await pilot.press("alt+d")
         await pilot.pause()
         assert not editor.display and editor.key is None, "Discard closes it"
         assert "Not yet" not in "\n".join(view._layout(view.size.width)[1]), "the file shown again"
+        assert "Not yet" not in doc[1].read_text()
         if full:
             await pilot.press("escape")
             await pilot.pause()
@@ -157,30 +172,34 @@ async def edited(app, pilot, view, editor) -> None:
 
 
 @pytest.mark.anyio
-async def test_edits_outlive_another_doc_shown_and_come_back(store, sid, doc):
+@pytest.mark.parametrize("choice, file, selected, desc", [
+    ("alt+s", "Kept. Build it.", "q", "Save: saved, and the selection where it went"),
+    ("alt+d", "Build it.", "q", "Discard: dropped, the file as it was"),
+    ("escape", "Build it.", "doc", "Keep editing: back on the doc, its editor open where it was"),
+])
+async def test_moving_off_a_doc_with_edits_asks(store, sid, doc, choice, file, selected, desc):
     q = store.post_item(sid, "question", "which db?")
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         view, editor = await shown(app, pilot, doc[0])
         await edited(app, pilot, view, editor)
+        editor.move_cursor((2, 3))
+        await pilot.pause()
         app.items_table.move_cursor(row=item_row(app, q))
         await pilot.pause()
-        assert not editor.display, "another item: the editor closes"
-        assert app.query_one("#detail-pane").border_title == "Detail", "the title back"
-        assert app.doc_edits[str(doc[1])].text.startswith("# The plan\n\nKept. "), "its buffer kept, by its path"
-        view, editor = await shown(app, pilot, doc[0])
-        assert "Kept. Build it." in "\n".join(view._layout(view.size.width)[1]), "shown from the buffer meanwhile"
-        await click(pilot, view, row_with(view, "x = 1"))
-        assert editor.text.startswith("# The plan\n\nKept. ") and editor.cursor_location == (7, 0), \
-            "reopened: the buffer back, the cursor on the clicked block's line"
-        assert app.query_one("#detail-pane").border_title == "Detail · edited", "and edited"
-        await pilot.press("escape")
         await pilot.pause()
-        await pilot.press("alt+d")
-        await pilot.pause()
-        assert str(doc[1]) not in app.doc_edits, "Discard drops the buffer"
-        assert "Kept" not in "\n".join(view._layout(view.size.width)[1]), "the file shown again"
-        assert doc[1].read_text() == DOC, "the file untouched"
+        assert isinstance(app.screen, LeaveEdits) and not editor.display, f"{desc}: asked, the editor closed"
+        await pilot.press(choice)
+        for _ in range(3):
+            await pilot.pause()
+        assert doc[1].read_text() == DOC.replace("Build it.", file), desc
+        assert app.selected == (sid, q if selected == "q" else doc[0]), f"{desc}: {app.selected}"
+        if selected == "doc":
+            assert editor.display and editor.has_focus and editor.cursor_location == (2, 3), f"{desc}: open again"
+            assert editor.text.startswith("# The plan\n\nKept. ") and str(doc[1]) in app.doc_edits, desc
+            assert app.query_one("#detail-pane").border_title == "Detail · edited · Ctrl+S saves", desc
+        else:
+            assert str(doc[1]) not in app.doc_edits and app.query_one("#detail-pane").border_title == "Detail", desc
 
 
 @pytest.mark.anyio
@@ -195,13 +214,15 @@ async def test_edits_in_detail_show_full_screen(store, sid, doc):
         assert full_editor.text == editor.text, "its editor opens on the same buffer"
         full_editor.insert("More. ")
         await pilot.pause()
-        for key in ("escape", "enter", "escape"):   # asked, Close keeping them, and out
+        for key in ("escape", "enter", "escape"):   # asked, Save, and out
             await pilot.press(key)
             await pilot.pause()
-        assert not isinstance(app.screen, tui.DocView), "full screen left with its edits kept"
+        assert not isinstance(app.screen, tui.DocView), "full screen left, its edits saved"
         app.refresh_data()
         await pilot.pause()
-        assert "More. " in editor.text, "back in Detail, its editor takes up the edits made full screen"
+        assert "More. " in editor.text and editor.text == doc[1].read_text(), \
+            "back in Detail, its editor has the text saved full screen"
+        assert app.query_one("#detail-pane").border_title == "Detail", "and nothing to save"
 
 
 @pytest.fixture
@@ -288,7 +309,13 @@ async def test_a_click_on_a_block_the_edits_took_out_keeps_the_cursor(store, sid
         await pilot.pause()
         app.items_table.move_cursor(row=item_row(app, q))
         await pilot.pause()
-        view, editor = await shown(app, pilot, doc[0])
+        await pilot.press("escape")   # Keep editing: back on the doc
+        await pilot.pause()
+        await pilot.pause()
+        assert editor.display and editor.cursor_location == (2, 3), "open again where it was"
+        view.parent.scroll_to(y=row_with(view, "one"), animate=False, immediate=True)   # in the viewer's smaller room
+        await pilot.pause()
+        app.CLICK_CHAIN_TIME_THRESHOLD = 0   # this click, soon after the first, not taken as its double-click
         await click(pilot, view, row_with(view, "one"))
         assert editor.cursor_location == (2, 3), "the list gone from the buffer: the cursor where it was"
 
@@ -325,7 +352,8 @@ async def test_the_file_changing_on_disk_keeps_the_edits_and_says_so(store, sid,
         assert editor.text.startswith("# The plan\n\nKept. Build it."), "the buffer kept"
         assert "Kept. Build it." in app._detail_text, "and shown"
         assert notes == ["plan.md changed on disk since you started editing; your edits are kept"], f"once: {notes}"
-        assert app.query_one("#detail-pane").border_title == "Detail · edited · file changed", "and in the title"
+        assert app.query_one("#detail-pane").border_title == "Detail · edited · file changed · Ctrl+S saves", \
+            "and in the title"
         assert app.doc_edits[str(doc[1])].changed, "noted for the save to come"
 
 
@@ -356,7 +384,8 @@ async def test_the_file_gone_under_kept_edits_says_so(store, sid, doc):
             app.refresh_data()
             await pilot.pause()
         assert notes == ["plan.md has gone from disk since you started editing; your edits are kept"], f"once: {notes}"
-        assert app.query_one("#detail-pane").border_title == "Detail · edited · file gone", "and in the title"
+        assert app.query_one("#detail-pane").border_title == "Detail · edited · file gone · Ctrl+S saves", \
+            "and in the title"
         assert "Kept. Build it." in app._detail_text, "the edits still shown"
 
 
@@ -369,9 +398,9 @@ def test_a_refresh_before_the_editor_mounts_or_after_it_goes_paints_nothing_of_i
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("back, title, desc", [
-    (None, "Detail · edited · file gone", "gone, and not back"),
-    (DOC, "Detail · edited", "back unchanged (an atomic save, a checkout): neither"),
-    (DOC.replace("Build it.", "Changed."), "Detail · edited · file changed", "back changed: a change"),
+    (None, "Detail · edited · file gone · Ctrl+S saves", "gone, and not back"),
+    (DOC, "Detail · edited · Ctrl+S saves", "back unchanged (an atomic save, a checkout): neither"),
+    (DOC.replace("Build it.", "Changed."), "Detail · edited · file changed · Ctrl+S saves", "back changed: a change"),
 ])
 async def test_a_file_gone_and_back_under_kept_edits(store, sid, doc, back, title, desc):
     app = WheelhouseApp(store)
@@ -387,3 +416,84 @@ async def test_a_file_gone_and_back_under_kept_edits(store, sid, doc, back, titl
             app.refresh_data()
             await pilot.pause()
         assert app.query_one("#detail-pane").border_title == title, f"{desc}: {app.query_one('#detail-pane').border_title}"
+
+
+ON_DISK = DOC.replace("Build it.", "Changed on disk.")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("choice, file, buffer, open_, desc", [
+    ("alt+o", "Kept. Build it.", "Kept. Build it.", True, "Overwrite: the edits written over the change"),
+    ("alt+r", "Changed on disk.", "Changed on disk.", True, "Reload: the file's text in the buffer, the edits lost"),
+    ("escape", "Changed on disk.", "Kept. Build it.", True, "Cancel: nothing written, the edits kept"),
+])
+async def test_a_save_over_a_file_changed_on_disk_asks(store, sid, doc, choice, file, buffer, open_, desc):
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        view, editor = await shown(app, pilot, doc[0])
+        await edited(app, pilot, view, editor)
+        doc[1].write_text(ON_DISK)
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert isinstance(app.screen, SaveConflict), f"{desc}: asked"
+        assert "plan.md has changed on disk" in str(app.screen.query_one(".dialog-prompt").render()), desc
+        await pilot.press(choice)
+        await pilot.pause()
+        await pilot.pause()
+        assert doc[1].read_text() == DOC.replace("Build it.", file), desc
+        assert editor.text == DOC.replace("Build it.", buffer) and editor.display == open_, desc
+        assert (str(doc[1]) in app.doc_edits) == (choice == "escape"), f"{desc}: edits left only on Cancel"
+        assert buffer in app._detail_text, f"{desc}: Detail shows the buffer"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("choice, desc", [("alt+w", "Write it anew"), ("escape", "Cancel")])
+async def test_a_save_of_a_file_gone_offers_to_write_it_anew(store, sid, doc, choice, desc):
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        view, editor = await shown(app, pilot, doc[0])
+        await edited(app, pilot, view, editor)
+        doc[1].unlink()
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert isinstance(app.screen, SaveGone), f"{desc}: asked"
+        await pilot.press(choice)
+        await pilot.pause()
+        assert (doc[1].read_text() if doc[1].exists() else None) == (
+            DOC.replace("Build it.", "Kept. Build it.") if choice == "alt+w" else None), desc
+
+
+@pytest.mark.anyio
+@pytest.mark.skipif(os.geteuid() == 0, reason="root writes anywhere")
+async def test_a_save_the_filesystem_refuses_says_where_and_why(store, sid, doc):
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        view, editor = await shown(app, pilot, doc[0])
+        await edited(app, pilot, view, editor)
+        doc[1].parent.chmod(0o555)
+        try:
+            await pilot.press("ctrl+s")
+            await pilot.pause()
+        finally:
+            doc[1].parent.chmod(0o755)
+        assert isinstance(app.screen, SaveFailed), "said in a prompt"
+        said = str(app.screen.query_one(".dialog-prompt").render())
+        assert said == f"plan.md wasn't saved: {doc[1]} can't be written: Permission denied", said
+        await pilot.press("escape")
+        await pilot.pause()
+        assert doc[1].read_text() == DOC and str(doc[1]) in app.doc_edits, "nothing written, the edits kept"
+        assert app.query_one("#detail-pane").border_title == "Detail · edited · Ctrl+S saves"
+
+
+@pytest.mark.anyio
+async def test_a_save_outside_what_may_be_written_is_refused(store, sid, doc, monkeypatch):
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        view, editor = await shown(app, pilot, doc[0])
+        await edited(app, pilot, view, editor)
+        monkeypatch.setattr(store, "doc_paths", lambda: [])   # the item's file no longer a doc's
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert isinstance(app.screen, SaveFailed)
+        assert "is not under any doc root" in str(app.screen.query_one(".dialog-prompt").render())
+        assert doc[1].read_text() == DOC

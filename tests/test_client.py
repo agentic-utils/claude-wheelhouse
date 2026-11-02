@@ -375,6 +375,39 @@ def test_both_clients_answer_every_call_the_tui_makes():
         assert missing == [], f"{cls.__name__} lacks {missing}"
 
 
+def test_both_clients_save_a_doc_alike(store, sid, served, tmp_path):
+    """write_doc (the doc editor's save) answers the same in process and through the daemon:
+    saved, changed since, gone since, refused; and saved through the daemon, the doc as the
+    client keeps it is the text written at once, before any fetch."""
+    from claude_wheelhouse.client import LocalClient
+    doc = tmp_path / "plan.md"
+    doc.write_text("# Plan\n")
+    ref = store.post_doc(sid, "the plan", str(doc))
+    d = served(store.path)
+    remote = d.client()
+    local = LocalClient(store, post=lambda cb: True)
+    try:
+        remote.refresh()
+        assert remote.document(sid, ref)["text"] == "# Plan\n"
+        for name, c in (("local", local), ("remote", remote)):
+            doc.write_text("# Plan\n")
+            base = doc.stat().st_mtime_ns
+            saved = c.write_doc(str(doc), f"# Saved {name}\n", base)
+            assert saved["path"] == str(doc.resolve()) and doc.read_text() == f"# Saved {name}\n", name
+            assert saved["mtime_ns"] == doc.stat().st_mtime_ns, f"{name}: the new base"
+            assert c.document(sid, ref)["text"] == f"# Saved {name}\n", f"{name}: shown at once"
+            conflict = c.write_doc(str(doc), "# Again\n", base)
+            assert (conflict["conflict"], conflict["text"], conflict["mtime_ns"]) == (
+                True, f"# Saved {name}\n", saved["mtime_ns"]), f"{name}: changed since"
+            assert c.write_doc(str(tmp_path / "gone.md"), "x", base) == {
+                "refused": f"{tmp_path / 'gone.md'} is not under any doc root"}, f"{name}: outside, refused"
+            doc.unlink()
+            assert c.write_doc(str(doc), "x", base) == {
+                "gone": True, "error": f"{doc} has gone from disk since you started editing"}, f"{name}: gone since"
+    finally:
+        remote.disconnect()
+
+
 def vars_of(cls) -> set[str]:
     """What an instance sets in its __init__, as hasattr on the class doesn't see it."""
     import inspect

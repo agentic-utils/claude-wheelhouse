@@ -102,9 +102,9 @@ class PortTaken(RuntimeError):
 class Refused(Exception):
     """A request answered with an error status and its reason."""
 
-    def __init__(self, status: int, error: str, headers: dict | None = None):
+    def __init__(self, status: int, error: str, headers: dict | None = None, extra: dict | None = None):
         super().__init__(error)
-        self.status, self.error, self.headers = status, error, headers
+        self.status, self.error, self.headers, self.extra = status, error, headers, extra or {}
 
 
 def checked_address(address: str) -> str:
@@ -474,6 +474,7 @@ class Daemon:
             Route("/shutdown", self.command(self.shutdown_requested), methods=["POST"]),
             # the modules' (served.py): a doc under a doc root, and each module's own routes
             Route("/docs", self.query(self.doc)),
+            Route("/docs/write", self.command(self.write_doc), methods=["POST"]),
             Route("/m/{mid}/{rest:path}", self.query(self.module_query, run=self.module_run)),
             Route("/m/{mid}/{rest:path}", self.command(self.module_command, hub=False), methods=["POST"]),
         ], middleware=[Middleware(Guard, daemon=self)], lifespan=self.lifespan)
@@ -931,6 +932,26 @@ class Daemon:
         except docroots.Outside as e:
             raise Refused(403, str(e)) from None
 
+    def write_doc(self, request: Request, body: dict) -> dict:
+        """The doc editor's save (docroots.write): {path, text, mtime_ns, force} to a doc item's
+        file or under a module's doc root. 409 with the file's mtime_ns and text if it changed
+        since mtime_ns, 404 if it has gone, 403 for a path outside, or a write the filesystem
+        refuses, saying the path and why."""
+        mtime_ns, force = body.get("mtime_ns"), body.get("force", False)
+        if mtime_ns is not None and (not isinstance(mtime_ns, int) or isinstance(mtime_ns, bool)):
+            raise Refused(400, "mtime_ns must be an integer or null")
+        if not isinstance(force, bool):
+            raise Refused(400, "force must be true or false")
+        try:
+            return docroots.write(text(body, "path"), text(body, "text"), mtime_ns, self.served.doc_roots(),
+                                  self.hub.store.doc_paths(), force)
+        except docroots.Conflict as e:
+            raise Refused(409, str(e), extra={"mtime_ns": e.mtime_ns, "text": e.text}) from None
+        except docroots.Gone as e:
+            raise Refused(404, str(e)) from None
+        except (docroots.Outside, docroots.Unwritable) as e:
+            raise Refused(403, str(e)) from None
+
     def module_query(self, request: Request):
         p = request.path_params
         return self.served.dispatch(p["mid"], "GET", p["rest"], request.query_params, None)
@@ -1216,9 +1237,9 @@ def refusal(e: Exception) -> JSONResponse:
     """An error as its status: a session gone or anything else not there 404, a bad request
     400, and a Refused as it says. Anything else is the daemon's own failure, 500, said on
     stderr with its traceback."""
-    headers = None
+    headers, extra = None, {}
     if isinstance(e, Refused):
-        status, error, headers = e.status, e.error, e.headers
+        status, error, headers, extra = e.status, e.error, e.headers, e.extra
     elif isinstance(e, api.Refused):   # a module's route refusing
         status, error = e.status, e.error
     elif isinstance(e, served.Failed):   # a module's route failing: its bug, not the daemon's
@@ -1234,7 +1255,7 @@ def refusal(e: Exception) -> JSONResponse:
         print(f"wheelhouse daemon: {error}", file=sys.stderr, flush=True)
         traceback.print_exception(e)
     # its type too, so a client says what the hub in process said (a session gone, an item)
-    return JSONResponse({"error": error, "type": type(e).__name__}, status, headers)
+    return JSONResponse({**extra, "error": error, "type": type(e).__name__}, status, headers)
 
 
 class Server(uvicorn.Server):

@@ -16,6 +16,7 @@ and the refresh after it fetches what it changed at once."""
 
 import contextlib
 import functools
+import os
 import socket
 import threading
 import time
@@ -173,6 +174,12 @@ class LocalClient(Hub):
         self.docs_read = {path: doc}   # the one shown
         return doc
 
+    def write_doc(self, path: str, text: str, mtime_ns: int | None, force: bool = False) -> dict:
+        """The doc editor's save, as the daemon's /docs/write makes it (docroots.save): to a doc
+        item's file or under a module's doc root, refused if the file changed or went since
+        mtime_ns, unless force."""
+        return docroots.save(path, text, mtime_ns, self.served.doc_roots(), self.store.doc_paths(), force)
+
 
 class Unreachable(RuntimeError):
     """The daemon can't be reached: nothing was sent (UNREACHABLE)."""
@@ -181,9 +188,9 @@ class Unreachable(RuntimeError):
 class Refused(RuntimeError):
     """The daemon refused a request: its status and what it said."""
 
-    def __init__(self, status: int, error: str, kind: str = ""):
+    def __init__(self, status: int, error: str, kind: str = "", data: dict | None = None):
         super().__init__(error)
-        self.status, self.error, self.kind = status, error, kind
+        self.status, self.error, self.kind, self.data = status, error, kind, data or {}
 
 
 def blocks(data) -> list[tuple[str, str]] | None:
@@ -322,7 +329,7 @@ class RemoteClient:
             except ValueError:
                 data = {}
             raise Refused(r.status_code, data.get("error") or f"the daemon answered {r.status_code}",
-                          data.get("type", ""))
+                          data.get("type", ""), data if isinstance(data, dict) else {})
         return r.json()
 
     def get(self, path: str, params: dict | None = None):
@@ -661,6 +668,32 @@ class RemoteClient:
         """A doc under a module's doc root (/docs), kept up to date as a doc item's is;
         {"refused": why} for a path outside them, None if it couldn't be read."""
         return self.shown(("file", path))
+
+    def write_doc(self, path: str, text: str, mtime_ns: int | None, force: bool = False) -> dict:
+        """The doc editor's save (/docs/write), answered as LocalClient's (docroots.save). Saved,
+        the doc as kept here is the text written, so a paint before the next fetch shows it,
+        not the text before (a doc item's, by its path, and a module's)."""
+        body = {"path": path, "text": text, "mtime_ns": mtime_ns, "force": force}
+        try:
+            done = self.request("POST", "/docs/write", body, str(uuid.uuid4()))
+        except Refused as e:
+            if e.status == 409:
+                return {"conflict": True, "mtime_ns": e.data.get("mtime_ns"), "text": e.data.get("text", ""),
+                        "error": e.error}
+            if e.status == 404 and e.kind == "Refused":
+                return {"gone": True, "error": e.error}
+            return {"refused": self.refusal_of(e)}
+        except (Unreachable, self.httpx.TransportError) as e:
+            return {"refused": str(e) or UNREACHABLE}
+        with self.lock:
+            for key, data in list(self.cache.items()):
+                if key[0] in ("doc", "file") and isinstance(data, dict) and data.get("path") \
+                        and os.path.realpath(data["path"]) == done["path"]:
+                    self.cache[key] = {**data, "text": text, "stamp": done["stamp"], "gone": None,
+                                       "mtime_ns": done["mtime_ns"]}
+                    self.shown_seq[key] = self.next_seq()   # a fetch sent before this one lands as stale
+            self.forced = True
+        return done
 
     def call_module(self, mid: str, path: str, body: dict | None = None):
         """A module's own route (api.Context.call): a GET without a body, a POST, sent once

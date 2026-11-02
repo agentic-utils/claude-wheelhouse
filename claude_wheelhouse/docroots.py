@@ -1,13 +1,16 @@
-"""The docs a client may read through the hub, and later write (.plan/modules.md, "The module
-boundary"): only a .md file under a directory a module declares (api.Module.doc_roots). Each
+"""The docs a client may read through the hub, and write (.plan/modules.md, "The module
+boundary"): only a .md file under a directory a module declares (api.Module.doc_roots), and
+for a save also a doc item's file (permitted, write). Each
 path is resolved first, its symlinks followed and its .. taken out, so none reaches outside a
 root; the roots are resolved the same way. And where a repo's decisions are found (Q114):
 docs/adr under its git root, unless a session there declared others (set_doc_dirs), which
 may be in another repo kept beside it. Never imports Textual."""
 
+import contextlib
 import json
 import os
 import stat
+import tempfile
 from pathlib import Path
 
 DEFAULT = ("docs/adr",)   # a repo's decisions, unless a session there declares others (Q114)
@@ -20,12 +23,30 @@ class Outside(ValueError):
     """A path no doc root holds, or one that isn't a doc's."""
 
 
+class Conflict(Exception):
+    """A save refused (409): the file has changed since the editor's base. Its mtime and
+    text now, for the editor's Reload."""
+
+    def __init__(self, path: Path, mtime_ns: int, text: str):
+        super().__init__(f"{path} has changed on disk since you started editing")
+        self.mtime_ns, self.text = mtime_ns, text
+
+
+class Gone(Exception):
+    """A save refused (404): the file has gone since the editor's base."""
+
+
+class Unwritable(Exception):
+    """A save that couldn't be made: the daemon's user may not write there, the disk is full,
+    or the path is no longer a regular file. Says the path and why."""
+
+
 def confine(path, roots) -> Path:
     """path resolved, if it names a .md file under one of roots (each resolved too); else
     Outside. Only an absolute path: a relative one would resolve against the daemon's own
     directory. A relative root is no root. Compared as the filesystem gives the names, so on
     a case-insensitive one a path spelt in another case than its root's is refused, never
-    let in. The file need not exist (a doc written anew, stage 8)."""
+    let in. The file need not exist (a doc written anew, write)."""
     if not isinstance(path, str) or not os.path.isabs(path) or "\0" in path:
         raise Outside(f"{path!r} is not an absolute path")
     real = Path(os.path.realpath(path))
@@ -64,6 +85,114 @@ def read(path, roots, have: str | None = None) -> dict:
     if len(data) > DOC_CAP:
         text += f"\n\n_(only the first {DOC_CAP >> 20} MB is shown)_"
     return {"path": str(real), "text": text, "stamp": stamp, "gone": None, "mtime_ns": st.st_mtime_ns}
+
+
+def permitted(path, roots, files=()) -> Path:
+    """path resolved, if a doc item's file (files, as posted) or a .md file under a doc root
+    (confine); else Outside. Where a save may write (.plan/modules.md, "Saving and leaving")."""
+    if isinstance(path, str) and os.path.isabs(path) and "\0" not in path:
+        real = Path(os.path.realpath(path))
+        if any(real == Path(os.path.realpath(f)) for f in files if isinstance(f, str) and os.path.isabs(f)):
+            return real
+    return confine(path, roots)
+
+
+def write(path, text: str, mtime_ns: int | None, roots, files=(), force: bool = False) -> dict:
+    """A doc saved from the editor: {path, mtime_ns, stamp} as written, path resolved
+    (permitted, else Outside). mtime_ns is the file's when the editor took its text (None for
+    a file that wasn't there): one changed since is Conflict, one gone since Gone, unless
+    force (Overwrite, or Write anew). Written atomically, a temporary file beside it renamed
+    over it, with the file's mode kept; a new file is made as the daemon's user makes any,
+    under its umask. A file over DOC_CAP is refused: the editor holds only that much of it.
+    Unwritable, naming the path and the reason, for any write the filesystem refuses."""
+    real = permitted(path, roots, files)
+    if not isinstance(text, str):
+        raise ValueError("text must be a string")
+    try:
+        st = os.stat(real)
+    except FileNotFoundError:
+        st = None
+    except OSError as e:
+        raise Unwritable(f"{real} can't be written: {e.strerror}") from None
+    if st is not None and not stat.S_ISREG(st.st_mode):
+        raise Unwritable(f"{real} can't be written: it isn't a regular file")
+    if st is not None and st.st_size > DOC_CAP:
+        raise Unwritable(f"{real} can't be written from here: it's over {DOC_CAP >> 20} MB, more than the editor holds")
+    if not force:
+        if st is None and mtime_ns is not None:
+            raise Gone(f"{real} has gone from disk since you started editing")
+        if st is not None and st.st_mtime_ns != mtime_ns:
+            raise Conflict(real, st.st_mtime_ns, current(real))
+    data = text.encode()
+    try:
+        if st is None:
+            made(real, data)
+        else:
+            replaced(real, data, stat.S_IMODE(st.st_mode))
+        st = os.stat(real)
+    except FileExistsError:   # made meanwhile, between the stat and the write
+        if not force:
+            st = os.stat(real)
+            raise Conflict(real, st.st_mtime_ns, current(real)) from None
+        return write(path, text, None, roots, files, force)
+    except OSError as e:
+        raise Unwritable(f"{real} can't be written: {e.strerror or e}") from None
+    return {"path": str(real), "mtime_ns": st.st_mtime_ns, "stamp": f"{st.st_mtime_ns}:{st.st_size}"}
+
+
+def save(path, text: str, mtime_ns: int | None, roots, files=(), force: bool = False) -> dict:
+    """write's outcome as either client answers it (client.write_doc): {path, mtime_ns, stamp}
+    saved; {conflict: true, mtime_ns, text, error} for a file changed since; {gone: true,
+    error} for one gone; {refused: why} for a path outside or a write refused."""
+    try:
+        return write(path, text, mtime_ns, roots, files, force)
+    except Conflict as e:
+        return {"conflict": True, "mtime_ns": e.mtime_ns, "text": e.text, "error": str(e)}
+    except Gone as e:
+        return {"gone": True, "error": str(e)}
+    except (ValueError, Unwritable) as e:   # Outside is a ValueError
+        return {"refused": str(e)}
+
+
+def current(real: Path) -> str:
+    """A file's text as it is now, for a Conflict's Reload: "" if it can't be read."""
+    try:
+        with open(real, "rb") as f:
+            return f.read(DOC_CAP).decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def made(real: Path, data: bytes) -> None:
+    """A new file, never one there already (FileExistsError), its mode the umask's."""
+    fd = os.open(real, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(real)
+        raise
+
+
+def replaced(real: Path, data: bytes, mode: int) -> None:
+    """A file's contents swapped whole: a temporary file beside it, its mode set, renamed over
+    it, so a reader sees the old text or the new, never half; the temporary file gone on any
+    failure."""
+    fd, tmp = tempfile.mkstemp(dir=real.parent, prefix=f".{real.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fchmod(f.fileno(), mode)
+            os.fsync(f.fileno())
+        os.replace(tmp, real)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
 
 
 def git_root(cwd) -> Path | None:

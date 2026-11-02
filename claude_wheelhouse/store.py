@@ -2051,6 +2051,11 @@ class Store:
     def item(self, sid: str, ref: str) -> sqlite3.Row | None:
         return self._one("SELECT * FROM items WHERE session_id = ? AND ref = ?", (sid, ref))
 
+    def doc_paths(self) -> list[str]:
+        """Every doc item's file, as posted: what the doc editor may save besides the modules'
+        doc roots (docroots.write)."""
+        return [r["body"] for r in self._all("SELECT DISTINCT body FROM items WHERE kind = 'doc'", ())]
+
     def items(self, sid: str | None = None, include_closed: bool = True) -> list[sqlite3.Row]:
         sql = """SELECT i.*, s.name AS session_name FROM items i JOIN sessions s ON s.id = i.session_id
                  WHERE (? IS NULL AND s.parked = 0) OR i.session_id = ?"""
