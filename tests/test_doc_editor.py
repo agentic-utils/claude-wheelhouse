@@ -670,6 +670,9 @@ async def test_the_item_going_from_under_the_editor_never_loses_the_edits(store,
             app.refresh_data()
         await pilot.pause()
         await pilot.pause()
+        store.post_item(other, "question", "and the cache?")   # the inbox rebuilt after: still held
+        app.refresh_data()
+        await pilot.pause()
         assert isinstance(app.screen, LeaveEdits) == asked, f"{desc}: asked {asked}, {app.screen}"
         if asked:   # Keep editing
             await pressed(pilot, "escape", lambda: editor.display and editor.has_focus)

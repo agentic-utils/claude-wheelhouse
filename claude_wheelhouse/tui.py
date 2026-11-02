@@ -6233,7 +6233,8 @@ class WheelhouseApp(App):
                 above = self.above_deleted(before) if arrow in self.deleted else None
                 table.move_cursor(row=min(keep, table.row_count - 1) if above is None else above, animate=False)
         # its item went from under Detail's doc editor, not by the person's Delete: held there (#293)
-        held = bool(rebuilt and key and key not in table.rows and key not in self.deleted and self.hold_doc_edited(key))
+        held = bool(rebuilt and key and key not in table.rows and key not in self.deleted and self.hold_doc_edited(key)) \
+            or self.shown_doc is not None and self.editing_doc()   # a doc shown by its path, being edited: kept
         if rebuilt:
             self.deleted = set()
         if not pending:   # where the app put it; an arrow pending stays pending
@@ -6837,9 +6838,12 @@ class WheelhouseApp(App):
 
         def go_back() -> None:
             nonlocal back
-            if back[0] == "item" and back[1] != "file" and self.client.item(*back[1:]) is None \
-                    and granted is not None:   # gone with its session meanwhile (#293): its file, by its path
-                back = ("show", *granted)
+            if back[0] == "item" and back[1] != "file" and self.client.item(*back[1:]) is None:
+                if granted is None:   # gone, and its file never granted (the daemon unreachable at open)
+                    self.notify(f"{back[2]} has gone and {os.path.basename(path)} can't be opened again here: its "
+                                "unsaved edits can't be saved from the wheelhouse", severity="error")
+                    return
+                back = ("show", *granted)   # gone with its session meanwhile (#293): its file, by its path
             if back[0] == "show":
                 self.show_doc(*back[1:])
             elif back[1] != "file":   # ("item", "file", path): a module's doc of no known title stays left
@@ -7505,7 +7509,7 @@ class WheelhouseApp(App):
         self.selected = None   # first: a selection set gives way to no module's doc
         self.shown_doc = (path, title)
         self.items_table.show_cursor = False
-        self.notify(f"{key.split('|')[1]} has gone with its session: {os.path.basename(path)} stays open "
+        self.notify(f"{key.split('|')[1]} has gone: {os.path.basename(path)} stays open "
                     "with your edits, and Ctrl+S saves it", severity="warning")
         return True
 
