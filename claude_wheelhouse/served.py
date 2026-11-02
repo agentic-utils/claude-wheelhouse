@@ -97,9 +97,9 @@ class Served:
                     said(f"module {mid}'s doc roots failed", e)
         return out
 
-    def read(self, path: str, have: str | None = None) -> dict:
-        """A doc under a doc root (docroots.read), else docroots.Outside."""
-        return docroots.read(path, self.doc_roots(), have)
+    def read(self, path: str, have: str | None = None, files=()) -> dict:
+        """A doc under a doc root, or one of files (docroots.read), else docroots.Outside."""
+        return docroots.read(path, self.doc_roots(), have, files)
 
 
 def said(what: str, e: Exception) -> None:

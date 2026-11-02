@@ -239,8 +239,10 @@ the viewer renders the editor's buffer, not the file.
   edits.
 - Saving goes through the daemon, which owns the files: `POST /docs/write` with `{path,
   text, mtime_ns}`, `mtime_ns` being the file's when the editor opened (or last saved). The
-  daemon writes only a path that is a doc item's file or under a module's `doc_roots`,
-  compares the mtime, and writes atomically (temporary file and rename, mode kept). On a
+  daemon writes only a path that is a doc item's file or under a module's `doc_roots`, or
+  the file of a doc item an editor opened (`POST /docs/grant {sid, ref}` at open, kept for
+  the daemon's life, also readable through `/docs`), so edits survive the item going with
+  its session (#293); compares the mtime, and writes atomically (temporary file and rename, mode kept). On a
   mismatch it answers 409 with the new mtime, and the TUI asks **Overwrite** (resend with
   `force`), **Reload** (the file's text replaces the buffer, edits lost, said in the
   prompt) or **Cancel**. A save sets the new mtime as the base.

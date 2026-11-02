@@ -308,7 +308,9 @@ session.
   write it anew. A save the daemon can't make (a file another user owns, a full disk) says
   why, naming the file. The daemon writes only a doc item's file or a doc under a module's
   doc roots, atomically, keeping the file's mode. One file has one buffer, however it's
-  reached.
+  reached. A doc item that leaves the inbox under the editor without your Delete (its
+  session parked or ended elsewhere) leaves the editor open with nothing asked: a parked
+  one stays selected, and an ended one's file stays open by its path, still saved with Ctrl+S.
 - **Decisions.** If your own instructions let a session decide some things without asking
   you, it reports each one as a decision (`D1`): what it decided, and one short line with
   the alternative, why, and how to reverse it. Decisions block nothing. Each session

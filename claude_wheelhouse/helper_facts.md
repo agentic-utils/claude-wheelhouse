@@ -1,4 +1,4 @@
-<!-- fact sheet stamp: version 159, 2026-11-02T16:59:07Z, source 53ce0fb9be97a977 (make facts restamps it: AGENTS.md) -->
+<!-- fact sheet stamp: version 162, 2026-11-02T17:26:34Z, source f735c1d7ec9cda9c (make facts restamps it: AGENTS.md) -->
 # Wheelhouse fact sheet
 
 What the helper chat knows before any question. The guide below is written by hand; the
@@ -58,6 +58,8 @@ daemon running.
   editor below it. Ctrl+S saves to the file; the pane's title says `edited · Ctrl+S saves`
   while there are unsaved edits, and leaving them (Esc, or selecting something else) asks
   Save, Discard or Keep editing. A file changed on disk since asks Overwrite, Reload or Cancel.
+  The doc's item leaving the inbox some other way (its session parked or ended elsewhere) asks
+  nothing: the editor stays open, an ended session's file by its path, and Ctrl+S still saves.
 
 ## Where to look in the source
 
