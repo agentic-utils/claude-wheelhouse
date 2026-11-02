@@ -1,4 +1,4 @@
-<!-- fact sheet stamp: version 150, 2026-11-02T05:23:45Z, source 9495c4ac367dac40 (make facts restamps it: AGENTS.md) -->
+<!-- fact sheet stamp: version 151, 2026-11-02T10:06:25Z, source 1976419c86fed9be (make facts restamps it: AGENTS.md) -->
 # Wheelhouse fact sheet
 
 What the helper chat knows before any question. The guide below is written by hand; the
@@ -130,7 +130,7 @@ This fact sheet describes claude-wheelhouse 0.2.0.dev0.
 
 - **Alt+T**: The tour, while the title bar's badge shows: resume a tour quit in the middle where it was, or take what's new (Alt+T, or a click on the badge)
 
-- **Ctrl+Q**: Quit the wheelhouse (sessions carry on without it)
+- **Ctrl+Q**: Quit the wheelhouse (sessions carry on without it): asked first, on No; Ctrl+Q again quits
 
 ### The buttons
 
@@ -401,3 +401,4 @@ The app's command line args (make args). Give them to make run in ARGS, for exam
 - The Decisions pane follows the selected session, as the PRs pane does: its repo's decisions alone, or a line saying it has none; with no session selected, every repo's.
 - Search the inbox by id or title: click the 🔍 at its top right, or just type while it has focus. Show hidden takes in the items off the inbox too; Enter or a click goes to the item.
 - An item's id in Detail (T3, Q25, PR276 in a doc, a conversation or a thread) is a link: a click goes to that item of the same session, as a search's pick does.
+- Ctrl+Q asks before quitting, on No, so a slip for Alt+Q quits nothing; Ctrl+Q again quits.

@@ -11,7 +11,7 @@ import pytest
 
 from claude_wheelhouse import hub, launch, liveness, monitor
 from claude_wheelhouse.store import Store
-from claude_wheelhouse.tui import WheelhouseApp
+from claude_wheelhouse.tui import DocEdit, QuitConfirm, WheelhouseApp
 
 
 @pytest.fixture
@@ -568,7 +568,7 @@ async def test_relaunch_races(store, sid, monkeypatch, before, during_confirm, a
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("stopped, keys, launched, exited, desc", [
-    (True, [], ["open"], True, "its host has gone: started before quitting, not left dead (review 7)"),
+    (True, ["alt+y"], ["open"], True, "its host has gone: started before quitting, not left dead (review 7)"),
     (False, [], [], False, "still stopping: quitting asks first"),
     (False, ["alt+y"], [], True, "and quits if told to"),
     (False, ["alt+n"], [], False, "or stays"),
@@ -623,5 +623,50 @@ async def test_quitting_while_compacting_first(store, sid, monkeypatch, keys, ex
             await pilot.press(key)
             await pilot.pause()
     assert bool(exits) == exited, desc
-    assert prompt.startswith("Compacting demo first, to relaunch it once compacted. Quit anyway?"), prompt
+    assert prompt.startswith("Quit the wheelhouse? Sessions carry on without it. Compacting demo first, to relaunch it "
+                             "once compacted."), prompt
     assert "hasn't stopped" not in prompt and "Restore" not in prompt, f"{desc}: nothing is stopped: {prompt}"
+
+
+ASKED = "Quit the wheelhouse? Sessions carry on without it."
+RELAUNCH = " Still relaunching demo: its host hasn't stopped yet, and quitting leaves it stopped. (Relaunch brings it back.)"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("setup, keys, exited, prompt, desc", [
+    ("plain", ["ctrl+q"], False, ASKED, "Ctrl+Q asks first, and quits nothing yet (#296)"),
+    ("plain", ["ctrl+q", "escape"], False, ASKED, "Esc cancels"),
+    ("plain", ["ctrl+q", "enter"], False, ASKED, "Enter answers the default, No"),
+    ("plain", ["ctrl+q", "h", "i"], False, ASKED, "typing behind a mistaken Ctrl+Q quits nothing"),
+    ("plain", ["ctrl+q", "ctrl+q"], True, ASKED, "Ctrl+Q again quits"),
+    ("plain", ["ctrl+q", "alt+y"], True, ASKED, "Yes quits"),
+    ("relaunch", ["ctrl+q"], False, ASKED + RELAUNCH, "a relaunch under way: said in the same dialog"),
+    ("edits", ["ctrl+q"], False, ASKED + " Unsaved edits in plan.md will be lost.", "unsaved doc edits: said"),
+    ("remote", ["ctrl+q"], False, ASKED, "through the daemon: asked, but the relaunch is the daemon's to carry on"),
+    ("remote", ["ctrl+q", "ctrl+q"], True, ASKED, "through the daemon: Ctrl+Q again quits"),
+])
+async def test_quitting_asks_first(store, sid, served, monkeypatch, setup, keys, exited, prompt, desc):
+    """Doug, 2 Nov: "we need a confirmation on quitting - I just pressed Ctrl+Q when I meant
+    Alt+Q". One dialog, on No, whatever else it has to say."""
+    exits = []
+    monkeypatch.setattr(WheelhouseApp, "exit", lambda self, *a, **k: exits.append(True))
+    if setup in ("relaunch", "remote"):
+        monkeypatch.setattr(WheelhouseApp, "relaunching", property(lambda self: {sid}))
+    client = served(store.path).client(synchronous=True) if setup == "remote" else None
+    app = WheelhouseApp(store) if client is None else WheelhouseApp(client=client)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        if setup == "edits":
+            app.doc_edits["/somewhere/plan.md"] = DocEdit("old", "new", "new", (0, 0))
+        shown = []
+        for key in keys:
+            await pilot.press(key)
+            await pilot.pause()
+            if isinstance(app.screen, QuitConfirm):
+                shown.append(app.screen.prompt)
+        stack = [type(s).__name__ for s in app.screen_stack]
+    assert bool(exits) == exited, desc
+    assert shown and set(shown) == {prompt}, f"{desc}: {shown}"
+    assert stack.count("QuitConfirm") <= 1, f"{desc}: one dialog, never two: {stack}"
+    if len(keys) > 1 and keys[-1] in ("escape", "enter", "ctrl+q", "alt+y"):
+        assert "QuitConfirm" not in stack, f"{desc}: answered: {stack}"

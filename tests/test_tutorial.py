@@ -1347,9 +1347,9 @@ async def test_ctrl_q_quits_from_the_answer_box(store, sid):
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         app.query_one("#answer", TextArea).focus()
-        await pilot.press("ctrl+q")
+        await pilot.press("ctrl+q", "ctrl+q")
         await pilot.pause()
-        assert app._exit, "Ctrl+Q quits with the answer box focused"
+        assert app._exit, "Ctrl+Q, twice (asked first, #296), quits with the answer box focused"
 
 
 @pytest.mark.parametrize("marked, refused, desc", [
