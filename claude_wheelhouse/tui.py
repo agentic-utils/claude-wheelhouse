@@ -5140,8 +5140,11 @@ class WheelhouseApp(App):
         self.calls: list[threading.Event] = []   # each Delete's calls, set once made: the app's close waits for them
         self.undoing = False   # a Ctrl+Z's calls under way (action_undo): Delete and Ctrl+Delete refused meanwhile
         self.deleting = 0   # those Deletes and Ctrl+Zs, counted: Ctrl+Z, Ctrl+R and a pin wait for them (behind_deletes)
-        self.behind: list[tuple[set, Callable[[], None]]] = []   # what waits, in the order asked, with the calls it waits for
+        self.behind: list[tuple[set, int, Callable[[], None]]] = []   # what waits, in the order asked: the calls it waits for, its number
         self.undo: tuple[str, list] | None = None   # what Ctrl+Z undoes, said, and the rows as they stood (undoable)
+        self.typed = itertools.count()   # each act on the inbox numbered as typed (#312): the last typed is the one Ctrl+Z undoes
+        self.undo_typed = -1   # self.undo's number
+        self.acting: int | None = None   # the number of the act landing or let through now (as_typed)
         self.ranks: dict[str, tuple] = {}   # each item's rank as last shown
         self.sort_keys: dict[tuple, tuple] = {}   # each item's sort key as it stands (sort_key)
         self.compacting_drawn: bool | None = None   # whether Detail is drawn dimmed (paint_compacting)
@@ -8406,6 +8409,7 @@ class WheelhouseApp(App):
         self.deleting += 1
         made = threading.Event()
         self.calls.append(made)
+        at = next(self.typed) if self.acting is None else self.acting
         self.paint_items()
 
         def call(item, family):
@@ -8433,7 +8437,7 @@ class WheelhouseApp(App):
                         results.append(e)
             finally:
                 made.set()
-            self.post(lambda: self.deletes_landed(keys, acts, results, landed, made))
+            self.post(lambda: self.as_typed(at, lambda: self.deletes_landed(keys, acts, results, landed, made)))
         self.run_worker(work, thread=True, group="delete", exit_on_error=False)
 
     def deletes_landed(self, keys: set, acts: list, results: list, landed: Callable[[list], None],
@@ -8472,9 +8476,19 @@ class WheelhouseApp(App):
         self.refresh_data()
         while self.behind and not self.behind[0][0] & set(self.calls):
             under_way = set(self.calls)
-            self.behind.pop(0)[1]()
+            _, at, act = self.behind.pop(0)
+            self.as_typed(at, act)
             if started := set(self.calls) - under_way:   # its own calls: what was asked after it waits for them
-                self.behind = [(waits | started, act) for waits, act in self.behind]
+                self.behind = [(waits | started, n, later) for waits, n, later in self.behind]
+
+    def as_typed(self, at: int, act: Callable[[], None]) -> None:
+        """act done now as the act numbered `at` (self.typed): what it makes undoable replaces
+        only an act typed before it, whatever order the calls land in (undoable)."""
+        acting, self.acting = self.acting, at
+        try:
+            act()
+        finally:
+            self.acting = acting
 
     def behind_deletes(self, act: Callable[[], None]) -> bool:
         """A write to the inbox asked while a Delete is landing (delete_off_thread): True, and act
@@ -8484,7 +8498,7 @@ class WheelhouseApp(App):
         pressed (#312): a later Delete isn't waited for, nor a move of the cursor followed."""
         if not self.calls:
             return False
-        self.behind.append((set(self.calls), act))
+        self.behind.append((set(self.calls), next(self.typed), act))
         return True
 
     def close_pinned(self, item, family: list) -> None:
@@ -8503,8 +8517,11 @@ class WheelhouseApp(App):
 
     def toggle_pinned(self, key: str) -> None:
         """The pin column clicked, or Alt+P in the item list: the row's item pinned, or its pin cleared."""
-        if self.behind_deletes(lambda: self.toggle_pinned(key)):
-            return
+        if not self.behind_deletes(lambda: self.toggle_now(key)):
+            self.toggle_now(key)
+
+    def toggle_now(self, key: str) -> None:
+        """toggle_pinned's pin, at once or once the deletes before it have landed."""
         sid, _, ref = key.partition("|")
         item = ref and self.client.item(sid, ref)
         if not item:   # the conversation row, or gone meanwhile
@@ -8570,7 +8587,9 @@ class WheelhouseApp(App):
     def undoable(self, said: str, rows: list) -> None:
         """The person's last act on the inbox, for Ctrl+Z: what it did, said, and each row it
         changed as it stood before (restore). One step: the next act replaces it."""
-        self.undo = (said, rows)
+        at = next(self.typed) if self.acting is None else self.acting
+        if at > self.undo_typed:   # not a Delete landing after one typed later (#312)
+            self.undo, self.undo_typed = (said, rows), at
 
     def restore(self, item, acted: list) -> None:
         """Ctrl+Z, on its worker thread (action_undo): an item put back as it stood, from its row
@@ -8947,8 +8966,8 @@ class WheelhouseApp(App):
         drafts = [m for m in self.client.drafts(target[0]) if m["item_ref"] == target[1]]
         if not drafts and self.focused is self.items_table:
             marks = set(self.items_table.marked)   # the row and marks as typed on (#312)
-            if self.behind_deletes(lambda: self.reopen(target, marks)):   # reopening what a Delete still landing takes
-                return
+            if self.behind_deletes(lambda: self.reopen(target, marks) or self.notify(f"nothing to reopen at {aimed(target)}")):
+                return   # reopening what a Delete still landing takes
             if self.reopen(target, marks):
                 return
         if box.text.strip():

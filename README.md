@@ -637,7 +637,7 @@ is a stop after the answer box (in its place when the box doesn't show), and foc
 `PgUp`, `PgDn`, `Home` and `End` scroll it. Keys typed ahead of the screen end as if typed slowly: each acts once the one
 before it has done all it does, so the ones behind a key that opens a thread or a dialog go to it, and the ones behind a
 dialog's answer go to the screen it uncovers. A key that waits for a Delete still landing (`Ctrl+R`, `Ctrl+Z`, `Alt+P`)
-acts on the row and marks it was typed on, and `Ctrl+Z` undoes the act before it, not a Delete typed after.
+acts on the row and marks it was typed on, and `Ctrl+Z` undoes the last act typed before it, whichever Delete lands first.
 
 ### Asking the wheelhouse
 
