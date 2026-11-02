@@ -435,7 +435,9 @@ async def test_a_save_over_a_file_changed_on_disk_asks(store, sid, doc, choice, 
         await pressed(pilot, "ctrl+s", lambda: isinstance(app.screen, SaveConflict))
         assert isinstance(app.screen, SaveConflict), f"{desc}: asked"
         assert "plan.md has changed on disk" in str(app.screen.query_one(".dialog-prompt").render()), desc
-        await pressed(pilot, choice, lambda: not isinstance(app.screen, SaveConflict))
+        answered = (lambda: not isinstance(app.screen, SaveConflict)) if choice == "escape" else \
+            (lambda: doc[1].read_text() == DOC.replace("Build it.", file) and editor.text == DOC.replace("Build it.", buffer))
+        await pressed(pilot, choice, answered)   # what the answer does, which runs after the prompt has gone
         assert doc[1].read_text() == DOC.replace("Build it.", file), desc
         assert editor.text == DOC.replace("Build it.", buffer) and editor.display == open_, desc
         assert (str(doc[1]) in app.doc_edits) == (choice == "escape"), f"{desc}: edits left only on Cancel"
@@ -452,7 +454,7 @@ async def test_a_save_of_a_file_gone_offers_to_write_it_anew(store, sid, doc, ch
         doc[1].unlink()
         await pressed(pilot, "ctrl+s", lambda: isinstance(app.screen, SaveGone))
         assert isinstance(app.screen, SaveGone), f"{desc}: asked"
-        await pressed(pilot, choice, lambda: not isinstance(app.screen, SaveGone))
+        await pressed(pilot, choice, (lambda: not isinstance(app.screen, SaveGone)) if choice == "escape" else doc[1].exists)
         assert (doc[1].read_text() if doc[1].exists() else None) == (
             DOC.replace("Build it.", "Kept. Build it.") if choice == "alt+w" else None), desc
 
