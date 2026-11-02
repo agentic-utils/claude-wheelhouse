@@ -29,8 +29,8 @@ EXCERPTS: tuple[tuple[str, ...], ...] = (
     ("Kirk: CONTEEEEEXT!",),
     ("Spock: The needs of the summary outweigh the needs of the many.", "McCoy: Tell that to the many."),
     ("Chekov: Compaction? Inwented by a little old lady from Leningrad.",),
-    ("Sulu: Holding course, Captain. Whatever's left of it.",),
-    ("Uhura: Hailing frequencies open. Nobody can remember why we called.",),
+    ("Sulu: My fencing practice has been summarised as \"stabbed at things\".",),
+    ("Uhura: Captain, the Klingons want a copy of the summary.", "Kirk: Send it. Let them suffer."),
     ("Scotty: Ye cannae squeeze three hours o' talk intae a paragraph!",
      "Spock: Mr Scott, that is precisely what compaction is."),
     ("Scotty: The dilithium's crackin', Captain! Too many tool results!",),
@@ -40,12 +40,10 @@ EXCERPTS: tuple[tuple[str, ...], ...] = (
      "McCoy: There goes my entire contribution."),
     ("Kirk: Scotty, can you reroute the context through the deflector dish?",
      "Scotty: Captain, ye can reroute anythin' through the deflector dish."),
-    ("Scotty: Engineering tae bridge. We've lost the first forty thousand tokens.",
-     "Spock: Mostly greetings, Captain."),
     ("Kirk: Mr Scott, I'm counting on you.", "Scotty: Aye, and I'm countin' tokens, sir."),
     ("Spock: Mr Scott, the summary has dropped your accent.",
      "Scotty: It has no'! I'm still here, ye ken!"),
-    ("Scotty: Laddie, never tell the captain how fast ye can really compact.",),
+    ("Scotty: I know this context like the back o' my hand.", "McCoy: Then why did you just walk into it?"),
     ("Kirk: Risk is our business. Forgetting, apparently, is also our business.",),
     ("Uhura: Captain, Starfleet wants a summary of the summary.",),
     ("Chekov: Keptin, context at fifty percent and falling!", "Kirk: Steady, Mr Chekov."),
@@ -56,11 +54,10 @@ EXCERPTS: tuple[tuple[str, ...], ...] = (
     ("Spock: Remember.", "McCoy: Remember WHAT? It's all been compacted!"),
     ("Kirk: Energise.", "Scotty: Aye, but he'll rematerialise as a summary, sir."),
     ("Scotty: The pattern buffer's full, Captain! Somethin's got tae go!",),
-    ("McCoy: I won't have my molecules summarised across space, Jim.",),
+    ("McCoy: What is this, the Dark Ages? Compacting a conversation with a hammer!",),
     ("Kirk: Two lines from the transcript, Scotty. That's all I ask.",
      "Scotty: Two? Ye'll get one and like it."),
     ("Scotty: I'll have tae take the old jokes offline, Captain.", "Kirk: Not the old jokes!"),
-    ("Spock: The summary omits all forty-seven \"quick questions\", Captain.",),
     ("Uhura: I'm picking up a faint signal, Captain. It's the original prompt.",),
     ("Chekov: Keptin, the scroll bar has disappeared!",),
     ("Sulu: Captain, I've forgotten our heading. And our destination. And why.",),
@@ -69,8 +66,9 @@ EXCERPTS: tuple[tuple[str, ...], ...] = (
     ("Kirk: Scotty, report!", "Scotty: She's a wee bit lighter, Captain, and a lot more forgetful."),
     ("Spock: With so little context, I shall have to make a guess.",
      "Kirk: A guess? You, Spock? That's extraordinary."),
-    ("McCoy: Spock, did that summary just call me \"the doctor, briefly\"?",),
-    ("Scotty: Aye, it'll fit. The way a haggis fits in a thimble.",),
+    ("Uhura: Mr Spock's logs compressed better than anyone's, Captain.",
+     "McCoy: No surprise. There was nothing in them."),
+    ("Scotty: Aye, it'll fit. I got two humpbacks intae a Klingon ship.",),
     ("Scotty: I'm an engineer, not a... och, wait, that's the Doctor's line.",),
     ("Spock: Highly illogical to keep four copies of the same stack trace.",),
     ("Kirk: Space. The final frontier. And now, the final paragraph.",),
@@ -91,20 +89,20 @@ EXCERPTS: tuple[tuple[str, ...], ...] = (
     ("Kirk: Mr Spock, you have the conn.", "Spock: I have a summary of the conn, Captain."),
     ("Uhura: Captain, the summary has me down as \"hailing frequencies\". Again.",),
     ("Scotty: I'm puttin' the old tool output oot the airlock, Captain.", "Kirk: All of it?"),
-    ("Kirk: Engineering, status!", "Scotty: She's wheezin' like a set o' pipes wi' a hole in the bag!"),
+    ("Kirk: Engineering, status!",
+     "Scotty: Every warnin' light's on, sir, and two I didnae know we had!"),
     ("Scotty: I gave her a good hard thump. She likes that.",),
     ("Spock: Mr Scott, striking the console is not an engineering procedure.",
      "Scotty: It is in Aberdeen."),
     ("Scotty: Every time ye say \"just one more thing\", a dilithium crystal dies.",),
     ("Spock: Captain, the context window is now more of an aperture.",),
     ("Kirk: What's left, Bones?", "McCoy: A to-do list and a vague sense of dread."),
-    ("Chekov: Keptin! I remember nothing before Stardate yesterday!",),
+    ("Chekov: Keptin, course plotted to the end of the summary. It is wery short.",),
     ("Scotty: Gie's a minute, Captain, she's still squeezin'.",),
     ("Kirk: Is it done, Scotty?", "Scotty: Done? Ye'll ken it's done when the core stops greetin'."),
     ("Spock: Live long and summarise.",),
     ("McCoy: The redshirt, Jim. He's been summarised.", "Kirk: What did it say?"),
     ("Scotty: I've no' had a day like this since the tribbles got intae the logs.",),
-    ("Sulu: Captain, the helm's asking whether we've met.",),
 )
 
 
@@ -160,6 +158,7 @@ THUMP = 2 * TICKS   # Scotty's cycle while compacting: working, the arm up, the 
 
 SCOTTY = {"work": (" o ", "<|\\", "/ \\"), "fiddle": (" o ", "<|/", "/ \\"), "raise": ("\\o ", " |\\", "/ \\"),
           "thump": (" o ", "=|\\", "/ \\"), "cheer": ("\\o/", " | ", "/ \\"), "despair": ("|o|", " | ", "/ \\"),
+          "clutch": ("/o\\", " | ", "/ \\"),
           "ease": (" o ", "/|\\", "/ \\")}
 KIRK = {"hips": (" o ", "<|>", "/ \\"), "point": ("_o ", " |\\", "/ \\"), "ease": (" o ", "/|\\", "/ \\")}
 SPOCK = {"still": (" o ", "(|)", "/ \\"), "scan": (" o ", "(|[", "/ \\"), "brow": (" o'", "(|)", "/ \\")}
@@ -234,7 +233,7 @@ def pose(state: str, t: float, f: int) -> tuple[tuple[str, ...], tuple[str, ...]
     if state == "completed":
         return SCOTTY["cheer"], KIRK["hips"], SPOCK["brow"] if f // TICKS % 2 else SPOCK["still"], 42, f // 2 % 2
     if state == "failed":
-        return (SCOTTY["despair"] if f // 3 % 2 else SCOTTY["cheer"], KIRK["point"], SPOCK["brow"], 42, 0)
+        return (SCOTTY["clutch"] if f // 3 % 2 else SCOTTY["despair"], KIRK["point"], SPOCK["brow"], 42, 0)
     return SCOTTY["ease"], KIRK["ease"], SPOCK["still"] if t < 2 or f // TICKS % 3 else SPOCK["brow"], 42, 0
 
 
