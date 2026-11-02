@@ -2951,6 +2951,46 @@ async def test_emoji_suggestions_go_once_the_cursor_moves_off_the_code(store, si
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("box, keys, desc", [
+    ("answer", ["enter"], "Enter on the last row in sight"),
+    ("thread-answer", ["enter"], "the same in a full-screen item's box"),
+    ("docview-answer", ["enter"], "and in a full-screen doc's"),
+    ("answer", ["x"], "a long line wrapping past the last row in sight"),
+])
+async def test_the_answer_box_follows_the_cursor_down(store, sid, tmp_path, box, keys, desc):
+    """#298: Textual scrolls to the cursor before it grows the box for the edit, so the new
+    row was left just under the box."""
+    doc = tmp_path / "plan.md"
+    doc.write_text("# The plan\n")
+    q = store.post_doc(sid, "the plan", str(doc)) if box == "docview-answer" else store.post_item(sid, "question", "which db?")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        if box != "answer":
+            app.push_screen((ThreadView if box == "thread-answer" else tui.DocView)(sid, q))
+            await pilot.pause()
+        area = app.screen.query_one(f"#{box}", tui.Compose)
+        area.focus()
+        height = area.scrollable_content_region.height
+        # a row more than the box holds, so it has scrolled once already: the first overflow
+        # did follow the cursor (the scrollbar's arrival lays the box out again), later ones didn't
+        area.text = "\n".join(["line"] * (height + 1))
+        await pilot.pause()
+        if keys == ["x"]:   # the last line a full row, its scrollbar's room taken: one more key wraps it
+            area.text = "\n".join(["line"] * height + ["x" * area.wrap_width])
+        area.move_cursor(area.document.end)
+        await pilot.pause()
+        assert area.scroll_offset.y == 1, f"{desc}: scrolled to the cursor on the last row"
+        assert area.wrapped_document.location_to_offset(area.cursor_location).y == height, f"{desc}: on its last row"
+        await pilot.press(*keys)
+        await pilot.pause()
+        row = area.wrapped_document.location_to_offset(area.cursor_location).y
+        assert row == height + 1, f"{desc}: the cursor a row further down"
+        assert area.scroll_offset.y <= row < area.scroll_offset.y + height, \
+            f"{desc}: the cursor's row {row} in sight, rows {area.scroll_offset.y} to {area.scroll_offset.y + height - 1}"
+
+
+@pytest.mark.anyio
 async def test_a_pasted_code_converts_on_send(store, sid):
     store.post_item(sid, "question", "which db?")
     app = WheelhouseApp(store)
