@@ -31,8 +31,7 @@ async def shown(app, pilot, ref: str, full: bool = False):
     await pilot.pause()
     if full:
         app.items_table.focus()
-        await pilot.press("enter")
-        await pilot.pause()
+        await pressed(pilot, "enter", lambda: isinstance(app.screen, tui.DocView))
         return app.screen.query_one("#docview", tui.Transcript), app.screen.query_one("#docview-editor", DocEditor)
     return app.detail, app.detail_editor
 
@@ -43,6 +42,30 @@ async def click(pilot, view, row: int) -> None:
     await pilot.click(offset=(region.x + 2, region.y + row - round(view.parent.scroll_y)))
     await pilot.pause()
     await pilot.pause()
+
+
+async def pressed(pilot, key: str, done) -> None:
+    """A key pressed and waited for until done() holds (what it does: a prompt up, a file
+    written), then one pause more, for what it queued (a prompt's answer, a repaint). The
+    driver hands a key to the app from its thread, and pilot.pause() takes a loop starved
+    of CPU for an idle one, so on a loaded run a count of pauses can end before the key
+    lands. Bounded: one that never does fails the test's own assert after."""
+    await pilot.press(key)
+    await until(pilot, done)
+
+
+async def until(pilot, done) -> None:
+    """Paused until done() holds, bounded, then once more (pressed): what the app does
+    late, as a highlight's handling, waited for by what it does, not a count of pauses."""
+    for _ in range(300):
+        if done():
+            break
+        await pilot.pause(0.01)
+    await pilot.pause()
+
+
+def text_of(view) -> str:
+    return "\n".join(view._layout(view.size.width)[1])
 
 
 def row_with(view, text: str) -> int:
@@ -98,8 +121,7 @@ async def test_ctrl_enter_re_renders_and_ctrl_s_saves(store, sid, doc, immediate
         await pilot.pause()
         assert app.query_one("#detail-pane").border_title == "Detail · edited · Ctrl+S saves", "the title says so"
         assert "Rebuild" not in "\n".join(view._layout(view.size.width)[1]), "nothing re-renders as it's typed"
-        await pilot.press("ctrl+j")
-        await pilot.pause()
+        await pressed(pilot, "ctrl+j", lambda: "Rebuild it. Build it." in text_of(view))
         assert "Rebuild it. Build it." in "\n".join(view._layout(view.size.width)[1]), "Ctrl+Enter renders the buffer"
         app.refresh_data()
         await pilot.pause()
@@ -107,9 +129,8 @@ async def test_ctrl_enter_re_renders_and_ctrl_s_saves(store, sid, doc, immediate
         saved = DOC.replace("Build it.", "Rebuild it. Build it.")
         assert doc[1].read_text() == (saved if immediate else DOC), "Immediate saves on Ctrl+Enter, Queued doesn't"
         editor.insert("Then ")
-        await pilot.press("ctrl+s")
-        await pilot.pause()
         saved = DOC.replace("Build it.", "Rebuild it. Then Build it.")
+        await pressed(pilot, "ctrl+s", lambda: doc[1].read_text() == saved)
         assert doc[1].read_text() == saved and notes[-1] == "Saved plan.md", "Ctrl+S saves the buffer"
         assert app.query_one("#detail-pane").border_title == "Detail", "nothing left to save"
         assert "Then Build it." in app._detail_text and editor.display, "Detail shows what was saved, the editor open"
@@ -118,8 +139,7 @@ async def test_ctrl_enter_re_renders_and_ctrl_s_saves(store, sid, doc, immediate
         assert editor.text == saved and str(doc[1]) not in app.doc_edits, "the saved text its base"
         assert store.sessions()[0]["drafts"] == 1, "Ctrl+S in the editor doesn't send the session's queue"
         editor.insert("Again. ")
-        await pilot.press("ctrl+s")
-        await pilot.pause()
+        await pressed(pilot, "ctrl+s", lambda: doc[1].read_text().startswith("# The plan\n\nRebuild it. Then Again. "))
         assert doc[1].read_text().startswith("# The plan\n\nRebuild it. Then Again. "), "a second save, from the new base"
 
 
@@ -130,36 +150,28 @@ async def test_esc_closes_asking_first_with_edits(store, sid, doc, full):
     async with app.run_test(size=(160, 40)) as pilot:
         view, editor = await shown(app, pilot, doc[0], full)
         await click(pilot, view, row_with(view, "Build it."))
-        await pilot.press("escape")
-        await pilot.pause()
+        await pressed(pilot, "escape", lambda: not editor.display)
         assert not editor.display and view.has_focus, "no edits: Esc closes it, the viewer focused"
         await click(pilot, view, row_with(view, "Build it."))
         editor.insert("Saved. ")
-        await pilot.press("escape")
-        await pilot.pause()
+        await pressed(pilot, "escape", lambda: isinstance(app.screen, LeaveEdits))
         assert isinstance(app.screen, LeaveEdits), "edits: Esc asks first"
-        await pilot.press("escape")
-        await pilot.pause()
+        await pressed(pilot, "escape", lambda: not isinstance(app.screen, LeaveEdits))
         assert editor.display and editor.text.startswith("# The plan\n\nSaved."), "Keep editing keeps them"
-        await pilot.press("escape")
-        await pilot.pause()
-        await pilot.press("enter")
-        await pilot.pause()
+        await pressed(pilot, "escape", lambda: isinstance(app.screen, LeaveEdits))
+        await pressed(pilot, "enter", lambda: doc[1].read_text().startswith("# The plan\n\nSaved. Build it."))
         assert not editor.display and doc[1].read_text().startswith("# The plan\n\nSaved. Build it."), \
             "Save, the default, saves and closes"
         assert str(doc[1]) not in app.doc_edits and "Saved. Build it." in "\n".join(view._layout(view.size.width)[1])
         await click(pilot, view, row_with(view, "Build it."))
         editor.insert("Not yet. ")
-        await pilot.press("escape")
-        await pilot.pause()
-        await pilot.press("alt+d")
-        await pilot.pause()
+        await pressed(pilot, "escape", lambda: isinstance(app.screen, LeaveEdits))
+        await pressed(pilot, "alt+d", lambda: editor.key is None)
         assert not editor.display and editor.key is None, "Discard closes it"
         assert "Not yet" not in "\n".join(view._layout(view.size.width)[1]), "the file shown again"
         assert "Not yet" not in doc[1].read_text()
         if full:
-            await pilot.press("escape")
-            await pilot.pause()
+            await pressed(pilot, "escape", lambda: not isinstance(app.screen, tui.DocView))
             assert not isinstance(app.screen, tui.DocView), "closed, Esc leaves as before"
 
 
@@ -167,8 +179,7 @@ async def edited(app, pilot, view, editor) -> None:
     """The editor opened on Build it., edited there, and the edit rendered (Ctrl+Enter)."""
     await click(pilot, view, row_with(view, "Build it."))
     editor.insert("Kept. ")
-    await pilot.press("ctrl+j")
-    await pilot.pause()
+    await pressed(pilot, "ctrl+j", lambda: "Kept. Build it." in text_of(view))
 
 
 @pytest.mark.anyio
@@ -186,12 +197,10 @@ async def test_moving_off_a_doc_with_edits_asks(store, sid, doc, choice, file, s
         editor.move_cursor((2, 3))
         await pilot.pause()
         app.items_table.move_cursor(row=item_row(app, q))
-        await pilot.pause()
-        await pilot.pause()
+        await until(pilot, lambda: isinstance(app.screen, LeaveEdits))   # its highlight handled late: asked
         assert isinstance(app.screen, LeaveEdits) and not editor.display, f"{desc}: asked, the editor closed"
-        await pilot.press(choice)
-        for _ in range(3):
-            await pilot.pause()
+        await pressed(pilot, choice, lambda: str(doc[1]) not in app.doc_edits   # saved or dropped, or open again
+                      or editor.display and editor.cursor_location == (2, 3))   # with its cursor put back (place)
         assert doc[1].read_text() == DOC.replace("Build it.", file), desc
         assert app.selected == (sid, q if selected == "q" else doc[0]), f"{desc}: {app.selected}"
         if selected == "doc":
@@ -214,9 +223,9 @@ async def test_edits_in_detail_show_full_screen(store, sid, doc):
         assert full_editor.text == editor.text, "its editor opens on the same buffer"
         full_editor.insert("More. ")
         await pilot.pause()
-        for key in ("escape", "enter", "escape"):   # asked, Save, and out
-            await pilot.press(key)
-            await pilot.pause()
+        await pressed(pilot, "escape", lambda: isinstance(app.screen, LeaveEdits))   # asked,
+        await pressed(pilot, "enter", lambda: "More. " in doc[1].read_text())   # Save,
+        await pressed(pilot, "escape", lambda: not isinstance(app.screen, tui.DocView))   # and out
         assert not isinstance(app.screen, tui.DocView), "full screen left, its edits saved"
         app.refresh_data()
         await pilot.pause()
@@ -264,8 +273,7 @@ async def test_the_cursor_into_another_block_scrolls_the_viewer_the_least(store,
         view, editor = await shown(app, pilot, long_doc)
         await click(pilot, view, row_with(view, "Section 0"))
         top = view.parent.scroll_y
-        await pilot.press("down")
-        await pilot.pause()
+        await pressed(pilot, "down", lambda: editor.cursor_location[0] == 1)
         assert view.parent.scroll_y == top, "within one block, or into one in view, nothing moves"
         bottom = round(view.parent.scroll_y) + view.parent.scrollable_content_region.height
         hidden = next(i for i in range(40) if row_with(view, f"Section {i}") >= bottom)
@@ -291,9 +299,8 @@ async def test_a_render_keeps_the_cursors_block_on_its_row(store, sid, long_doc)
         editor.move_cursor((0, 0))
         editor.insert("## A new first section\n\nWith prose.\n\n")
         editor.move_cursor((52, 0))   # Section 12's heading, four lines down
-        await pilot.press("ctrl+j")
-        await pilot.pause()
-        await pilot.pause()
+        # rendered, then anchored after the refresh (or once laid out off the loop), which clears anchor
+        await pressed(pilot, "ctrl+j", lambda: "A new first section" in text_of(view) and editor.anchor is None)
         assert view.block_rows(52)[0] - round(view.parent.scroll_y) == before, "the block on its row, the rows above grown"
 
 
@@ -308,10 +315,8 @@ async def test_a_click_on_a_block_the_edits_took_out_keeps_the_cursor(store, sid
         editor.move_cursor((2, 3))
         await pilot.pause()
         app.items_table.move_cursor(row=item_row(app, q))
-        await pilot.pause()
-        await pilot.press("escape")   # Keep editing: back on the doc
-        await pilot.pause()
-        await pilot.pause()
+        await until(pilot, lambda: isinstance(app.screen, LeaveEdits))   # its highlight handled late: asked
+        await pressed(pilot, "escape", lambda: editor.display and editor.cursor_location == (2, 3))   # Keep editing
         assert editor.display and editor.cursor_location == (2, 3), "open again where it was"
         assert not app.answer.display, "laid out for it at once, no tick needed: the box gone from under it"
         view.parent.scroll_to(y=row_with(view, "one"), animate=False, immediate=True)   # in the viewer's smaller room
@@ -329,9 +334,8 @@ async def test_discard_full_screen_clears_detail_at_once(store, sid, doc):
         await edited(app, pilot, view, editor)
         full, full_editor = await shown(app, pilot, doc[0], full=True)
         await click(pilot, full, row_with(full, "The plan"))
-        for key in ("escape", "alt+d"):
-            await pilot.press(key)
-            await pilot.pause()
+        await pressed(pilot, "escape", lambda: isinstance(app.screen, LeaveEdits))
+        await pressed(pilot, "alt+d", lambda: editor.key is None)
         assert not editor.display and editor.key is None, "Detail's editor on it closed too"
         assert app.screen_stack[0].query_one("#detail-pane").border_title == "Detail", "its title at once"
         assert "Kept" not in "\n".join(view._layout(view.size.width)[1]), "and its viewer the file's"
@@ -434,13 +438,12 @@ async def test_a_save_over_a_file_changed_on_disk_asks(store, sid, doc, choice, 
         view, editor = await shown(app, pilot, doc[0])
         await edited(app, pilot, view, editor)
         doc[1].write_text(ON_DISK)
-        await pilot.press("ctrl+s")
-        await pilot.pause()
+        await pressed(pilot, "ctrl+s", lambda: isinstance(app.screen, SaveConflict))
         assert isinstance(app.screen, SaveConflict), f"{desc}: asked"
         assert "plan.md has changed on disk" in str(app.screen.query_one(".dialog-prompt").render()), desc
-        await pilot.press(choice)
-        await pilot.pause()
-        await pilot.pause()
+        answered = (lambda: not isinstance(app.screen, SaveConflict)) if choice == "escape" else \
+            (lambda: doc[1].read_text() == DOC.replace("Build it.", file) and editor.text == DOC.replace("Build it.", buffer))
+        await pressed(pilot, choice, answered)   # what the answer does, which runs after the prompt has gone
         assert doc[1].read_text() == DOC.replace("Build it.", file), desc
         assert editor.text == DOC.replace("Build it.", buffer) and editor.display == open_, desc
         assert (str(doc[1]) in app.doc_edits) == (choice == "escape"), f"{desc}: edits left only on Cancel"
@@ -455,11 +458,9 @@ async def test_a_save_of_a_file_gone_offers_to_write_it_anew(store, sid, doc, ch
         view, editor = await shown(app, pilot, doc[0])
         await edited(app, pilot, view, editor)
         doc[1].unlink()
-        await pilot.press("ctrl+s")
-        await pilot.pause()
+        await pressed(pilot, "ctrl+s", lambda: isinstance(app.screen, SaveGone))
         assert isinstance(app.screen, SaveGone), f"{desc}: asked"
-        await pilot.press(choice)
-        await pilot.pause()
+        await pressed(pilot, choice, (lambda: not isinstance(app.screen, SaveGone)) if choice == "escape" else doc[1].exists)
         assert (doc[1].read_text() if doc[1].exists() else None) == (
             DOC.replace("Build it.", "Kept. Build it.") if choice == "alt+w" else None), desc
 
@@ -473,15 +474,13 @@ async def test_a_save_the_filesystem_refuses_says_where_and_why(store, sid, doc)
         await edited(app, pilot, view, editor)
         doc[1].parent.chmod(0o555)
         try:
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await pressed(pilot, "ctrl+s", lambda: isinstance(app.screen, SaveFailed))
         finally:
             doc[1].parent.chmod(0o755)
         assert isinstance(app.screen, SaveFailed), "said in a prompt"
         said = str(app.screen.query_one(".dialog-prompt").render())
         assert said == f"plan.md wasn't saved: {doc[1]} can't be written: Permission denied", said
-        await pilot.press("escape")
-        await pilot.pause()
+        await pressed(pilot, "escape", lambda: not isinstance(app.screen, SaveFailed))
         assert doc[1].read_text() == DOC and str(doc[1]) in app.doc_edits, "nothing written, the edits kept"
         assert app.query_one("#detail-pane").border_title == "Detail · edited · Ctrl+S saves"
 
@@ -493,8 +492,7 @@ async def test_a_save_outside_what_may_be_written_is_refused(store, sid, doc, mo
         view, editor = await shown(app, pilot, doc[0])
         await edited(app, pilot, view, editor)
         monkeypatch.setattr(store, "doc_paths", lambda: [])   # the item's file no longer a doc's
-        await pilot.press("ctrl+s")
-        await pilot.pause()
+        await pressed(pilot, "ctrl+s", lambda: isinstance(app.screen, SaveFailed))
         assert isinstance(app.screen, SaveFailed)
         assert "is not under any doc root" in str(app.screen.query_one(".dialog-prompt").render())
         assert doc[1].read_text() == DOC
@@ -518,14 +516,10 @@ async def test_a_save_from_moving_off_that_doesnt_land_goes_back_to_the_edits(st
         else:
             doc[1].chmod(0o444)
         app.items_table.move_cursor(row=item_row(app, q))
-        await pilot.pause()
-        await pilot.pause()
-        await pilot.press("alt+s")
-        await pilot.pause()
+        await until(pilot, lambda: isinstance(app.screen, LeaveEdits))   # its highlight handled late: asked
+        await pressed(pilot, "alt+s", lambda: isinstance(app.screen, (SaveConflict, SaveFailed)))
         assert isinstance(app.screen, SaveConflict if trouble == "changed" else SaveFailed), desc
-        await pilot.press(answer)
-        for _ in range(3):
-            await pilot.pause()
+        await pressed(pilot, answer, lambda: editor.display)
         assert app.selected == (sid, doc[0]) and editor.display, f"{desc}: back on the doc, editing"
         assert editor.text.startswith("# The plan\n\nKept. "), desc
         assert app.query_one("#detail-pane").border_title.startswith("Detail · edited"), desc
@@ -541,8 +535,7 @@ async def test_a_file_rewritten_unchanged_is_no_change_to_ask_about(store, sid, 
         os.utime(doc[1], ns=(later, later))   # touched, its text the same
         app.refresh_data()
         await pilot.pause()
-        await pilot.press("ctrl+s")
-        await pilot.pause()
+        await pressed(pilot, "ctrl+s", lambda: isinstance(app.screen, SaveConflict) or str(doc[1]) not in app.doc_edits)
         assert not isinstance(app.screen, SaveConflict), "no 409: the base's mtime taken up"
         assert doc[1].read_text().startswith("# The plan\n\nKept. ")
 
@@ -580,6 +573,10 @@ async def test_the_app_never_moves_the_selection_off_a_doc_being_edited(store, s
         assert app.selected == (sid, doc[0]), f"{desc}: the selection kept, {app.selected}"
         assert not isinstance(app.screen, LeaveEdits) and editor.display, f"{desc}: the editor open, nothing asked"
         assert app.focused is (view if focus == "viewer" else editor), f"{desc}: the focus kept, {app.focused}"
-        await pilot.press("enter")
-        await pilot.pause()
+        typed = editor.text
+        if focus == "editor":   # Enter types a line there: landed once the buffer has it
+            await pressed(pilot, "enter", lambda: editor.text != typed)
+        else:   # Enter does nothing on the viewer: landed once a Ctrl+A behind it has selected the doc
+            await pilot.press("enter")
+            await pressed(pilot, "ctrl+a", lambda: view.text_selection is not None)
         assert doc[1].read_text() == DOC, f"{desc}: nothing written"
