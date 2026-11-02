@@ -8972,8 +8972,8 @@ class WheelhouseApp(App):
         drafts = [m for m in self.client.drafts(target[0]) if m["item_ref"] == target[1]]
         if not drafts and self.focused is self.items_table:
             marks = set(self.items_table.marked)   # the row and marks as typed on (#312)
-            if self.behind_deletes(lambda: self.reopen(target, marks) or self.notify(f"nothing to reopen at {aimed(target)}")):
-                return   # reopening what a Delete still landing takes
+            if self.behind_deletes(lambda: self.reopen_later(target, marks)):   # reopening what a Delete still landing takes
+                return
             if self.reopen(target, marks):
                 return
         if box.text.strip():
@@ -8989,6 +8989,12 @@ class WheelhouseApp(App):
         self.refresh_data()
 
     @session_action
+    def reopen_later(self, target, marks: set) -> None:
+        """Ctrl+R's reopen once the deletes before it have landed (behind_deletes): said if
+        there's nothing to reopen by then."""
+        if not self.reopen(target, marks):
+            self.notify(f"nothing to reopen at {aimed(target)}")
+
     def reopen(self, target, marks: set) -> bool:
         """Ctrl+R in the item list, with nothing queued: the marked rows' finished items reopened,
         or else the target if it's finished (close). False with nothing of the kind to reopen."""
