@@ -1728,6 +1728,7 @@ def test_compaction_entries_place_stage_lines_and_the_crew(store, sid):
     from datetime import datetime, timezone
     from claude_wheelhouse import compactor
     from claude_wheelhouse.hub import compaction_entries
+    from claude_wheelhouse.scenes import star_wars
     store.command(sid, "compact")
     cid = store.compaction(sid)["id"]
     store.move_compaction(sid, cid, "preparing")
@@ -1737,14 +1738,14 @@ def test_compaction_entries_place_stage_lines_and_the_crew(store, sid):
     assert later == compaction_entries(stages, True, t0 + 65), "the same at every refresh"
     whos = [e.who for e in later]
     assert whos.count("dock") == 1 and "stage" not in whos and 3 <= whos.count("crew") <= 4, whos   # docked while it runs (#287)
-    assert compactor.docked(later[0].text) == ("preparing", t0, "asked for by you (Compact) · " + stages[-1]["at"][11:16] + "Z"), later[0]
+    assert compactor.docked(later[0].text) == (star_wars.SCENE, "preparing", t0, "asked for by you (Compact) · " + stages[-1]["at"][11:16] + "Z"), later[0]
     assert all(e.at <= datetime.fromtimestamp(t0 + 65, timezone.utc).isoformat() for e in later)
     store.move_compaction(sid, cid, "compacting")
     store.move_compaction(sid, cid, "completed", "220k → 40k")
     ended = datetime.fromisoformat(store.stages(sid)[-1]["at"]).timestamp()
     done = compaction_entries(store.stages(sid), False, t0 + 3600)
     last = [e for e in done if e.who == "stage"][-1]
-    assert last.text.startswith(compactor.WALLS["completed"] + "\n220k → 40k · "), last
+    assert last.text.startswith(star_wars.WALLS["completed"] + "\n220k → 40k · "), last
     assert all(datetime.fromisoformat(e.at).timestamp() <= ended for e in done if e.who == "crew"), \
         "no crew once it has ended, however long after"
 
@@ -1759,14 +1760,15 @@ def test_a_later_stage_redraws_the_art_in_place(store, sid, moves, state, desc):
     """#277: one art per cycle, at its first stage's time, showing the latest stage."""
     from claude_wheelhouse import compactor
     from claude_wheelhouse.hub import compaction_entries
+    from claude_wheelhouse.scenes import star_wars
     store.command(sid, "compact")
     cid = store.compaction(sid)["id"]
     for m in moves:
         store.move_compaction(sid, cid, m)
-    first = next(st["at"] for st in store.stages(sid) if st["state"] in compactor.WALLS)
+    first = next(st["at"] for st in store.stages(sid) if st["state"] in star_wars.WALLS)
     arts = [e for e in compaction_entries(store.stages(sid), False) if e.who == "stage"]
     assert len(arts) == 1, f"{desc}: {len(arts)} drawn"
-    assert arts[0].at == first and arts[0].text.startswith(compactor.WALLS[state] + "\n"), desc
+    assert arts[0].at == first and arts[0].text.startswith(star_wars.WALLS[state] + "\n"), desc
 
 
 @pytest.mark.parametrize("moves, active, docked, art, desc", [
@@ -1783,14 +1785,15 @@ def test_the_running_cycle_is_docked_not_drawn(store, sid, moves, active, docked
     conversation; at its end the final frame is drawn where its art was first."""
     from claude_wheelhouse import compactor
     from claude_wheelhouse.hub import compaction_entries
+    from claude_wheelhouse.scenes import star_wars
     store.command(sid, "compact")
     cid = store.compaction(sid)["id"]
     for m in moves:
         store.move_compaction(sid, cid, m)
     out = compaction_entries(store.stages(sid), active)
     docks, arts = [e for e in out if e.who == "dock"], [e for e in out if e.who == "stage"]
-    assert [compactor.docked(e.text)[0] for e in docks] == ([docked] if docked else []), desc
-    assert [compactor.state_of(e.text) for e in arts] == ([art] if art else []), desc
+    assert [compactor.docked(e.text)[1] for e in docks] == ([docked] if docked else []), desc
+    assert [compactor.state_of(e.text) for e in arts] == ([(star_wars.SCENE, art)] if art else []), desc
 
 
 @pytest.mark.parametrize("status, why", [("dead", "its host stopped"), ("stalled", "its host stalled")])

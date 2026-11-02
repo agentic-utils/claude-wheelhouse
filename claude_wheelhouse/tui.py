@@ -596,7 +596,7 @@ def _block_lines(who: str, md: str, width: int, console) -> list:
 
 
 def art_text(rows: tuple[str, ...], roles: tuple[str, ...]) -> Text:
-    """A big compactor frame (compactor.scene) as Text, each run of cells in its role's colour."""
+    """A big compactor frame (Scene.frame) as Text, each run of cells in its role's colour."""
     out = Text(no_wrap=True, overflow="ellipsis")
     for i, (row, role) in enumerate(zip(rows, roles)):
         if i:
@@ -614,9 +614,10 @@ def stage_text(who: str, text: str, width: int = 0) -> Text:
     would turn its art into rules and bullets): each line cut with an ellipsis, not wrapped; a
     stage's last line (who asked or what came of it, and when) dim under its art (#277). A
     stage's art in a pane at least compactor.BIG_WIDTH wide is the big one's still (#287)."""
-    if who == "stage" and width >= compactor.BIG_WIDTH and (state := compactor.state_of(text)):
-        line = text[len(compactor.WALLS[state]) + 1:]
-        return art_text(*compactor.scene(state, 0.0, animate=False)).append("\n" + line, style=VOICE[who] + " dim")
+    if who == "stage" and width >= compactor.BIG_WIDTH and (found := compactor.state_of(text)):
+        scene, state = found
+        line = text[len(scene.walls[state]) + 1:]
+        return art_text(*scene.frame(state, 0.0, animate=False)).append("\n" + line, style=VOICE[who] + " dim")
     out = Text(no_wrap=True, overflow="ellipsis")
     lines = text.split("\n")
     for i, line in enumerate(lines):
@@ -1955,7 +1956,7 @@ class CompactorDock(Widget, can_focus=False):
     lower), runs only while it shows, and draws only this widget: never the inbox (#268)."""
     DEFAULT_CSS = "CompactorDock { height: auto; display: none; padding: 0 1; }"
     timer = None
-    shown: tuple[str, float, str] | None = None
+    shown: tuple | None = None   # its scene, stage, start and dim line (compactor.docked)
     drawn = None   # what the last frame drew (paint): the same again draws nothing
     fps = 0.0   # its rate, read as it opens (dock)
 
@@ -1985,7 +1986,7 @@ class CompactorDock(Widget, can_focus=False):
 
     def frame(self) -> tuple:
         """What this moment draws: the stage, big or not, and its frame number (compactor.TICKS)."""
-        state, since, _ = self.shown
+        _, state, since, _ = self.shown
         big = self.content_size.width >= compactor.BIG_WIDTH
         moving = big and self.fps > 0
         return state, big, int(max(0.0, self.now() - since) * compactor.TICKS) if moving else -1
@@ -2003,10 +2004,10 @@ class CompactorDock(Widget, can_focus=False):
     def render(self) -> Text:
         if self.shown is None or self.drawn is None:
             return Text()
-        (state, big, f), line = self.drawn, self.shown[2]
+        (state, big, f), (scene, *_, line) = self.drawn, self.shown
         if not big:
-            return stage_text("stage", compactor.WALLS[state] + "\n" + line)
-        art = art_text(*compactor.scene(state, max(f, 0) / compactor.TICKS, animate=f >= 0))
+            return stage_text("stage", scene.walls[state] + "\n" + line)
+        art = art_text(*scene.frame(state, max(f, 0) / compactor.TICKS, animate=f >= 0))
         return art.append("\n" + line, style=VOICE["stage"] + " dim")
 
     def on_resize(self) -> None:

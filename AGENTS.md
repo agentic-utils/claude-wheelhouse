@@ -149,11 +149,16 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   A doc item's thread and layout there, split or tabbed (`tui.DocPanes`, Ctrl+L):
   `.plan/docs-section.md`.
   Never imports Textual.
-- `compactor.py`: a compaction's stage lines (art B, the trash compactor) and the crew's
-  excerpts, drawn per cycle without repeats (`schedule`, seeded by the cycle's id) (#244); the
-  big animated art (`scene`, 60 by 12 cells in every frame), which the app's `CompactorDock`
-  pins under the conversation from the hub's `dock` entry while a cycle runs (#287).
-  Never imports Textual.
+- `compactor.py`: what every compaction scene shares: the cycle's scene (`scene_for`, seeded
+  by the cycle's id, never the session's previous one while there's another), the cast's
+  excerpts drawn per cycle without repeats (`schedule`, seeded the same way) (#244), the stage
+  lines and the `dock` entry, which the app's `CompactorDock` pins under the conversation while
+  a cycle runs (#287), and `state_of`, a stage's scene and stage from its art, against every
+  scene. Never imports Textual.
+- `scenes/`: the compactor's scenes (#304), one module each, in `SCENES` (`scenes/__init__.py`):
+  `base.py` the `Scene` interface (excerpts, captions, small stills, the big animated frame) and
+  the canvas, frame sizes (60 by 12 big, in every frame), tick rate and colour roles they
+  share; `star_wars.py` the detention-level trash compactor (art B). Never imports Textual.
 - `splitter.py`, `knurl.py`, `emoji.py`, `unsent.py`: TUI pieces (dividers, scrollbars,
   emoji shortcodes, unsent text).
 - `protocol.md`, `protocol_sdk.md`, `protocol_tab.md`, `protocol_decisions.md`: what a
