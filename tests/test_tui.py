@@ -2972,8 +2972,8 @@ async def test_the_answer_box_follows_the_cursor_down(store, sid, tmp_path, box,
         area = app.screen.query_one(f"#{box}", tui.Compose)
         area.focus()
         height = area.scrollable_content_region.height
-        # a row more than the box holds, so it has scrolled once already: the first scroll,
-        # with the scrollbar's arrival, never showed it
+        # a row more than the box holds, so it has scrolled once already: the first overflow
+        # did follow the cursor (the scrollbar's arrival lays the box out again), later ones didn't
         area.text = "\n".join(["line"] * (height + 1))
         await pilot.pause()
         if keys == ["x"]:   # the last line a full row, its scrollbar's room taken: one more key wraps it
