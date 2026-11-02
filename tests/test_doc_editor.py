@@ -298,7 +298,7 @@ async def test_a_render_keeps_the_cursors_block_on_its_row(store, sid, long_doc)
 
 
 @pytest.mark.anyio
-async def test_a_click_on_a_block_the_edits_took_out_keeps_the_cursor(store, sid, doc):
+async def test_a_click_on_a_block_the_edits_took_out_keeps_the_cursor(store, sid, doc, clock):
     q = store.post_item(sid, "question", "which db?")
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
@@ -313,6 +313,7 @@ async def test_a_click_on_a_block_the_edits_took_out_keeps_the_cursor(store, sid
         await pilot.pause()
         await pilot.pause()
         assert editor.display and editor.cursor_location == (2, 3), "open again where it was"
+        assert not app.answer.display, "laid out for it at once, no tick needed: the box gone from under it"
         view.parent.scroll_to(y=row_with(view, "one"), animate=False, immediate=True)   # in the viewer's smaller room
         await pilot.pause()
         app.CLICK_CHAIN_TIME_THRESHOLD = 0   # this click, soon after the first, not taken as its double-click
