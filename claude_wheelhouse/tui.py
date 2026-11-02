@@ -1724,7 +1724,33 @@ class ItemList(SinkList):
         self.extend_to(self.cursor_key())
 
 
-class FollowsCursor(TextArea):
+class UndoInBounds(TextArea):
+    """A TextArea whose undo and redo keep the cursor in the text (#301): every text box.
+    Textual sizes the box for an undo or redo before it puts the selection back, so the
+    cursor is still where the batch left it: an undone Enter's row, gone. When the box
+    shrinks past its scrollbar, the scrollbar's going scrolls to that row and raises
+    ValueError. So the cursor goes first to where the batch starts, which every edit in it
+    leaves in place; Textual then puts the selection back as before."""
+
+    def undo(self) -> None:
+        self.cursor_to_start(self.history.undo_stack)
+        super().undo()
+
+    def redo(self) -> None:
+        stack = self.history.redo_stack
+        # a redone edit that keeps the selection's offset (an emoji swapped in, a suggestion
+        # taken) lands the cursor relative to where it is, so it stays; one typed lands it at
+        # the edit's end wherever it was
+        if stack and not stack[-1][-1].maintain_selection_offset:
+            self.cursor_to_start(stack)
+        super().redo()
+
+    def cursor_to_start(self, stack: list) -> None:
+        if stack:
+            self.selection = Span.cursor(min(edit.top for edit in stack[-1]))
+
+
+class FollowsCursor(UndoInBounds):
     """A TextArea whose scroll follows the cursor down an edit: the answer box (#298) and the
     doc editor (#300)."""
 
@@ -3243,7 +3269,7 @@ class NewSession(Dialog):
                     yield Button("Browse…", id="browse")
             yield Input(value=tour.get("name", ""), placeholder="name (optional)", id="name")
             yield Input(placeholder="ticket: #42, owner/repo#42 or ABC-123 (optional)", id="ticket")
-            yield TextArea(tour.get("brief", ""), id="brief")
+            yield UndoInBounds(tour.get("brief", ""), id="brief")
             with Horizontal(id="model-row"):   # Sonnet 5.5 at high unless changed (Q50)
                 model = tour.get("model", models.DEFAULT_MODEL)
                 yield Select([(m.name, m.id) for m in models.MODELS], value=model, allow_blank=False, id="model")
@@ -3870,7 +3896,7 @@ class CompactSession(Dialog):
             yield Label(f"COMPACT {self.name_}", classes="dialog-title", markup=False)
             yield Label("Instructions for the compaction (optional: leave it empty and the session is asked "
                         "what to keep):", classes="dialog-prompt")
-            yield TextArea(id="compact-notes")
+            yield UndoInBounds(id="compact-notes")
             yield then_radios("compact-dialog-then")
             with Horizontal(classes="buttons"):
                 # ids of their own: the app's host buttons (#compact) answer a press that bubbles up
@@ -3910,7 +3936,7 @@ class RunCommand(Dialog):
             yield Label(f"Run {self.ref} from {self.name_}", classes="dialog-title", markup=False)
             yield Label(self.why, classes="dialog-prompt", markup=False)
             yield Label(f"in {self.cwd}", classes="dialog-note", markup=False)
-            yield TextArea(self.text, id="run-text", soft_wrap=False, show_line_numbers=False)
+            yield UndoInBounds(self.text, id="run-text", soft_wrap=False, show_line_numbers=False)
             yield Checkbox(f"Send the output back to {self.name_}" + (" (it asked for it)" if self.wanted else ""),
                            self.wanted, id="run-send")
             yield Label("The output (and the command, if you edit it) goes into the session's transcript: "

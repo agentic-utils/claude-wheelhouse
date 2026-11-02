@@ -9,7 +9,7 @@ import pytest
 
 from claude_wheelhouse import tui
 from claude_wheelhouse.tui import DocEditor, LeaveEdits, SaveConflict, SaveFailed, SaveGone, WheelhouseApp
-from test_tui import item_list_rows, item_row
+from test_tui import UNDONE_ACROSS_THE_SCROLLBAR, item_list_rows, item_row, undone_across_the_scrollbar
 
 DOC = "# The plan\n\nBuild it.\n\n- one\n- two\n\n```py\nx = 1\n```\n\n| alpha | beta |\n|---|---|\n| 1 | 2 |\n"
 # a doc taller than the viewer: forty sections of a heading and a paragraph, four lines each
@@ -611,3 +611,13 @@ async def test_the_editor_follows_the_cursor_down(store, sid, doc, full, keys, d
         assert row == height + 1, f"{desc}: the cursor a row further down"
         assert editor.scroll_offset.y <= row < editor.scroll_offset.y + height, \
             f"{desc}: the cursor's row {row} in sight, rows {editor.scroll_offset.y} to {editor.scroll_offset.y + height - 1}"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("extra, keys, desc", UNDONE_ACROSS_THE_SCROLLBAR)
+async def test_an_undo_that_shrinks_the_editor_keeps_the_cursor_in_it(store, sid, doc, extra, keys, desc):
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        view, editor = await shown(app, pilot, doc[0])
+        await click(pilot, view, row_with(view, "The plan"))
+        await undone_across_the_scrollbar(pilot, editor, extra, keys, desc)
