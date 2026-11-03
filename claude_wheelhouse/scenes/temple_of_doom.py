@@ -16,7 +16,7 @@ from .base import BIG_HEIGHT, BIG_WIDTH, TICKS, WIDTH, Canvas, Frame, Scene
 EXCERPTS: tuple[tuple[str, ...], ...] = (
     ("Willie: Indy! Is that the ceiling?", "Indy: I see it, I see it!"),
     ("Willie: Which lever?", "Indy: The one in the summary! Hurry!"),
-    ("Willie: Get them off me! Get the old messages off me!",),
+    ("Willie: I've been compacted before. A Shanghai critic summed me up: \"adequate\".",),
     ("Short Round: Who step on compact stone? Not me, Dr. Jones. Maybe you.",),
     ("Indy: It's a long story, Willie. Hurry, or you only get the summary!",),
     ("Willie: There are two dead people down here!", "Indy: There are gonna be two summaries in here! Hurry!"),
