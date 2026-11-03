@@ -259,7 +259,8 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument(steps.STEP_FLAG, dest="step", action="append", default=None, help=argparse.SUPPRESS)
     shell = sub.add_parser("shell", help="inside a quick shell's tab: run the command a Run dialog wrote under key")
     shell.add_argument("--db", required=True, help="the wheelhouse's database, whose state directory holds the run")
-    shell.add_argument("key")
+    shell.add_argument("key", nargs="?")
+    shell.add_argument("--ended", nargs=3, metavar=("SESSION", "REF", "STATUS"), help=argparse.SUPPRESS)
     sub.add_parser("mcp", help="the per-session MCP server (stdio)")
     sub.add_parser("monitor", help="the per-session plugin monitor")
     sub.add_parser("open-items", help="inside a launched tab: print the session's open items (the plugin's "
@@ -333,9 +334,14 @@ def main() -> None:
         from .launch import run as run_session
         run_session(args.session_id)
     elif args.cmd == "shell":
-        from .quickshell import run as run_shell
+        from .quickshell import ended, run as run_shell
         from pathlib import Path
-        run_shell(args.key, Path(args.db))
+        if args.ended:   # the tab's rc, once the command it eval'd has ended (#335)
+            ended(Path(args.db), args.ended[0], args.ended[1], int(args.ended[2]))
+        elif args.key:
+            run_shell(args.key, Path(args.db))
+        else:
+            sys.exit("claude-wheelhouse shell: give the key a Run dialog wrote")
     elif args.cmd == "mcp":
         from .mcp_server import main as mcp_main
         mcp_main()

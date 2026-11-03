@@ -377,6 +377,13 @@ FEATURES: tuple[Feature, ...] = (
     Feature("command-items", UNRELEASED, ADVANCED,
             note="A session can suggest a shell command for you to run: a C item with a Run button that opens it "
                  "in an editable box and runs it in a new terminal tab, sending the output back if you tick it."),
+    Feature("command-outcome", UNRELEASED, ADVANCED,
+            note="A command item waits like an open question, yellow and at the top, until you run it; then it "
+                 "shows how the run ended: run, with Run gone, or failed in red, with the exit code (and the "
+                 "output's last lines, when it was captured) and Run kept to try again."),
+    Feature("daemon-replaced", UNRELEASED, ADVANCED,
+            note="An app whose daemon was replaced under it by an update says so in its title, to quit and "
+                 "restart it, rather than reconnecting for ever."),
     Feature("decisions-follow", UNRELEASED, ADVANCED,
             note="The Decisions pane follows the selected session, as the PRs pane does: its repo's decisions "
                  "alone, or a line saying it has none; with no session selected, every repo's."),

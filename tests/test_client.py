@@ -542,3 +542,29 @@ def test_a_seen_marks_failed_fetch_is_left_to_the_fetching_thread(store, sid, se
             "the inbox left to the fetching thread, the sessions fetched"
     finally:
         c.disconnect()
+
+
+@pytest.mark.parametrize("other_code, replaced, desc", [
+    (False, None, "the same code started again (a restart): reconnected, nothing more said"),
+    (True, client_mod.REPLACED, "other code started under the app (an update): said as replaced, restart the app"),
+])
+def test_a_daemon_replaced_under_the_app_is_said(store, sid, served, heard, no_launch, monkeypatch,
+                                                  other_code, replaced, desc):
+    """#335: an app whose daemon was replaced by one on other code says to restart it, rather
+    than carry on as if nothing had changed."""
+    from claude_wheelhouse import fingerprint
+    d = served(store.path)
+    c = heard(d.client())
+    try:
+        until(lambda: c.daemon_code is not None, desc="the first daemon's code kept")
+        port = d.port
+        d.stop()
+        until(lambda: not c.connected, desc="the stream ends")
+        if other_code:
+            monkeypatch.setattr(fingerprint, "code", lambda: "newer")
+        served(store.path, port)
+        until(lambda: c.connected, desc="reconnected")
+        assert c.replaced == replaced, desc
+        assert (("notice", client_mod.REPLACED) in heard.said) == other_code, desc
+    finally:
+        c.disconnect()

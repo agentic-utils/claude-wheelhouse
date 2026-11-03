@@ -25,7 +25,7 @@ from textual.strip import Strip
 from textual.visual import Visual, visualize
 from textual.widgets import Button, Checkbox, DataTable, Footer, Input, Label, Select, TextArea
 
-from claude_wheelhouse import compactor, emoji, features, launch, models, ordering, transcript, transcript_usage, tui, tutorial
+from claude_wheelhouse import client as client_mod, compactor, emoji, features, launch, models, ordering, transcript, transcript_usage, tui, tutorial
 from claude_wheelhouse.scenes import SCENES
 from claude_wheelhouse.hub import Done, Hub
 from claude_wheelhouse.store import PROTOCOL_VERSION
@@ -6385,17 +6385,23 @@ async def test_a_sessions_dot_keeps_its_status_colour_under_the_mouse_or_cursor(
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("status, colour, desc", [
-    ("open", "#ffd300", "an open question stays yellow"),
-    ("blocked", "#ff2a6d", "a blocked task stays red"),
-    ("done", None, "a finished one, dim, keeps no colour of its own: the cursor's white"),
+@pytest.mark.parametrize("kind, status, colour, desc", [
+    ("question", "open", "#ffd300", "an open question stays yellow"),
+    ("task", "blocked", "#ff2a6d", "a blocked task stays red"),
+    ("task", "done", None, "a finished one, dim, keeps no colour of its own: the cursor's white"),
+    ("command", "open", "#ffd300", "a command not yet run: yellow and open, as an open question (#335)"),
+    ("command", "failed", "#ff2a6d", "a command whose run failed: red, still the person's (#335)"),
 ])
-async def test_the_selected_items_status_keeps_its_colour(store, sid, status, colour, desc):
+async def test_the_selected_items_status_keeps_its_colour(store, sid, kind, status, colour, desc):
     """T113: the cursor's row in the item list keeps its status's colour, on the cursor's
     background, where the cursor's white was laid over it; a cell with no colour takes the
     cursor's."""
-    kind = "question" if status == "open" else "task"
-    store.post_item(sid, kind, "the item", status=status)
+    if kind == "command":
+        ref = store.post_command(sid, "ls", "the item")[0]
+        if status == "failed":
+            store.outcome(sid, ref, 1)
+    else:
+        store.post_item(sid, kind, "the item", status=status)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
@@ -10408,6 +10414,71 @@ async def test_run_opens_the_command_and_runs_what_the_box_holds(store, tmp_path
             assert isinstance(app.screen, tui.RunCommand), f"{desc}: still open to fix"
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize("code, run_shows, desc", [
+    (None, True, "not yet run: Run shows"),
+    (0, False, "run, exit 0: Run goes"),
+    (1, True, "failed: Run stays, to try again"),
+])
+async def test_run_shows_until_a_run_succeeds(store, tmp_path, monkeypatch, code, run_shows, desc):
+    """#335: the tab's record of how the run ended decides whether Run is still offered."""
+    from claude_wheelhouse import liveness
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
+    sid = store.create_session(str(tmp_path), name="demo")
+    ref, _ = store.post_command(sid, "make stop", "Stop it")
+    if code is not None:
+        store.outcome(sid, ref, code, "fatal: oops")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.action_show_finished(True)
+        await pilot.pause()
+        app.items_table.move_cursor(row=app.items_table.keys().index(f"{sid}|{ref}"))
+        await pilot.pause()
+        app.paint_sendbar()
+        await pilot.pause()
+        assert tui.showing(app.screen.query_one("#run-command", Button)) == run_shows, desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("replaced, said, desc", [
+    (None, None, "connected: the daemon's answer said, nothing more"),
+    (client_mod.REPLACED, client_mod.REPLACED, "the daemon replaced: said on the ref, nothing sent"),
+])
+async def test_a_run_the_daemon_never_had_says_why(store, tmp_path, monkeypatch, replaced, said, desc):
+    """#335: a Run the app can't hand to its daemon says so on the command's ref, with why."""
+    sid = store.create_session(str(tmp_path), name="demo")
+    ref, _ = store.post_command(sid, "ls", "List")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        got = []
+        app.client.run_command = lambda *a: got.append(a) or tui.Done()
+        app.client.replaced = replaced
+        app.run_command((sid, ref), {"text": "ls", "send": False})
+        await pilot.pause()
+        assert bool(got) == (replaced is None), desc
+        if said:
+            assert any(n.message == f"{ref} wasn't run: {said}" for n in app._notifications), desc
+
+
+@pytest.mark.parametrize("text, want, desc", [
+    (client_mod.UNREACHABLE, "C1 was not run: " + client_mod.UNREACHABLE, "out of reach: not run"),
+    (client_mod.LOST, "C1 may not have run: " + client_mod.LOST, "lost mid-request: may not have run"),
+])
+def test_a_failed_run_request_names_its_ref(store, tmp_path, text, want, desc):
+    """#335: the run dialog's failure says what failed, on the command's ref."""
+    sid = store.create_session(str(tmp_path), name="demo")
+    store.post_command(sid, "ls", "List")
+    app = WheelhouseApp(store)
+    told = []
+    app.told = lambda done: told.extend(n.text for n in done.notices) or done
+    app.refresh_data = lambda: None
+    app.client.run_command = lambda *a: tui.Done(False).say(text, "error")
+    app.run_command((sid, "C1"), {"text": "ls", "send": False})
+    assert told == [want], desc
+
+
 def test_a_command_items_thread_shows_the_command_and_the_run():
     """#257: the command in a code block, as it runs; a run whose output wasn't sent as a dim note."""
     item = {"ref": "C1", "title": "List", "kind": "command", "status": "run", "updated_at": "t", "body": "ls ```x"}
@@ -10415,6 +10486,9 @@ def test_a_command_items_thread_shows_the_command_and_the_run():
     blocks = tui.thread_blocks((item, msgs))
     assert blocks[1] == ("claude", "````bash\nls ```x\n````")
     assert blocks[2] == ("note", "_ran 14:05_")
+    msgs = [{**msgs[0], "body": "ran 14:05: failed, exit 2\n\nfatal: ``x``"}]
+    assert tui.thread_blocks((item, msgs))[2] == ("note", "_ran 14:05: failed, exit 2_\n\n```\nfatal: ``x``\n```"), \
+        "a failed run's tail as it showed, in a code block (#335)"
 
 
 class Later(datetime):
@@ -10855,3 +10929,19 @@ async def test_an_overlay_frame_never_repaints_the_inbox(store, sid, monkeypatch
             took.append(time.perf_counter() - start)
         assert painted == [] and refreshed == {app.compactor_overlay}, (painted, refreshed)
         print(f"overlay frame: median {sorted(took)[6] * 1000:.2f} ms")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("replaced, desc", [
+    (client_mod.REPLACED, "on other code: restart the app"),
+    (client_mod.REPLACED_TOKEN, "on another token: restart the app"),
+])
+async def test_a_replaced_daemon_shows_in_the_title(store, replaced, desc):
+    """#335: the title says to restart the app, not "reconnecting" for ever."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.client.replaced = replaced
+        app.paint_title()
+        await pilot.pause()
+        assert app.title_bar.render().plain.strip() == replaced, desc

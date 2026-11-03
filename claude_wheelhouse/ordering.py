@@ -27,7 +27,7 @@ SPECS = {"items": {"", "status*", *(c + m for c in ("session", "ref", "status", 
          "sessions": {"", SESSIONS_DEFAULT, *(c + m for c in SESSION_COLUMNS[1:] for m in "▲▼")}}
 # Status ▲ (Q104): blocked, waiting, open, then what waits on the session (and any status
 # not named here), running, todo
-URGENCY = {"blocked": 0, "waiting": 1, "open": 2, "answered": 3, "processing": 3, "unseen": 3, "seen": 3,
+URGENCY = {"blocked": 0, "failed": 0, "waiting": 1, "open": 2, "answered": 3, "processing": 3, "unseen": 3, "seen": 3,
            "running": 4, "todo": 5}
 REF = re.compile(r"([A-Za-z]*)(\d*)")
 DIGITS = re.compile(r"(\d+)")

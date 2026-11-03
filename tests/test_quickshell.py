@@ -123,3 +123,31 @@ def test_a_key_is_never_read_as_an_option(tmp_path):
     """#257: the key is the tab's last argument: never one starting with -."""
     keys = [quickshell.write(tmp_path / "w.db", {"text": "ls"}) for _ in range(200)]
     assert all(quickshell.KEY.fullmatch(k) and not k.startswith("-") for k in keys)
+
+
+@pytest.mark.parametrize("cmd, status, note, desc", [
+    ("cd {dir}", "run", "succeeded", "exit 0: run, and the cd stays in the tab"),
+    ("cd {dir}; (exit 3)", "failed", "failed, exit 3", "a failure: its exit code alone, nothing captured"),
+])
+def test_the_tabs_own_shell_records_an_unticked_run(store, sid, tmp_path, cmd, status, note, desc):
+    """#335: unticked, the command runs in the tab's own bash (a cd or export stays), and the rc
+    records how it ended on its item, straight into the store."""
+    import subprocess
+    import sys
+    from pathlib import Path
+    ref = store.post_command(sid, "ls", "List")[0]
+    there = tmp_path / "there"
+    there.mkdir()
+    rc = tmp_path / "rc"
+    rc.write_text(quickshell.RC)
+    root = str(Path(quickshell.__file__).resolve().parent.parent)
+    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path), "WH_CMD": cmd.format(dir=there), "WH_HEAD": "C1:",
+           "WH_RC": str(rc), "WH_PY": sys.executable, "WH_PATH": root, "WH_DB": str(store.path), "WH_SID": sid,
+           "WH_REF": ref}
+    out = subprocess.run(["bash", "--norc", "-c", '. "$WH_RC_COPY"; pwd'], env={**env, "WH_RC_COPY": str(rc)},
+                         capture_output=True, text=True, cwd=tmp_path, timeout=60)
+    assert out.stdout.strip().splitlines()[-1] == str(there), f"{desc}: {out.stderr}"
+    item = store.item(sid, ref)
+    assert item["status"] == status, f"{desc}: {out.stderr}"
+    body, = [m["body"] for m in store.thread(sid, ref) if m["kind"] == "run"]
+    assert body.split(": ", 1)[1] == note, desc

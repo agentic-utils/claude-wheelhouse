@@ -41,17 +41,25 @@ from .store import (COMPACT_QUESTION, NOTES_WAIT, Refused, Busy, REQUESTS, wheel
 RUNNING = ("live", "stalled", "starting")
 
 
+def goes_now(store: Store, s, ref: str | None) -> bool:
+    """Whether a word of the person's on ref goes at once rather than into the session's queue:
+    in Immediate mode, or mid-operation when it answers a call the session's turn waits on
+    (#244, #249). The one rule for everything the person sends a session, typed (Hub.submit)
+    or a run's output (send_or_queue, #335)."""
+    return mode(s) == "immediate" or (operating(s) and store.waits_on(s["id"], ref))
+
+
 def send_or_queue(store: Store, sid: str, ref: str, text: str) -> str:
     """A message of the person's that goes out without them pressing send: a run's output
-    (#257). Queued while the session is parked or busy (operating, #249: the store's one busy
-    check), never refused or dropped (D232), else sent or queued by the session's mode, as
-    submit does: the send itself is the check (Busy queues it), so the quiet mark's cycle is
-    called off and the output goes, as a person's answer would. SessionGone if the session has
+    (#257). Sent or queued by the rule every answer follows (goes_now, #335), so in Queued mode
+    it waits in the session's queue for Send like any other, mid-turn or not. One refused as
+    busy (an operation under way, #249) is queued, never refused or dropped (D232); the quiet
+    mark's cycle is called off as a person's answer would. SessionGone if the session has
     gone. "sent" or "queued"."""
     s = store.session(sid)
     if s is None:
         raise SessionGone(sid)
-    if mode(s) == "immediate" and not s["parked"]:
+    if goes_now(store, s, ref):
         try:
             store.send(sid, text, ref)
             return "sent"
@@ -1126,8 +1134,7 @@ class Hub:
                 return Done(False).say(str(e.args[0]), "warning")
             done.denied = True
             done.say(f"denied {target[1]}, with your message")
-        elif now or mode(s) == "immediate" or (operating(s) and self.store.waits_on(*target)):
-            # mid-operation a call the session's turn waits on is answered at once (#244, #249)
+        elif now or goes_now(self.store, s, target[1]):
             self.store.send(target[0], text, target[1])
             done.say(f"sent to {aimed(target)}{self.late(target[0])}")
             if mode(s) == "queued" and (drafts := self.store.drafts(target[0])):
@@ -1270,8 +1277,9 @@ class Hub:
         written to a 0600 file under a random key, and a quick shell's tab opened in the session's
         directory to run it (quickshell.run), its command line carrying only the database's path
         and the key. Refused, never moved to home, if that directory is gone: a command in the
-        wrong repo is the failure to avoid. The item goes to run; unless the output is sent, with
-        a note of the run the session isn't sent (Store.ran)."""
+        wrong repo is the failure to avoid. Unless the output is sent, the item gains a note of the
+        run the session isn't sent (Store.ran); its status waits for the run's end, which the tab
+        writes (quickshell.ended, #335): run, or failed with the exit code, Run kept."""
         item = self.store.item(sid, ref)
         if item is None or item["kind"] != "command":
             self.row(sid)   # SessionGone if that's why
@@ -1291,7 +1299,7 @@ class Hub:
         except (OSError, ValueError) as e:
             (quickshell.shell_dir(db) / key).unlink(missing_ok=True)
             return Done(False).say(f"couldn't open a shell: {e}", "error")
-        note = None if send else f"ran {time.strftime('%H:%M')}" + (", edited" if edited else "")
+        note = None if send else f"started {time.strftime('%H:%M')}" + (", edited" if edited else "")
         self.store.ran(sid, ref, note)
         return Done().say(f"running {ref} in {cwd}" + (f": its output goes to {display_name(s)}" if send else ""))
 

@@ -186,3 +186,13 @@ whether output was sent, either way.
 
 - (a) Session menu only, no key (recommended).
 - (b) Session menu, plus Alt+Shift+H.
+
+## 4. A run's outcome (#335)
+
+The item's status follows the run's end, not its start. A command is `open` (was `new`) until
+run, so it is yellow and ranks with open questions. The tab records how the run ended straight
+into the store (`quickshell.ended`, `Store.outcome`), since it outlives a daemon the command
+stops: `run` on exit 0 (Run goes), else `failed` (red, Run kept) with a note of the exit code.
+Unticked, the rc records `$?` after its `eval` in the tab's own shell, so a `cd` or `export`
+still stays; ticked, the capture's last 20 lines go in the note too. The output reply follows
+`hub.goes_now`, the same rule as a typed answer.
