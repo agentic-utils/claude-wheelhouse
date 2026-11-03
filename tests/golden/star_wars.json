@@ -760,23 +760,11 @@
 "still preparing": "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄[●]▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\n▐o█▓                                                    ▓█o▌\n▐██▓                                                    ▓██▌\n▐██▓                                                    ▓██▌\n▐██▓                                         {o}        ▓██▌\n▐o█▓         o         @o@         o         /#\\        ▓█o▌\n▐██▓        /H>        /|\\        /|\\        |#|        ▓██▌\n▐██▓        / \\        /^\\        / \\        / \\        ▓██▌\n▐██▓~-(-)]~-~~-~~-~~-~~-~~o=~-~~-~~-~~-~~-~<>~~-~~-~~-~~▓██▌\n▐o█▓-~~-~~-~~-~~-~%-~~-~~-~~-~~-~~-&~-~~-~~-~~-~~-~#-~~-▓█o▌\n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n                      walls closing in                      ",
 "caption preparing": "walls closing in",
 "walls requested": null,
-"stage_text requested": null,
-"stage_text requested note": null,
 "walls preparing": "▐█▓     o    o    o      ▓█▌\n▐█▓    /|\\  /|\\  /|\\     ▓█▌\n▐█▓    / \\  / \\  / \\     ▓█▌\n▐█▓~~~~~~~~~~~~~~~~~~~~~~▓█▌\n      walls closing in      ",
-"stage_text preparing": "▐█▓     o    o    o      ▓█▌\n▐█▓    /|\\  /|\\  /|\\     ▓█▌\n▐█▓    / \\  / \\  / \\     ▓█▌\n▐█▓~~~~~~~~~~~~~~~~~~~~~~▓█▌\n      walls closing in      \nasked for by you (Compact) · 10:39Z",
-"stage_text preparing note": "▐█▓     o    o    o      ▓█▌\n▐█▓    /|\\  /|\\  /|\\     ▓█▌\n▐█▓    / \\  / \\  / \\     ▓█▌\n▐█▓~~~~~~~~~~~~~~~~~~~~~~▓█▌\n      walls closing in      \n220k → 40k · 10:41Z",
 "walls compacting": "▐████▓   \\o/\\o/\\o/    ▓████▌\n▐████▓    |  |  |     ▓████▌\n▐████▓   / \\/ \\/ \\    ▓████▌\n▐████▓~~~~~~~~~~~~~~~~▓████▌\n    compaction initiated    ",
-"stage_text compacting": "▐████▓   \\o/\\o/\\o/    ▓████▌\n▐████▓    |  |  |     ▓████▌\n▐████▓   / \\/ \\/ \\    ▓████▌\n▐████▓~~~~~~~~~~~~~~~~▓████▌\n    compaction initiated    \nasked for by you (Compact) · 10:39Z",
-"stage_text compacting note": "▐████▓   \\o/\\o/\\o/    ▓████▌\n▐████▓    |  |  |     ▓████▌\n▐████▓   / \\/ \\/ \\    ▓████▌\n▐████▓~~~~~~~~~~~~~~~~▓████▌\n    compaction initiated    \n220k → 40k · 10:41Z",
 "walls completed": "▐█████████▓      ▓█████████▌\n▐█████████▓      ▓█████████▌\n▐█████████▓      ▓█████████▌\n▐█████████▓~~~~~~▓█████████▌\n         compacted          ",
-"stage_text completed": "▐█████████▓      ▓█████████▌\n▐█████████▓      ▓█████████▌\n▐█████████▓      ▓█████████▌\n▐█████████▓~~~~~~▓█████████▌\n         compacted          \n10:39Z",
-"stage_text completed note": "▐█████████▓      ▓█████████▌\n▐█████████▓      ▓█████████▌\n▐█████████▓      ▓█████████▌\n▐█████████▓~~~~~~▓█████████▌\n         compacted          \n220k → 40k · 10:41Z",
 "walls failed": "▐█▓      \\o/\\o/\\o/       ▓█▌\n▐█▓       |  |  |        ▓█▌\n▐█▓      / \\/ \\/ \\       ▓█▌\n▐█▓~~~~~~~~~~~~~~~~~~~~~~▓█▌\n    3PO, shut them down!    ",
-"stage_text failed": "▐█▓      \\o/\\o/\\o/       ▓█▌\n▐█▓       |  |  |        ▓█▌\n▐█▓      / \\/ \\/ \\       ▓█▌\n▐█▓~~~~~~~~~~~~~~~~~~~~~~▓█▌\n    3PO, shut them down!    \n10:39Z",
-"stage_text failed note": "▐█▓      \\o/\\o/\\o/       ▓█▌\n▐█▓       |  |  |        ▓█▌\n▐█▓      / \\/ \\/ \\       ▓█▌\n▐█▓~~~~~~~~~~~~~~~~~~~~~~▓█▌\n    3PO, shut them down!    \n220k → 40k · 10:41Z",
 "walls cancelled": "▐█▓     o    o    o      ▓█▌\n▐█▓    /|\\  /|\\  /|\\     ▓█▌\n▐█▓    / \\  / \\  / \\     ▓█▌\n▐█▓~~~~~~~~~~~~~~~~~~~~~~▓█▌\n   compaction called off    ",
-"stage_text cancelled": "▐█▓     o    o    o      ▓█▌\n▐█▓    /|\\  /|\\  /|\\     ▓█▌\n▐█▓    / \\  / \\  / \\     ▓█▌\n▐█▓~~~~~~~~~~~~~~~~~~~~~~▓█▌\n   compaction called off    \n10:39Z",
-"stage_text cancelled note": "▐█▓     o    o    o      ▓█▌\n▐█▓    /|\\  /|\\  /|\\     ▓█▌\n▐█▓    / \\  / \\  / \\     ▓█▌\n▐█▓~~~~~~~~~~~~~~~~~~~~~~▓█▌\n   compaction called off    \n220k → 40k · 10:41Z",
 "excerpts": [
 [
 "Han: Whose idea was it to jump in here? Oh right. Hers."

@@ -151,10 +151,11 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   Never imports Textual.
 - `compactor.py`: what every compaction scene shares: the cycle's scene (`scene_for`, seeded
   by the cycle's id, never the session's previous one while there's another), the cast's
-  excerpts drawn per cycle without repeats (`schedule`, seeded the same way) (#244), the stage
-  lines and the `dock` entry, which the app's `CompactorDock` pins under the conversation while
-  a cycle runs (#287), and `state_of`, a stage's scene and stage from its art, against every
-  scene. Never imports Textual.
+  excerpts drawn per cycle without repeats (`schedule`, seeded the same way) (#244), the
+  conversation's plain line per stage (`stage_line`), and the `dock` entry (`dock_text`: stage,
+  start, cycle id, scene, newest excerpt), which the app's `CompactorOverlay` shows over the
+  middle of the conversation while a cycle runs and for `LINGER` seconds after it ends (#287,
+  #324). Never imports Textual.
 - `scenes/`: the compactor's scenes (#304), one module each, in `SCENES` (`scenes/__init__.py`):
   `base.py` the `Scene` interface (excerpts, captions, small stills, the big animated frame) and
   the canvas, frame sizes (60 by 12 big, in every frame), tick rate and colour roles they

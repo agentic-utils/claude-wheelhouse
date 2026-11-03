@@ -590,7 +590,7 @@ class Daemon:
         for sid, follower in list(self.hub.followers.items()):
             stamp = stamp_of(follower)
             s = self.hub.by_id.get(sid)
-            # its crew's excerpts come due as time passes (#244), and a new stage redraws the art in place (#277)
+            # its crew's excerpts come due as time passes (#244), shown on the overlay (#324), and each stage adds its line
             if s is not None and compacting_now(s):
                 stamp = (stamp, tuple(compaction_entries(self.hub.store.stages(sid), True)))
             if stamp is not None and stamp != self.grown.get(sid):

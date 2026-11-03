@@ -223,12 +223,14 @@ FEATURES: tuple[Feature, ...] = (
     Feature("compacting-shown", UNRELEASED, "sessions", when="sdk",
             note="While a session is compacting, its Compact button is off, its inbox items and its Detail dim and "
                  "ignore clicks, and its busy eye in the session list turns blue. Its conversation opens as the "
-                 "compaction starts, the trash compactor pinned under it.",
+                 "compaction starts, the trash compactor over it.",
             tip="A blue eye: the session is compacting; its items dim until it's done."),
     Feature("compactor-dock", UNRELEASED, ADVANCED,
-            note="A running compaction's trash compactor is pinned above the answer box, big and animated: the walls "
-                 "grind in, the crew dodge, sparks fly and the dianoga grabs Luke. Its last frame stays in the "
-                 "conversation, and the session's notes for compaction fold to one line."),
+            note="A running compaction's trash compactor shows over the middle of the conversation, big and animated, "
+                 "with the crew's latest line under it: the walls grind in, the crew dodge, sparks fly and the dianoga "
+                 "grabs Luke. The conversation under it keeps a plain line per stage; Esc or a click hides it until "
+                 "the next compaction, and its last frame stays 8 seconds. The session's notes for compaction fold "
+                 "to one line."),
     Feature("compactor-star-trek", UNRELEASED, ADVANCED,
             note="Compaction has a second scene, picked per cycle: Star Trek's engine room, with Scotty thumping "
                  "the console as the warp core races and the CONTEXT gauge falls to a sliver, Kirk pacing and "
@@ -360,8 +362,7 @@ FEATURES: tuple[Feature, ...] = (
                  "bring a question: Keep waiting or Abort."),
     Feature("compaction-task", UNRELEASED, ADVANCED,
             note="Every compaction, in a tab too, is a task in the inbox that follows it to done, failed or "
-                 "dropped, and the conversation shows its stages as the trash compactor's walls closing in, "
-                 "with the crew and the droids panicking while it runs."),
+                 "dropped, and the conversation shows a line for each of its stages."),
     Feature("ops-blue", UNRELEASED, ADVANCED,
             note="Park, Stop & Forget, Relaunch, Handover, New session, Adopt and a fork's new session keep it "
                  "blue from the press until done: sends and other operations wait, queueing stays open, Interrupt "

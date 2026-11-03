@@ -1722,78 +1722,56 @@ def test_a_waiting_calls_answer_goes_at_once_only_during_a_cycle(hub, store, sid
     assert bool(store.drafts(sid)) == queued and bool(store.pending(sid)) == (not queued), desc
 
 
-def test_compaction_entries_place_stage_lines_and_the_crew(store, sid):
-    """#244: each stage's art and its dim detail, and while it runs the crew's excerpts, seeded by
-    the cycle so every refresh shows the same, one at each stage change."""
+T0 = 1761990000.0   # a cycle's first stage, epoch
+
+
+def stages_at(*moves, cid="c0ffee01"):
+    """A cycle's stages as the store gives them, each (state, seconds after T0, note)."""
     from datetime import datetime, timezone
-    from claude_wheelhouse import compactor
-    from claude_wheelhouse.hub import compaction_entries
-    store.command(sid, "compact")
-    cid = store.compaction(sid)["id"]
-    scene = compactor.scene_for(cid, None)   # the session's first cycle: its scene, whichever
-    store.move_compaction(sid, cid, "preparing")
-    t0 = datetime.fromisoformat(store.stages(sid)[-1]["at"]).timestamp()
-    stages = store.stages(sid)
-    later = compaction_entries(stages, True, t0 + 65)
-    assert later == compaction_entries(stages, True, t0 + 65), "the same at every refresh"
-    whos = [e.who for e in later]
-    assert whos.count("dock") == 1 and "stage" not in whos and 3 <= whos.count("crew") <= 4, whos   # docked while it runs (#287)
-    assert compactor.docked(later[0].text) == (scene, "preparing", t0, "asked for by you (Compact) · " + stages[-1]["at"][11:16] + "Z"), later[0]
-    assert all(e.at <= datetime.fromtimestamp(t0 + 65, timezone.utc).isoformat() for e in later)
-    store.move_compaction(sid, cid, "compacting")
-    store.move_compaction(sid, cid, "completed", "220k → 40k")
-    ended = datetime.fromisoformat(store.stages(sid)[-1]["at"]).timestamp()
-    done = compaction_entries(store.stages(sid), False, t0 + 3600)
-    last = [e for e in done if e.who == "stage"][-1]
-    assert last.text.startswith(scene.walls["completed"] + "\n220k → 40k · "), last
-    assert all(datetime.fromisoformat(e.at).timestamp() <= ended for e in done if e.who == "crew"), \
-        "no crew once it has ended, however long after"
+    return [{"cycle_id": cid, "state": state, "at": datetime.fromtimestamp(T0 + t, timezone.utc).isoformat(timespec="microseconds"),
+             "origin": "person", "note": note} for state, t, note in moves]
 
 
-@pytest.mark.parametrize("moves, state, desc", [
-    (["preparing"], "preparing", "first drawn"),
-    (["preparing", "compacting"], "compacting", "a later stage replaces it"),
-    (["preparing", "compacting", "completed"], "completed", "its end too, where it was first drawn"),
-    (["preparing", "cancelled"], "cancelled", "called off: the same art, the walls open"),
+RUN = (("requested", 0, ""), ("preparing", 1, ""), ("compacting", 61, ""))
+
+
+@pytest.mark.parametrize("moves, active, at, lines, dock, desc", [
+    (RUN[:1], True, 0.5, [], "preparing", "requested: no line, overlaid as preparing"),
+    (RUN[:2], True, 30, ["preparing (notes turn)"], "preparing", "preparing: its line, and the overlay"),
+    (RUN, True, 90, ["preparing (notes turn)", "compacting"], "compacting", "compacting: a line a stage"),
+    (RUN + (("completed", 102, "220k → 40k"),), False, 104, ["preparing (notes turn)", "compacting", "completed in 1 m 42 s · 220k → 40k"],
+     "completed", "completed: its final frame overlaid within LINGER"),
+    (RUN + (("completed", 102, ""),), False, 102 + 8, ["preparing (notes turn)", "compacting", "completed in 1 m 42 s"], None,
+     "completed: the overlay gone LINGER seconds after"),
+    (RUN[:2] + (("failed", 20, "its host stopped"),), False, 21, ["preparing (notes turn)", "failed: its host stopped"], "failed", "failed, with why"),
+    (RUN[:2] + (("cancelled", 20, "aborted"),), False, 3600, ["preparing (notes turn)", "cancelled: aborted"], None, "cancelled long ago: no overlay"),
+    (RUN[:2], False, 30, ["preparing (notes turn)"], None, "a cycle no longer active, not ended: never overlaid"),
 ])
-def test_a_later_stage_redraws_the_art_in_place(store, sid, moves, state, desc):
-    """#277: one art per cycle, at its first stage's time, showing the latest stage."""
+def test_compaction_entries_are_plain_lines_and_one_dock(moves, active, at, lines, dock, desc):
+    """#324: a plain line per stage in the conversation, no art and no crew; one dock entry for
+    the overlay while the last cycle runs, or for LINGER seconds after its end."""
     from claude_wheelhouse import compactor
     from claude_wheelhouse.hub import compaction_entries
-    store.command(sid, "compact")
-    cid = store.compaction(sid)["id"]
-    scene = compactor.scene_for(cid, None)   # the session's first cycle: its scene, whichever
-    for m in moves:
-        store.move_compaction(sid, cid, m)
-    first = next(st["at"] for st in store.stages(sid) if st["state"] in scene.walls)
-    arts = [e for e in compaction_entries(store.stages(sid), False) if e.who == "stage"]
-    assert len(arts) == 1, f"{desc}: {len(arts)} drawn"
-    assert arts[0].at == first and arts[0].text.startswith(scene.walls[state] + "\n"), desc
+    out = compaction_entries(stages_at(*moves), active, T0 + at)
+    assert {e.who for e in out} <= {"stage", "dock"}, f"{desc}: {out}"
+    assert [e.text for e in out if e.who == "stage"] == ["Compaction: " + line for line in lines], desc
+    docks = [compactor.docked(e.text) for e in out if e.who == "dock"]
+    assert [(d.state, d.cycle) for d in docks] == ([(dock, "c0ffee01")] if dock else []), desc
+    if docks:
+        assert docks[0].since == T0 + moves[-1][1], f"{desc}: the stage's start"
 
 
-@pytest.mark.parametrize("moves, active, docked, art, desc", [
-    ([], True, "preparing", None, "requested: docked, drawn as preparing"),
-    (["preparing"], True, "preparing", None, "preparing: docked, not in the conversation"),
-    (["preparing", "compacting"], True, "compacting", None, "compacting: the dock moves on a stage"),
-    (["preparing", "compacting", "completed"], True, None, "completed", "ended: the dock closes, the art back in place"),
-    (["preparing", "failed"], True, None, "failed", "failed: the same"),
-    (["preparing", "cancelled"], False, None, "cancelled", "cancelled, the session no longer compacting: the same"),
-    (["preparing"], False, None, "preparing", "a cycle no longer active: never docked"),
-])
-def test_the_running_cycle_is_docked_not_drawn(store, sid, moves, active, docked, art, desc):
-    """#287: the running cycle's art is one dock entry, which the app pins under the
-    conversation; at its end the final frame is drawn where its art was first."""
+def test_the_dock_carries_the_newest_excerpt_due():
+    """#244, #324: the overlay's crew line is the cycle's newest excerpt due by now (seeded by
+    the cycle, so every refresh agrees), none before its first window opens."""
     from claude_wheelhouse import compactor
     from claude_wheelhouse.hub import compaction_entries
-    store.command(sid, "compact")
-    cid = store.compaction(sid)["id"]
-    scene = compactor.scene_for(cid, None)   # the session's first cycle: its scene, whichever
-    for m in moves:
-        store.move_compaction(sid, cid, m)
-    out = compaction_entries(store.stages(sid), active)
-    docks, arts = [e for e in out if e.who == "dock"], [e for e in out if e.who == "stage"]
-    assert [compactor.docked(e.text)[1] for e in docks] == ([docked] if docked else []), desc
-    assert [compactor.state_of(e.text) for e in arts] == ([(scene, art)] if art else []), desc
+    stages = stages_at(*RUN)
+    scene = compactor.scene_for("c0ffee01", None)
+    due = [e for t, e in compactor.schedule("c0ffee01", [(T0 + 1, T0 + 61), (T0 + 61, T0 + 90)], scene) if t <= T0 + 90]
+    dock = compactor.docked(compaction_entries(stages, True, T0 + 90)[-1].text)
+    assert dock.excerpt == due[-1] and len(due) >= 3, (dock, due)
+    assert compactor.docked(compaction_entries(stages[:1], True, T0 + 0.5)[-1].text).excerpt == (), "requested: none yet"
 
 
 @pytest.mark.parametrize("status, why", [("dead", "its host stopped"), ("stalled", "its host stalled")])

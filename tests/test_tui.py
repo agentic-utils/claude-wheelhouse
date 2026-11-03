@@ -10290,25 +10290,15 @@ async def test_a_compaction_starting_shows_its_conversation(store, tmp_path, mon
             assert not typed or app.answer.text == typed, f"{desc}: the text kept"
 
 
-@pytest.mark.parametrize("width", [36, 76])
-@pytest.mark.parametrize("who, text", [
-    *(("stage", compactor.stage_text(scene, "preparing", "you (Compact)", "", "10:39Z")) for scene in SCENES.values()),
-    *(("stage", compactor.stage_text(scene, "completed", None, "220k → 40k", "10:41Z")) for scene in SCENES.values()),
-    ("crew", "Han: I've got a bad feeling about these walls.\nC-3PO: Sir, the odds of survival are rather poor!"),
-], ids=[*(f"{n} preparing" for n in SCENES), *(f"{n} completed" for n in SCENES), "crew"])
-def test_stage_blocks_render_as_plain_text_never_markdown(width, who, text):
-    """#244: Markdown would turn the art into rules and bullets; each line is cut, never wrapped."""
+@pytest.mark.parametrize("text, desc", [
+    ("Compaction: preparing (notes turn)", "a stage"),
+    ("Compaction: failed: *the* host_stopped_ # twice", "a reason Markdown would mangle"),
+])
+def test_stage_blocks_render_as_plain_text_never_markdown(text, desc):
+    """#244, #324: a stage's line is drawn as it is, never as Markdown."""
     from rich.console import Console
-    from rich.segment import Segment
-    console = Console(width=width, color_system=None)   # rendered as the app renders a block (_block_lines)
-    rendered = console.render(tui.stage_text(who, text, width), console.options.update_width(width))
-    shown = ["".join(seg.text for seg in line) for line in Segment.split_lines(rendered)]
-    if who == "stage" and width >= compactor.BIG_WIDTH:   # the big one's still, then its dim line (#287)
-        scene, state = compactor.state_of(text)
-        text = scene.still(state) + "\n" + text.split("\n")[-1]
-    assert len(shown) == len(text.split("\n")), shown
-    for line, want in zip(shown, text.split("\n")):
-        assert line.rstrip() == want.rstrip() or (line.rstrip().endswith("…") and want.startswith(line.rstrip()[:-1])), (line, want)
+    console = Console(width=80, color_system=None)
+    assert "".join(seg.text for seg in tui._block_lines("stage", text, 80, console)).rstrip() == text, desc
 
 
 @pytest.mark.anyio
@@ -10672,62 +10662,173 @@ async def test_detail_dims_with_a_compaction_and_finds_its_parts_once(store, sid
         assert "#detail-more, #detail-bar" not in queried, f"{desc}: found once, not at each paint"
 
 
-def dock_rows(app) -> list[str]:
-    """What the compactor dock draws now, as plain rows."""
-    return app.compactor_dock.render().plain.split("\n")
+def overlay_rows(app) -> list[str]:
+    """What the compaction overlay draws now, as plain rows at its width."""
+    from rich.console import Console
+    overlay = app.compactor_overlay
+    console = Console(width=overlay.content_size.width, color_system=None)
+    with console.capture() as cap:
+        console.print(overlay.render())
+    return [row.rstrip() for row in cap.get().rstrip("\n").split("\n")]
+
+
+def cycle(store, sid, moves, clock=None, after=3.0):
+    """A compaction cycle moved through moves, and the overlay's clock after seconds into its
+    last stage: its id and scene."""
+    store.command(sid, "compact")
+    cid = store.compaction(sid)["id"]
+    for m in moves:
+        store.move_compaction(sid, cid, *m) if isinstance(m, tuple) else store.move_compaction(sid, cid, m)
+    if clock is not None:
+        clock[0] = datetime.fromisoformat(store.stages(sid)[-1]["at"]).timestamp() + after
+    return cid, compactor.scene_for(cid, None)   # the session's first cycle: its scene, whichever
+
+
+@pytest.fixture
+def overlay_clock(monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(tui.CompactorOverlay, "now", staticmethod(lambda: clock[0]))
+    return clock
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("moves, fps, docked, art, desc", [
-    ([], 10, "preparing", None, "requested: docked, drawn as preparing"),
-    (["preparing"], 10, "preparing", None, "preparing: docked, moving"),
-    (["preparing", "compacting"], 10, "compacting", None, "compacting: the dock moves on a stage"),
-    (["preparing", "compacting"], 0, "compacting", None, "animation off: a still, and no timer"),
-    (["preparing", "compacting", "completed"], 10, None, "completed", "compacted: closed, its last frame left in place"),
-    (["preparing", "failed"], 10, None, "failed", "failed: the same"),
-    (["preparing", "cancelled"], 10, None, "cancelled", "cancelled: the same"),
+@pytest.mark.parametrize("moves, fps, size, kind, state, desc", [
+    ([], 10, (160, 50), "big", "preparing", "requested: drawn as preparing, moving"),
+    (["preparing"], 10, (160, 50), "big", "preparing", "preparing: big and moving"),
+    (["preparing", "compacting"], 10, (160, 50), "big", "compacting", "compacting: the next stage"),
+    (["preparing", "compacting", ("completed", "220k → 40k")], 10, (160, 50), "big", "completed", "completed: its final frame"),
+    (["preparing", ("failed", "its host stopped")], 10, (160, 50), "big", "failed", "failed: its final frame"),
+    (["preparing", "compacting"], 0, (160, 50), "still", "compacting", "animation off: the big still, no timer"),
+    (["preparing", "compacting"], 10, (120, 40), "small", "compacting", "a pane under 60 columns: the small still"),
+    (["preparing", "compacting"], 0, (120, 40), "small", "compacting", "narrow and animation off: the small still"),
 ])
-async def test_the_compactor_docks_while_its_cycle_runs(store, sid, monkeypatch, live, moves, fps, docked, art, desc):
-    """#287: while a cycle runs its art is pinned under the conversation, big and moving on a
-    timer of its own; when it ends the dock closes, the timer stops, and the final frame is in
-    the conversation where the art was drawn."""
-    from claude_wheelhouse import features
+async def test_the_overlay_shows_each_stage(store, sid, monkeypatch, live, overlay_clock, moves, fps, size, kind, state, desc):
+    """#324, #287: the cycle's art over the conversation, big and moving on its own timer where
+    the pane is wide enough, a still otherwise, the newest crew excerpt under it."""
     monkeypatch.setattr(features, "animation_fps", lambda: fps)
-    clock = [1000.0]
-    monkeypatch.setattr(tui.CompactorDock, "now", staticmethod(lambda: clock[0]))
-    store.command(sid, "compact")
-    cid = store.compaction(sid)["id"]
-    scene = compactor.scene_for(cid, None)   # the session's first cycle: its scene, whichever
-    for m in moves:
-        store.move_compaction(sid, cid, m)
+    cid, scene = cycle(store, sid, moves, overlay_clock)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=size) as pilot:
+        await pick(app, pilot, sid)
+        app.refresh_data()
+        await pilot.pause()
+        overlay = app.compactor_overlay
+        assert overlay.display and overlay.shown.state == state, f"{desc}: {overlay.shown}"
+        assert (overlay.timer is not None) == bool(fps), f"{desc}: a timer only with the animation on"
+        rows = overlay_rows(app)
+        art = list(scene.frame(state, 3.0, animate=kind == "big")[0]) if kind != "small" else scene.walls[state].split("\n")
+        assert rows[:len(art)] == [r.rstrip() for r in art], f"{desc}: {rows}"
+        assert " ".join(rows[len(art):]).split() == " ".join(overlay.shown.excerpt).split(), f"{desc}: the crew under it"
+        assert (state == "preparing" and not moves) or overlay.shown.excerpt or state in compactor.ENDS[1:], f"{desc}: an excerpt due"
+        overlay_clock[0] += 1
+        overlay.paint()
+        assert (overlay_rows(app) != rows) == (kind == "big"), f"{desc}: moving only big with the animation on"
+        box, under = overlay.region, app.detail_scroll.region
+        assert abs((box.x + box.width / 2) - (under.x + under.width / 2)) <= 1, f"{desc}: centred, {box} on {under}"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("size, desc", [
+    ((160, 50), "room for it all"),
+    ((120, 40), "a narrow pane: the small still"),
+    ((80, 24), "a small screen: cut to the conversation, the crew's line dropped"),
+    ((200, 26), "wide but short: the small still, never over the answer box"),
+])
+async def test_the_overlay_stays_within_the_conversation(store, sid, live, overlay_clock, size, desc):
+    """#324: centred on the conversation and never past it, onto the answer box or below."""
+    cycle(store, sid, ["preparing", "compacting"], overlay_clock)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=size) as pilot:
+        await pick(app, pilot, sid)
+        app.refresh_data()
+        await pilot.pause()
+        box, under = app.compactor_overlay.region, app.detail_scroll.region
+        assert app.compactor_overlay.display and box.height > 2, f"{desc}: {box}"
+        assert under.contains_region(box), f"{desc}: {box} within {under}"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("how, desc", [("escape", "Esc"), ("click", "a click on it")])
+async def test_esc_or_a_click_hides_the_overlay_for_the_cycle(store, sid, live, overlay_clock, how, desc):
+    """#324: hidden for the rest of the cycle, the next stage not bringing it back, and Esc does
+    nothing else (today's Esc there: All sessions). The conversation's height is the same with
+    it shown as without: it takes none."""
+    cid, _ = cycle(store, sid, ["preparing"], overlay_clock)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 50)) as pilot:
         await pick(app, pilot, sid)
         app.refresh_data()
         await pilot.pause()
-        dock = app.compactor_dock
-        assert dock.display == bool(docked) and (dock.timer is not None) == bool(docked and fps), desc
-        if docked:
-            clock[0] = datetime.fromisoformat(store.stages(sid)[-1]["at"]).timestamp() + 3
-            dock.paint()
-            rows = dock_rows(app)
-            assert rows[:compactor.BIG_HEIGHT] == list(scene.frame(docked, 3.0, animate=bool(fps))[0]), desc
-            assert rows[-1].startswith("asked for by you (Compact)"), f"{desc}: {rows[-1]}"
-            assert "\n".join(scene.walls[docked].split("\n")[:2]) not in app._detail_text, f"{desc}: not in the conversation"
-            clock[0] += 1
-            dock.paint()
-            assert (dock_rows(app) != rows) == bool(fps), f"{desc}: moving only with the animation on"
-            store.move_compaction(sid, cid, "completed", "220k → 40k")
-            app.refresh_data()
-            await pilot.pause()
-            art = "completed"
-        assert not dock.display and dock.timer is None, f"{desc}: closed, its timer stopped"
-        assert scene.walls[art] + "\n" in app._detail_text, f"{desc}: the final frame in the conversation"
+        overlay, size, filtered = app.compactor_overlay, app.detail_scroll.size, app.filter_sid
+        assert overlay.display and filtered == sid, desc
+        await (pilot.press("escape") if how == "escape" else pilot.click("#compactor-overlay"))
+        await pilot.pause()
+        assert not overlay.display and overlay.timer is None, f"{desc}: hidden, its timer stopped"
+        assert app.filter_sid == filtered, f"{desc}: nothing else done"
+        assert app.detail_scroll.size == size, f"{desc}: the conversation's height the same either way"
+        store.move_compaction(sid, cid, "compacting")
+        app.refresh_data()
+        await pilot.pause()
+        assert not overlay.display, f"{desc}: not back at the next stage"
+        assert "Compaction: compacting" in app._detail_text, f"{desc}: the stage's line all the same"
+        await pilot.press("escape")
+        assert app.filter_sid is None, f"{desc}: Esc as ever once it's hidden"
 
 
 @pytest.mark.anyio
-async def test_a_dock_frame_never_repaints_the_inbox(store, sid, monkeypatch, live):
-    """#287, #268: a frame of the dock draws the dock alone: never the inbox or the sessions."""
+@pytest.mark.parametrize("end, after, left, desc", [
+    ("completed", 2.0, 6.0, "compacted: its final frame for the rest of LINGER"),
+    ("failed", 7.5, 0.5, "failed: the same"),
+    ("cancelled", 8.5, None, "past LINGER already: never shown"),
+])
+async def test_the_final_frame_lingers_then_goes(store, sid, monkeypatch, live, overlay_clock, end, after, left, desc):
+    """#324: an end's frame stays compactor.LINGER (8) seconds from that stage's start, then the
+    overlay goes, and a refresh within it doesn't bring it back."""
+    timers = []
+    monkeypatch.setattr(tui.CompactorOverlay, "set_timer",
+                        lambda self, delay, callback, **kw: timers.append((delay, callback)) or SimpleNamespace(stop=lambda: None))
+    cycle(store, sid, ["preparing", (end, "why")], overlay_clock, after)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 50)) as pilot:
+        await pick(app, pilot, sid)
+        app.refresh_data()
+        await pilot.pause()
+        overlay = app.compactor_overlay
+        assert overlay.display == (left is not None), desc
+        assert [round(d, 3) for d, _ in timers] == ([left] if left is not None else []), f"{desc}: {timers}"
+        for _, callback in timers:
+            callback()
+        assert not overlay.display, f"{desc}: gone"
+        app.refresh_data()
+        await pilot.pause()
+        assert not overlay.display, f"{desc}: and stays gone"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("moves, lines, desc", [
+    (["preparing"], ["preparing (notes turn)"], "running"),
+    (["preparing", "compacting", ("completed", "220k → 40k")], ["preparing (notes turn)", "compacting", "completed in "], "compacted"),
+    (["preparing", ("failed", "its host stopped")], ["preparing (notes turn)", "failed: its host stopped"], "failed"),
+    (["preparing", ("cancelled", "aborted")], ["preparing (notes turn)", "cancelled: aborted"], "cancelled"),
+])
+async def test_the_conversation_has_plain_stage_lines_and_no_crew(store, sid, live, overlay_clock, moves, lines, desc):
+    """#324: a sober line per stage in the conversation, never the art or the crew's excerpts."""
+    _, scene = cycle(store, sid, moves, overlay_clock, after=60)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 50)) as pilot:
+        await pick(app, pilot, sid)
+        app.refresh_data()
+        await pilot.pause()
+        text = app._detail_text
+        assert all(f"Compaction: {line}" in text for line in lines), f"{desc}: {text}"
+        assert not any(line in text for excerpt in scene.excerpts for line in excerpt), f"{desc}: no crew"
+        assert not any(row.strip() and row in text for walls in scene.walls.values() for row in walls.split("\n")[:-1]), \
+            f"{desc}: no art"
+
+
+@pytest.mark.anyio
+async def test_an_overlay_frame_never_repaints_the_inbox(store, sid, monkeypatch, live):
+    """#287, #268: a frame of the overlay draws the overlay alone: never the inbox or the sessions."""
     store.post_item(sid, "question", "which db?")
     store.command(sid, "compact")
     store.move_compaction(sid, store.compaction(sid)["id"], "compacting")
@@ -10744,13 +10845,13 @@ async def test_a_dock_frame_never_repaints_the_inbox(store, sid, monkeypatch, li
         real = Widget.refresh
         monkeypatch.setattr(Widget, "refresh", lambda self, *a, **k: (refreshed.add(self), real(self, *a, **k))[1])
         clock = [time.time()]
-        monkeypatch.setattr(tui.CompactorDock, "now", staticmethod(lambda: clock[0]))
+        monkeypatch.setattr(tui.CompactorOverlay, "now", staticmethod(lambda: clock[0]))
         took = []
-        for _ in range(12):   # the dock's own timer firing, a frame each time
+        for _ in range(12):   # the overlay's own timer firing, a frame each time
             clock[0] += 1 / compactor.TICKS
             start = time.perf_counter()
-            app.compactor_dock.paint()
-            app.compactor_dock.render_lines(app.compactor_dock.region.reset_offset)
+            app.compactor_overlay.paint()
+            app.compactor_overlay.render_lines(app.compactor_overlay.region.reset_offset)
             took.append(time.perf_counter() - start)
-        assert painted == [] and refreshed == {app.compactor_dock}, (painted, refreshed)
-        print(f"dock frame: median {sorted(took)[6] * 1000:.2f} ms")
+        assert painted == [] and refreshed == {app.compactor_overlay}, (painted, refreshed)
+        print(f"overlay frame: median {sorted(took)[6] * 1000:.2f} ms")

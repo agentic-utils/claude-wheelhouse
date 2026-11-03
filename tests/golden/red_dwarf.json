@@ -760,23 +760,11 @@
 "still preparing": "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\n▐ .--------------------------.  RED DWARF             (○)  ▌\n▐ |      .-''''''''''-.      |                             ▌\n▐ |     /  _        _  \\     |                             ▌\n▐ |     |  (°)    (°)  |     |                             ▌\n▐ |     |      <       |     |                             ▌\n▐ |     \\    '----'    /     |   (H)    [=]    %o%    o()  ▌\n▐ |      '-.________.-'      |   /|\\    /|\\    /|U   /|/   ▌\n▐ '--------------------------'   / \\    / \\    / \\   / \\   ▌\n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n  MEMORY 3,000,000 yrs                                      \n                      Holly's thinking                      ",
 "caption preparing": "Holly's thinking",
 "walls requested": null,
-"stage_text requested": null,
-"stage_text requested note": null,
 "walls preparing": " .--------.              (○)\n | (°  °) |  (H) [=] %o% o()\n |  '--'  |  /|\\ /|\\ /|U /|/\n '--------'  / \\ / \\ / \\ / \\\n MEMORY 3,000,000 yrs       \n      Holly's thinking      ",
-"stage_text preparing": " .--------.              (○)\n | (°  °) |  (H) [=] %o% o()\n |  '--'  |  /|\\ /|\\ /|U /|/\n '--------'  / \\ / \\ / \\ / \\\n MEMORY 3,000,000 yrs       \n      Holly's thinking      \nasked for by you (Compact) · 10:39Z",
-"stage_text preparing note": " .--------.              (○)\n | (°  °) |  (H) [=] %o% o()\n |  '--'  |  /|\\ /|\\ /|U /|/\n '--------'  / \\ / \\ / \\ / \\\n MEMORY 3,000,000 yrs       \n      Holly's thinking      \n220k → 40k · 10:41Z",
 "walls compacting": " .--------.              (●)\n | (o  .  |  (H) [=] %oU o()\n |  '- ·  |  /|- \\|/ /|  /|/\n '--------'  / \\ / \\ / \\ / \\\n MEMORY 5,960 yrs -> 3 lines\n     Holly's forgetting     ",
-"stage_text compacting": " .--------.              (●)\n | (o  .  |  (H) [=] %oU o()\n |  '- ·  |  /|- \\|/ /|  /|/\n '--------'  / \\ / \\ / \\ / \\\n MEMORY 5,960 yrs -> 3 lines\n     Holly's forgetting     \nasked for by you (Compact) · 10:39Z",
-"stage_text compacting note": " .--------.              (●)\n | (o  .  |  (H) [=] %oU o()\n |  '- ·  |  /|- \\|/ /|  /|/\n '--------'  / \\ / \\ / \\ / \\\n MEMORY 5,960 yrs -> 3 lines\n     Holly's forgetting     \n220k → 40k · 10:41Z",
 "walls completed": " .--------.              (○)\n |   oo   |  (H) [=] \\o/ o()\n |   --   |  <|> /|\\  |  /|/\n '--------'  / \\ / \\ / \\ / \\\n MEMORY 3 lines             \n  summary: stuff happened   ",
-"stage_text completed": " .--------.              (○)\n |   oo   |  (H) [=] \\o/ o()\n |   --   |  <|> /|\\  |  /|/\n '--------'  / \\ / \\ / \\ / \\\n MEMORY 3 lines             \n  summary: stuff happened   \n10:39Z",
-"stage_text completed note": " .--------.              (○)\n |   oo   |  (H) [=] \\o/ o()\n |   --   |  <|> /|\\  |  /|/\n '--------'  / \\ / \\ / \\ / \\\n MEMORY 3 lines             \n  summary: stuff happened   \n220k → 40k · 10:41Z",
 "walls failed": " .--------.    RED ALERT (●)\n |░▒░▒ ▒░▒|  (H) [=] %o% o()\n |▒ ▒░▒░ ░|  /|- \\|/ <|> /|/\n '--------'  / \\ / \\ / \\ / \\\n MEMORY ** OVERFLOW **      \n   Holly, are you there?    ",
-"stage_text failed": " .--------.    RED ALERT (●)\n |░▒░▒ ▒░▒|  (H) [=] %o% o()\n |▒ ▒░▒░ ░|  /|- \\|/ <|> /|/\n '--------'  / \\ / \\ / \\ / \\\n MEMORY ** OVERFLOW **      \n   Holly, are you there?    \n10:39Z",
-"stage_text failed note": " .--------.    RED ALERT (●)\n |░▒░▒ ▒░▒|  (H) [=] %o% o()\n |▒ ▒░▒░ ░|  /|- \\|/ <|> /|/\n '--------'  / \\ / \\ / \\ / \\\n MEMORY ** OVERFLOW **      \n   Holly, are you there?    \n220k → 40k · 10:41Z",
 "walls cancelled": " .--------.              (○)\n | (o  o) |  (H) [=] %o% o()\n |  '--'  |  /|\\ /|\\ /|U /|/\n '--------'  / \\ / \\ / \\ / \\\n MEMORY 3,000,000 yrs       \n         panic over         ",
-"stage_text cancelled": " .--------.              (○)\n | (o  o) |  (H) [=] %o% o()\n |  '--'  |  /|\\ /|\\ /|U /|/\n '--------'  / \\ / \\ / \\ / \\\n MEMORY 3,000,000 yrs       \n         panic over         \n10:39Z",
-"stage_text cancelled note": " .--------.              (○)\n | (o  o) |  (H) [=] %o% o()\n |  '--'  |  /|\\ /|\\ /|U /|/\n '--------'  / \\ / \\ / \\ / \\\n MEMORY 3,000,000 yrs       \n         panic over         \n220k → 40k · 10:41Z",
 "excerpts": [
 [
 "Holly: Emergency. There's an emergency going on. Your context's full."

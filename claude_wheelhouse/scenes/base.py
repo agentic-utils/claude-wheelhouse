@@ -2,8 +2,8 @@
 colour roles, and the interface a scene gives the compactor (Scene).
 
 A scene is a culture reference played out while a session compacts: its cast's excerpts, a
-caption per stage, a small still per stage for the conversation (WIDTH cells wide), and a big
-animated frame (BIG_WIDTH by BIG_HEIGHT) for the dock. Never imports Textual.
+caption per stage, a small still per stage for a narrow pane (WIDTH cells wide), and a big
+animated frame (BIG_WIDTH by BIG_HEIGHT), both for the app's overlay (#324). Never imports Textual.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 # the small stage art (#277): every row of every stage WIDTH cells, so it never shifts as one
-# stage replaces the last in place
+# stage replaces the last
 WIDTH = 28
 # the big art (#287): BIG_WIDTH by BIG_HEIGHT cells in every frame of every stage (a test pins
 # it); a pane narrower than BIG_WIDTH gets the small art instead. Everything moves on TICKS
@@ -62,6 +62,5 @@ class Scene:
         return self.draw(state, t, animate)
 
     def still(self, state: str) -> str:
-        """A stage's big still frame as plain text (animation off, or its last frame left in the
-        conversation)."""
+        """A stage's big still frame as plain text (the overlay's with the animation off)."""
         return "\n".join(self.draw(state, 0.0, False)[0])
