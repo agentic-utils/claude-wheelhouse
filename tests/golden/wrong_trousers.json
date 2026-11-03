@@ -193,7 +193,7 @@
 "                  o o   o  o   (x)  (x)(x)\\                 ",
 "╪══╪══╪══╪══╪══╪══╪══╪══╪══╪══╪══╪══╪══╪══╪══               ",
 "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
-" TRACK [█████████·] 22 pieces in the box   and laying       ",
+" TRACK [██████████] 24 pieces in the box   and laying       ",
 "                   a piece of track ahead                   "
 ],
 [
@@ -223,7 +223,7 @@
 "                  o o   o  o   (+)  (+)(+)\\                 ",
 "╪══╪══╪══╪══╪══╪══╪══╪══╪══╪══╪══╪══╪══╪══╪══               ",
 "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
-" TRACK [███████···] 16 pieces in the box   and laying       ",
+" TRACK [█████████·] 22 pieces in the box   and laying       ",
 "                   a piece of track ahead                   "
 ],
 [
@@ -243,9 +243,9 @@
 ],
 "frame compacting t=40.0": [
 [
-"         \"Is there a buffet car, Gromit?\"                   ",
+"   \"Ooh, I do love a day out on the train, lad!\"            ",
 "·   ·   ·   ·   ·   ·   ·[#]·   ·   ·   ·   ·   ·  [ROOM TO ",
-"                                     / \\                    ",
+"                                     - -                    ",
 "                       (o o) o  o   (o o)                   ",
 "                  (o>  [===]/ ._. O U(▄)U                   ",
 "                  /█\\*  /#\\   | | n  /██\\                   ",
@@ -253,7 +253,7 @@
 "                  o o   o  o   (+)  (+)(+)\\                 ",
 "╪══╪══╪══╪══╪══╪══╪══╪══╪══╪══╪══╪══╪══╪══╪══               ",
 "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
-" TRACK [█·········]  3 pieces in the box   and laying       ",
+" TRACK [██████····] 15 pieces in the box   and laying       ",
 "                   a piece of track ahead                   "
 ],
 [
@@ -283,7 +283,7 @@
 "                  o o   o  o   (+)  (+)(+)\\                 ",
 "╪══╪══╪══╪══╪══╪══╪══╪══╪══╪══╪══╪══╪══╪══╪══               ",
 "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
-" TRACK [███·······]  7 pieces in the box   and laying       ",
+" TRACK [████████··] 18 pieces in the box   and laying       ",
 "                   a piece of track ahead                   "
 ],
 [
@@ -301,7 +301,7 @@
 "                                                            "
 ]
 ],
-"still compacting": "   \"Ooh, I do love a day out on the train, lad!\"            \n·[#]·   ·   ·   ·   ·   ·  [ROOM TO LET]·   ·   ·   ·   ·   \n                                     - -                    \n                       (o o) o  o   (o o)                   \n                  (o>  [===]/ ._. O U(▄)U                   \n                  /█\\*  /#\\   | | n  /██\\                   \n                 [___]=[____]=|_|________\\                  \n                  o o   o  o   (+)  (+)(+)\\                 \n╪══╪══╪══╪══╪══╪══╪══╪══╪══╪══╪══╪══╪══╪══╪══               \n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n TRACK [███·······]  7 pieces in the box   and laying       \n                   a piece of track ahead                   ",
+"still compacting": "   \"Ooh, I do love a day out on the train, lad!\"            \n·[#]·   ·   ·   ·   ·   ·  [ROOM TO LET]·   ·   ·   ·   ·   \n                                     - -                    \n                       (o o) o  o   (o o)                   \n                  (o>  [===]/ ._. O U(▄)U                   \n                  /█\\*  /#\\   | | n  /██\\                   \n                 [___]=[____]=|_|________\\                  \n                  o o   o  o   (+)  (+)(+)\\                 \n╪══╪══╪══╪══╪══╪══╪══╪══╪══╪══╪══╪══╪══╪══╪══               \n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n TRACK [████████··] 18 pieces in the box   and laying       \n                   a piece of track ahead                   ",
 "caption compacting": "a piece of track ahead",
 "frame completed t=0.0": [
 [
@@ -765,9 +765,9 @@
 "walls preparing": "                    ^ ^     \n      (o o)        (o o)    \n (o>  [===]  ._.   U(▄)U═╪═ \n /█\\*  /#\\   | | n  /██/    \n[___]=[____]=|_|________>   \n o o   o  o   (+)  (+)(+)   \n═╪══╪══╪══╪══╪══╪══╪══╪══╪══\n TRACK 24 all aboard        \n  the train set comes out   ",
 "stage_text preparing": "                    ^ ^     \n      (o o)        (o o)    \n (o>  [===]  ._.   U(▄)U═╪═ \n /█\\*  /#\\   | | n  /██/    \n[___]=[____]=|_|________>   \n o o   o  o   (+)  (+)(+)   \n═╪══╪══╪══╪══╪══╪══╪══╪══╪══\n TRACK 24 all aboard        \n  the train set comes out   \nasked for by you (Compact) · 10:39Z",
 "stage_text preparing note": "                    ^ ^     \n      (o o)        (o o)    \n (o>  [===]  ._.   U(▄)U═╪═ \n /█\\*  /#\\   | | n  /██/    \n[___]=[____]=|_|________>   \n o o   o  o   (+)  (+)(+)   \n═╪══╪══╪══╪══╪══╪══╪══╪══╪══\n TRACK 24 all aboard        \n  the train set comes out   \n220k → 40k · 10:41Z",
-"walls compacting": "                    - -     \n      (o o) o  o   (o o)    \n (o>  [===]/ ._. O U(▄)U    \n /█\\*  /#\\   | | n  /██\\    \n[___]=[____]=|_|________\\   \n o o   o  o   (+)  (+)(+)\\  \n═╪══╪══╪══╪══╪══╪══╪══╪══╪══\n TRACK 7 and laying         \n   a piece of track ahead   ",
-"stage_text compacting": "                    - -     \n      (o o) o  o   (o o)    \n (o>  [===]/ ._. O U(▄)U    \n /█\\*  /#\\   | | n  /██\\    \n[___]=[____]=|_|________\\   \n o o   o  o   (+)  (+)(+)\\  \n═╪══╪══╪══╪══╪══╪══╪══╪══╪══\n TRACK 7 and laying         \n   a piece of track ahead   \nasked for by you (Compact) · 10:39Z",
-"stage_text compacting note": "                    - -     \n      (o o) o  o   (o o)    \n (o>  [===]/ ._. O U(▄)U    \n /█\\*  /#\\   | | n  /██\\    \n[___]=[____]=|_|________\\   \n o o   o  o   (+)  (+)(+)\\  \n═╪══╪══╪══╪══╪══╪══╪══╪══╪══\n TRACK 7 and laying         \n   a piece of track ahead   \n220k → 40k · 10:41Z",
+"walls compacting": "                    - -     \n      (o o) o  o   (o o)    \n (o>  [===]/ ._. O U(▄)U    \n /█\\*  /#\\   | | n  /██\\    \n[___]=[____]=|_|________\\   \n o o   o  o   (+)  (+)(+)\\  \n═╪══╪══╪══╪══╪══╪══╪══╪══╪══\n TRACK 18 and laying        \n   a piece of track ahead   ",
+"stage_text compacting": "                    - -     \n      (o o) o  o   (o o)    \n (o>  [===]/ ._. O U(▄)U    \n /█\\*  /#\\   | | n  /██\\    \n[___]=[____]=|_|________\\   \n o o   o  o   (+)  (+)(+)\\  \n═╪══╪══╪══╪══╪══╪══╪══╪══╪══\n TRACK 18 and laying        \n   a piece of track ahead   \nasked for by you (Compact) · 10:39Z",
+"stage_text compacting note": "                    - -     \n      (o o) o  o   (o o)    \n (o>  [===]/ ._. O U(▄)U    \n /█\\*  /#\\   | | n  /██\\    \n[___]=[____]=|_|________\\   \n o o   o  o   (+)  (+)(+)\\  \n═╪══╪══╪══╪══╪══╪══╪══╪══╪══\n TRACK 18 and laying        \n   a piece of track ahead   \n220k → 40k · 10:41Z",
 "walls completed": "  _                 ^ -     \n | |  (o o)        (o o)    \n/(o>\\ [===]  ._.   U(▄)U═╪═ \n|/█\\|  /#\\   | | n  /██/    \n[___]=[____]=|_|________>   \n o o   o  o   (+)  (+)(+)   \n═╪══╪══╪══╪══╪══╪══╪══╪══╪══\n TRACK 1 to spare           \n compacted, penguin bottled ",
 "stage_text completed": "  _                 ^ -     \n | |  (o o)        (o o)    \n/(o>\\ [===]  ._.   U(▄)U═╪═ \n|/█\\|  /#\\   | | n  /██/    \n[___]=[____]=|_|________>   \n o o   o  o   (+)  (+)(+)   \n═╪══╪══╪══╪══╪══╪══╪══╪══╪══\n TRACK 1 to spare           \n compacted, penguin bottled \n10:39Z",
 "stage_text completed note": "  _                 ^ -     \n | |  (o o)        (o o)    \n/(o>\\ [===]  ._.   U(▄)U═╪═ \n|/█\\|  /#\\   | | n  /██/    \n[___]=[____]=|_|________>   \n o o   o  o   (+)  (+)(+)   \n═╪══╪══╪══╪══╪══╪══╪══╪══╪══\n TRACK 1 to spare           \n compacted, penguin bottled \n220k → 40k · 10:41Z",
@@ -860,7 +860,7 @@
 "Gromit: (pulls up the oldest track behind the train and lays it in front)"
 ],
 [
-"Gromit: (tips the box upside down. One piece falls out. Just enough.)"
+"Gromit: (shakes the box by his ear, listening for track)"
 ],
 [
 "Wallace: I've had an idea, Gromit. What if we laid the track first?",
@@ -876,11 +876,11 @@
 ],
 [
 "Wallace: The summary's spelt my name with one L, Gromit.",
-"Gromit: (shrugs. It saved a token.)"
+"Gromit: (adds the other L in crayon. It runs a line over.)"
 ],
 [
 "Wallace: Will the summary mention my tank top, do you think?",
-"Gromit: (shakes his head, very slowly)"
+"Gromit: (holds up the summary. It's mostly about the tank top.)"
 ],
 [
 "Wallace: Funny, Gromit. I don't remember inviting a penguin.",
@@ -903,7 +903,7 @@
 "Wallace: Funny how the house gets smaller every time we go round, lad."
 ],
 [
-"Wallace: Lost my crackers off the back! Never mind, they're in the summary."
+"Wallace: Shall I read the summary out, lad? It's quicker than living it."
 ],
 [
 "Gromit: (sniffs the summary, keeps it, and buries the rest in the garden)"
@@ -912,7 +912,7 @@
 "Gromit: (fetches the old context back. Wallace throws it again.)"
 ],
 [
-"Gromit: (lays a piece marked THE END. The train carries on regardless.)"
+"Gromit: (stops to check the summary for typos, then lays three to catch up)"
 ],
 [
 "Wallace: I'll just pop the kettle on while you compact, lad.",
@@ -929,10 +929,10 @@
 "Wallace: Cheerio, old messages! Lovely knowing you!"
 ],
 [
-"Feathers McGraw: (hides the diamond in the oldest message. It's compacted.)"
+"Feathers McGraw: (measures the context with a tape. Notes a smaller number.)"
 ],
 [
-"Wallace: I'll have you know, lad, I'm a very compact man."
+"Techno-Trousers: (take two strides and reach the end of the conversation)"
 ],
 [
 "Gromit: (holds up a sign, TRACK ENDS HERE, and moves it along a bit)"
@@ -1011,7 +1011,7 @@
 53.741567999596846,
 [
 "Wallace: Will the summary mention my tank top, do you think?",
-"Gromit: (shakes his head, very slowly)"
+"Gromit: (holds up the summary. It's mostly about the tank top.)"
 ]
 ],
 [
@@ -1063,7 +1063,7 @@
 [
 155.2411815091093,
 [
-"Gromit: (lays a piece marked THE END. The train carries on regardless.)"
+"Gromit: (stops to check the summary for typos, then lays three to catch up)"
 ]
 ],
 [
@@ -1089,7 +1089,7 @@
 [
 243.00866199680857,
 [
-"Wallace: I'll have you know, lad, I'm a very compact man."
+"Techno-Trousers: (take two strides and reach the end of the conversation)"
 ]
 ],
 [

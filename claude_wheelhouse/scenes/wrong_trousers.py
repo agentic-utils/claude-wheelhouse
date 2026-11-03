@@ -40,28 +40,28 @@ EXCERPTS: tuple[tuple[str, ...], ...] = (
     ("Wallace: Ooh, we're going that fast the scenery's being summarised!",),
     ("Wallace: Ooh, a tunnel! Is that where the old messages go?", "Gromit: (nods, very slowly)"),
     ("Gromit: (pulls up the oldest track behind the train and lays it in front)",),
-    ("Gromit: (tips the box upside down. One piece falls out. Just enough.)",),
+    ("Gromit: (shakes the box by his ear, listening for track)",),
     ("Wallace: I've had an idea, Gromit. What if we laid the track first?", "Gromit: (lays another piece without looking up)"),
     ("Wallace: You've missed a bit, lad.", "Gromit: (points at the summary, where the bit is, only smaller)"),
     ("Wallace: I've built a machine that compacts the context and does the toast.", "Gromit: (holds up a slice. It's a summary of toast.)"),
-    ("Wallace: The summary's spelt my name with one L, Gromit.", "Gromit: (shrugs. It saved a token.)"),
-    ("Wallace: Will the summary mention my tank top, do you think?", "Gromit: (shakes his head, very slowly)"),
+    ("Wallace: The summary's spelt my name with one L, Gromit.", "Gromit: (adds the other L in crayon. It runs a line over.)"),
+    ("Wallace: Will the summary mention my tank top, do you think?", "Gromit: (holds up the summary. It's mostly about the tank top.)"),
     ("Wallace: Funny, Gromit. I don't remember inviting a penguin.", "Gromit: (taps the WANTED poster, then the penguin, then the poster)"),
     ("Feathers McGraw: (reads the summary. He isn't in it. He nods.)",),
     ("Wallace: It's the wrong summary, Gromit! And it's gone wrong!",),
     ("Wallace: You've got the knack of this, lad. Who taught you?", "Gromit: (holds up \"Compaction for Dogs\", well thumbed)"),
     ("Wallace: Let's see this summary, then. \"Wallace: oblivious.\" Well, charming.",),
     ("Wallace: Funny how the house gets smaller every time we go round, lad.",),
-    ("Wallace: Lost my crackers off the back! Never mind, they're in the summary.",),
+    ("Wallace: Shall I read the summary out, lad? It's quicker than living it.",),
     ("Gromit: (sniffs the summary, keeps it, and buries the rest in the garden)",),
     ("Gromit: (fetches the old context back. Wallace throws it again.)",),
-    ("Gromit: (lays a piece marked THE END. The train carries on regardless.)",),
+    ("Gromit: (stops to check the summary for typos, then lays three to catch up)",),
     ("Wallace: I'll just pop the kettle on while you compact, lad.", "Gromit: (lays track to the kettle as well)"),
     ("Wallace: Ooh, I say, Gromit. I've gone all concise.",),
     ("Wallace: Can the summary keep the bit where I was clever?", "Gromit: (searches. Keeps searching.)"),
     ("Wallace: Cheerio, old messages! Lovely knowing you!",),
-    ("Feathers McGraw: (hides the diamond in the oldest message. It's compacted.)",),
-    ("Wallace: I'll have you know, lad, I'm a very compact man.",),
+    ("Feathers McGraw: (measures the context with a tape. Notes a smaller number.)",),
+    ("Techno-Trousers: (take two strides and reach the end of the conversation)",),
     ("Gromit: (holds up a sign, TRACK ENDS HERE, and moves it along a bit)",),
     ("Wallace: Next stop, After Compaction! All change!",),
     ("Wallace: Fetch the big box of track, lad.", "Gromit: (holds up the big box. It's quite small.)"),
@@ -114,7 +114,7 @@ def pieces(state: str, f: int) -> int:
     if state == "preparing":
         return BOX
     if state == "compacting":
-        return 1 + round((BOX - 1) * 0.8 ** (f / (4 * TICKS)))
+        return 1 + round((BOX - 1) * 0.5 ** (f / (60 * TICKS)))
     if state == "completed":
         return 1
     if state == "failed":
