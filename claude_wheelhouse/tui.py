@@ -7214,7 +7214,10 @@ class WheelhouseApp(App):
         # a turn of Claude's arriving in the conversation shown, the person's own pick: the
         # tour's conversation dialog, if it's the demo's (saw). Their own words don't count
         turns = {md for who, md in blocks if who in ("claude", "tool")} if self.viewing else set()
-        (was, before), self._shown_turns = getattr(self, "_shown_turns", (None, set())), (self.viewing, turns)
+        # while it's fetched (conversation) nothing of it is shown yet: as it lands, its turns aren't new ones
+        reading = self.viewing and blocks == [("note", READING)]
+        (was, before), self._shown_turns = getattr(self, "_shown_turns", (None, set())), \
+            ((None, set()) if reading else (self.viewing, turns))
         if self.viewing and was == self.viewing and turns - before and self.selected == self.picked:
             self.saw(self.viewing, None, "follow")
         # an item's thread follows too once it's painted (#147): a new answer or reply shows at

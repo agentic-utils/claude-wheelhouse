@@ -1,4 +1,4 @@
-<!-- fact sheet stamp: version 227, 2026-11-03T17:34:45Z, source 71b9a0ffd3c4750e (make facts restamps it: AGENTS.md) -->
+<!-- fact sheet stamp: version 228, 2026-11-03T17:34:46Z, source 8a865c1690f238a1 (make facts restamps it: AGENTS.md) -->
 # Wheelhouse fact sheet
 
 What the helper chat knows before any question. The guide below is written by hand; the
