@@ -74,7 +74,7 @@ EXCERPTS: tuple[tuple[str, ...], ...] = (
     ("Willie: Who puts the off switch in a hole full of bugs?", "Indy: Whoever built the compactor. They don't like visitors."),
     ("Indy: My whip's no use against a ceiling. I checked.",),
     ("Short Round: What that grinding, Dr. Jones?", "Indy: A thousand years of context, coming down."),
-    ("Indy: You can compact a lot of things. Not Willie's top A.",),
+    ("Indy: Archaeology, kid. Every layer down there is somebody's old summary.",),
     ("Indy: Willie, you can scream or you can pull. Not both.", "Willie: Watch me."),
     ("Bugs: (thousands of them. The summary says \"some bugs\".)",),
     ("Willie: Compact him all you like. Just keep the bit where I was right.",),
