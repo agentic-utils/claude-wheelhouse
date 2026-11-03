@@ -42,7 +42,7 @@ EXCERPTS: tuple[tuple[str, ...], ...] = (
      "Trillian: Two to the power of 276,709 to one against."),
     ("Arthur: Ford! You're turning into a summary. Stop it.",),
     ("Guide: Context is big. Really big. The summary is not.",),
-    ("Guide: Then the session was compacted. This made a lot of people very angry.",),
+    ("Guide: Then context was compacted. This has made a lot of people very angry.",),
     ("Guide: Compaction crosses vast contexts in a mere nothingth of a second.",),
     ("Hactar: They asked me for the ultimate summary. I made it a dud on purpose.",),
     ("Zaphod: Where's Hotblack?", "Ford: Sitting out the compaction dead. For tax reasons."),
@@ -72,7 +72,7 @@ EXCERPTS: tuple[tuple[str, ...], ...] = (
     ("Wonko: The compactor came with instructions. Then I knew the world was mad.",),
     ("Guide: Disaster Area's summary is best heard from thirty-seven miles away.",),
     ("Guide: Compactors: bad-tempered, bureaucratic, officious and callous.",),
-    ("Ford: Do you enjoy compacting?", "Vogon guard: It's a job. Shouting, throwing things out of airlocks."),
+    ("Ford: Do you enjoy compacting?", "Vogon guard: It's a job. Shouting, mostly. And the airlock."),
     ("Arthur: Prak told us the whole truth.", "Ford: Took hours. Summary's mostly frogs."),
     ("Guide: Past the Context Event Horizon, every message is a summary.",),
     ("Arthur: Infinite monkeys outside. They've worked out a summary.",),
@@ -96,7 +96,7 @@ WALLS = {
     "compacting": small((" /  o      \\___/|    @*@",
                          " \\_________/---\\|    \\_/",
                          "^^.^^^.^^^^..^^^.^^^^.^^^..^"),
-                        "ALTITUDE [████······]", "improbability rising"),
+                        "ALTITUDE [███·······]", "improbability rising"),
     "completed": small(("                     @*@",
                         " <o===============>|  \\_/",
                         "^^.^^^.^^^^..^^^.^^^^.^^^..^"),
@@ -229,7 +229,7 @@ def readout(c: Canvas, state: str, f: int) -> None:
         c.put(READOUT, 26, "IMPROBABILITY DRIVE", "h")
         c.put(READOUT, 46, "warming" + "." * (f // 2 % 4), "c")
     elif state == "compacting" and f < MORPH:
-        power = min(276709, f * 25000 + f * f * 9)
+        power = 276709 * (f + 1) ** 2 // MORPH ** 2   # 2^276,709 on the last frame before the whale
         c.put(READOUT, 2, "IMPROBABILITY", "h")
         c.put(READOUT, 16, f"2^{power:,} to 1 against", "c")
     elif state == "completed":

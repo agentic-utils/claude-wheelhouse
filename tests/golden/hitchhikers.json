@@ -163,7 +163,7 @@
 "                              ·                             ",
 "    ·                                          *            ",
 "^^.^^^.^^^^..^^^.^^^^.^^^..^^^.^^^.^^^^..^^^.^^^^.^^^..^^^.^",
-"  IMPROBABILITY 2^0 to 1 against                            ",
+"  IMPROBABILITY 2^1,921 to 1 against                        ",
 "                    improbability rising                    "
 ],
 [
@@ -177,7 +177,7 @@
 "                              s                             ",
 "    s                                          s            ",
 "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-"  hhhhhhhhhhhhh cccccccccccccccc                            ",
+"  hhhhhhhhhhhhh cccccccccccccccccccc                        ",
 "                                                            "
 ]
 ],
@@ -193,7 +193,7 @@
 "                              ·                             ",
 "                                               *            ",
 "^^.^^^.^^^^..^^^.^^^^.^^^..^^^.^^^.^^^^..^^^.^^^^.^^^..^^^.^",
-"  IMPROBABILITY 2^225,729 to 1 against                      ",
+"  IMPROBABILITY 2^192,159 to 1 against                      ",
 "                    improbability rising                    "
 ],
 [
@@ -765,9 +765,9 @@
 "walls preparing": "~~[==>             __.--.__ \n     ~~[==>       (________)\n^^.^^^.^^^^..^^^.^^^^.^^^..^\n INCOMING: 2 MISSILES       \n        don't panic         ",
 "stage_text preparing": "~~[==>             __.--.__ \n     ~~[==>       (________)\n^^.^^^.^^^^..^^^.^^^^.^^^..^\n INCOMING: 2 MISSILES       \n        don't panic         \nasked for by you (Compact) · 10:39Z",
 "stage_text preparing note": "~~[==>             __.--.__ \n     ~~[==>       (________)\n^^.^^^.^^^^..^^^.^^^^.^^^..^\n INCOMING: 2 MISSILES       \n        don't panic         \n220k → 40k · 10:41Z",
-"walls compacting": " /  o      \\___/|    @*@    \n \\_________/---\\|    \\_/    \n^^.^^^.^^^^..^^^.^^^^.^^^..^\n ALTITUDE [████······]      \n    improbability rising    ",
-"stage_text compacting": " /  o      \\___/|    @*@    \n \\_________/---\\|    \\_/    \n^^.^^^.^^^^..^^^.^^^^.^^^..^\n ALTITUDE [████······]      \n    improbability rising    \nasked for by you (Compact) · 10:39Z",
-"stage_text compacting note": " /  o      \\___/|    @*@    \n \\_________/---\\|    \\_/    \n^^.^^^.^^^^..^^^.^^^^.^^^..^\n ALTITUDE [████······]      \n    improbability rising    \n220k → 40k · 10:41Z",
+"walls compacting": " /  o      \\___/|    @*@    \n \\_________/---\\|    \\_/    \n^^.^^^.^^^^..^^^.^^^^.^^^..^\n ALTITUDE [███·······]      \n    improbability rising    ",
+"stage_text compacting": " /  o      \\___/|    @*@    \n \\_________/---\\|    \\_/    \n^^.^^^.^^^^..^^^.^^^^.^^^..^\n ALTITUDE [███·······]      \n    improbability rising    \nasked for by you (Compact) · 10:39Z",
+"stage_text compacting note": " /  o      \\___/|    @*@    \n \\_________/---\\|    \\_/    \n^^.^^^.^^^^..^^^.^^^^.^^^..^\n ALTITUDE [███·······]      \n    improbability rising    \n220k → 40k · 10:41Z",
 "walls completed": "                     @*@    \n <o===============>|  \\_/   \n^^.^^^.^^^^..^^^.^^^^.^^^..^\n a sudden wet thud          \n        it's ground         ",
 "stage_text completed": "                     @*@    \n <o===============>|  \\_/   \n^^.^^^.^^^^..^^^.^^^^.^^^..^\n a sudden wet thud          \n        it's ground         \n10:39Z",
 "stage_text completed note": "                     @*@    \n <o===============>|  \\_/   \n^^.^^^.^^^^..^^^.^^^^.^^^..^\n a sudden wet thud          \n        it's ground         \n220k → 40k · 10:41Z",
@@ -863,7 +863,7 @@
 "Guide: Context is big. Really big. The summary is not."
 ],
 [
-"Guide: Then the session was compacted. This made a lot of people very angry."
+"Guide: Then context was compacted. This has made a lot of people very angry."
 ],
 [
 "Guide: Compaction crosses vast contexts in a mere nothingth of a second."
@@ -955,7 +955,7 @@
 ],
 [
 "Ford: Do you enjoy compacting?",
-"Vogon guard: It's a job. Shouting, throwing things out of airlocks."
+"Vogon guard: It's a job. Shouting, mostly. And the airlock."
 ],
 [
 "Arthur: Prak told us the whole truth.",
@@ -1084,7 +1084,7 @@
 [
 296.7520052594303,
 [
-"Guide: Then the session was compacted. This made a lot of people very angry."
+"Guide: Then context was compacted. This has made a lot of people very angry."
 ]
 ]
 ]
