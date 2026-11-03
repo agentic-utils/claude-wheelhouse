@@ -1965,8 +1965,9 @@ class CompactorOverlay(Widget, can_focus=False):
         return time.time()
 
     def big(self) -> bool:
-        """Whether the conversation is wide enough for the big frame, border and padding with it."""
-        return self.under is not None and self.under.size.width >= compactor.BIG_WIDTH + 4
+        """Whether the conversation has room for the big frame, border and padding with it."""
+        return self.under is not None and self.under.size.width >= compactor.BIG_WIDTH + 4 \
+            and self.under.size.height >= compactor.BIG_HEIGHT + 2
 
     def show(self, text: str | None) -> None:
         """Show a dock entry (compactor.dock_text), or with None (or its cycle dismissed) close."""
@@ -2054,6 +2055,8 @@ class CompactorOverlay(Widget, can_focus=False):
         width = min((compactor.BIG_WIDTH if self.big() else compactor.WIDTH) + 4, box.width)   # cut, never off the pane
         if self.styles.width is None or self.styles.width.value != width:
             self.styles.width = width
+        if self.styles.max_height is None or self.styles.max_height.value != box.height:
+            self.styles.max_height = box.height   # never over the answer box: cut, the crew's line dropped first (render)
         offset = (max(0, box.x - pane.x + (box.width - width) // 2),
                   max(0, box.y - pane.y + (box.height - self.outer_size.height) // 2))
         if tuple(int(v.value) for v in self.styles.offset) != offset:
@@ -2066,9 +2069,11 @@ class CompactorOverlay(Widget, can_focus=False):
         scene = self.shown.scene
         art = art_text(*scene.frame(state, max(f, 0) / compactor.TICKS, animate=f >= 0)) if big \
             else Text(scene.walls[state], style=VOICE["stage"], no_wrap=True, overflow="ellipsis")
-        if not self.shown.excerpt:
-            return art
-        return Group(art, Text(""), Text("\n".join(self.shown.excerpt), style=VOICE["crew"]))
+        crew = Text("\n".join(self.shown.excerpt), style=VOICE["crew"])
+        room = (self.under.size.height if self.under is not None else 0) - 2 - len(art.split()) - 1
+        if not self.shown.excerpt or len(crew.wrap(self.app.console, max(self.content_size.width, 1))) > room:
+            return art   # the crew's line only where it fits under the art in the conversation's height
+        return Group(art, Text(""), crew)
 
     def on_resize(self) -> None:
         self.place()

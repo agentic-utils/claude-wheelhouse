@@ -10728,6 +10728,26 @@ async def test_the_overlay_shows_each_stage(store, sid, monkeypatch, live, overl
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("size, desc", [
+    ((160, 50), "room for it all"),
+    ((120, 40), "a narrow pane: the small still"),
+    ((80, 24), "a small screen: cut to the conversation, the crew's line dropped"),
+    ((200, 26), "wide but short: the small still, never over the answer box"),
+])
+async def test_the_overlay_stays_within_the_conversation(store, sid, live, overlay_clock, size, desc):
+    """#324: centred on the conversation and never past it, onto the answer box or below."""
+    cycle(store, sid, ["preparing", "compacting"], overlay_clock)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=size) as pilot:
+        await pick(app, pilot, sid)
+        app.refresh_data()
+        await pilot.pause()
+        box, under = app.compactor_overlay.region, app.detail_scroll.region
+        assert app.compactor_overlay.display and box.height > 2, f"{desc}: {box}"
+        assert under.contains_region(box), f"{desc}: {box} within {under}"
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize("how, desc", [("escape", "Esc"), ("click", "a click on it")])
 async def test_esc_or_a_click_hides_the_overlay_for_the_cycle(store, sid, live, overlay_clock, how, desc):
     """#324: hidden for the rest of the cycle, the next stage not bringing it back, and Esc does
