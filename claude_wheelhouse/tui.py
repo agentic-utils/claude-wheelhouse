@@ -5241,7 +5241,7 @@ class WheelhouseApp(App):
         # bumped whenever that changes, and its one-shot timer, running only while they rest
         self.dwelling: tuple | None = None
         self.dwell_gen = 0
-        self.conversations_tried: dict[str, float] = {}   # ... and when each last landed, fetched or not
+        self.conversations_tried: dict[str, float] = {}   # ... and when a fetch that brought nothing landed
         self.conversations_asked: set[str] = set()   # conversations being fetched on a thread (conversation)
         self.detail_gen = 0   # Detail's shows, numbered: one overtaken is dropped (show_detail)
         self.detail_waiting = False   # a show from the top under way (show_detail)
@@ -6899,8 +6899,9 @@ class WheelhouseApp(App):
             at, held = datetime.now(timezone.utc), under_way_parents(found, busy)
             found = [it for it in found if item_key(it) in held or not self.completed_hidden(it, busy, at)]
             # when the next one shown goes: the stamped paint (paint_items) reads again then, not before (#327)
+            # those still to come: a row past its time but kept (the one selected) waits for the selection to move
             self.cleanse_due = min((due for it in found if item_key(it) not in held
-                                    and (due := self.hides_at(it, busy)) is not None), default=None)
+                                    and (due := self.hides_at(it, busy)) is not None and due > at), default=None)
         return found
 
     def searched(self, picked: tuple[str, str] | None) -> None:
@@ -7278,9 +7279,10 @@ class WheelhouseApp(App):
     def conversation_landed(self, sid: str) -> None:
         """A conversation fetched on a thread (conversation): shown, if it's still the one."""
         self.conversations_asked.discard(sid)
-        self.conversations_tried[sid] = self.now()
         if not self.client.has_conversation(sid):   # unreachable or busy: the tick asks again in a while
+            self.conversations_tried[sid] = self.now()
             return
+        self.conversations_tried.pop(sid, None)   # fetched: let go later and asked again, it's fetched at once
         if self.viewing == sid and self.screen_stack:
             self.paint_detail()
 

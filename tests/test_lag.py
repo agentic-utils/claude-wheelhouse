@@ -195,25 +195,56 @@ async def test_a_tick_sort_from_a_worker_lands_only_for_its_version(store, sid, 
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("asks, waited, fetches, desc", [
-    (20, 0, 1, "asked again and again while the daemon can't answer: one fetch, not a spin (review 1)"),
-    (2, 2.5, 2, "asked again after CONVERSATION_RETRY: fetched again"),
+@pytest.mark.parametrize("brings, asks, waited, fetches, desc", [
+    (False, 20, 0, 1, "asked again and again while the daemon can't answer: one fetch, not a spin (review 1)"),
+    (False, 2, 2.5, 2, "asked again after CONVERSATION_RETRY: fetched again"),
+    (True, 2, 0, 2, "fetched, let go, asked again at once: fetched at once, no wait (review 2)"),
 ])
-async def test_a_conversation_that_cannot_be_fetched_is_not_fetched_in_a_loop(store, sid, monkeypatch, asks, waited,
-                                                                               fetches, desc):
+async def test_a_conversation_that_cannot_be_fetched_is_not_fetched_in_a_loop(store, sid, monkeypatch, brings, asks,
+                                                                               waited, fetches, desc):
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         fetched = []
         monkeypatch.setattr(app.client, "remote", True)
-        monkeypatch.setattr(app.client, "has_conversation", lambda s: False)
-        monkeypatch.setattr(app.client, "conversation", lambda s: fetched.append(s))
+        have = [False]
+        monkeypatch.setattr(app.client, "has_conversation", lambda s: have[0])
+        def conversation(s):   # a fetch when it isn't here; once it is, a read of what's kept
+            if not have[0]:
+                fetched.append(s)
+            have[0] = brings
+            return []
+        monkeypatch.setattr(app.client, "conversation", conversation)
         clock = [100.0]
         monkeypatch.setattr(app, "now", lambda: clock[0])
         for i in range(asks):
             if i:
                 clock[0] += waited
+            have[0] = False   # not here (again): let go by a refresh, or never fetched
             assert app.conversation(sid) == [("note", tui.READING)], desc
             await pilot.app.workers.wait_for_complete()
             await pilot.pause()
         assert len(fetched) == fetches, desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("selected, desc", [
+    (None, "nothing selected: the row past its time hidden, the next due is the other's"),
+    ("T1", "the row past its time selected, kept: the next due is still the other's, not one already past (review 2)"),
+])
+async def test_autocleanse_waits_for_the_next_row_due_not_one_kept_past_its_time(store, sid, selected, desc):
+    from datetime import datetime, timedelta, timezone
+    for ref, minutes in (("T1", 10), ("T2", 2)):
+        store.post_item(sid, "task", ref, status="done")
+        at = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat(timespec="seconds")
+        store.db.execute("UPDATE items SET updated_at = ? WHERE session_id = ? AND ref = ?", (at, sid, ref))
+    app = WheelhouseApp(store)
+    app.autocleanse = 5
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app._selected = selected and (sid, selected)
+        found, processing, queued, awaiting = app.client.inbox(None)
+        shown = [it["ref"] for it in app.listable(found, queued | awaiting)]
+        assert ("T1" in shown) == bool(selected), desc
+        left = (app.cleanse_due - datetime.now(timezone.utc)).total_seconds()
+        assert 150 < left < 190, f"{desc}: due in {left:.0f} s"
