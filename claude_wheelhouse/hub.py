@@ -39,6 +39,7 @@ from .store import (COMPACT_QUESTION, NOTES_WAIT, Refused, Busy, REQUESTS, wheel
                     PROTOCOL_VERSION, mcp_servers, mode, needs_relaunch, runner, standing)
 
 RUNNING = ("live", "stalled", "starting")
+RUN_GRACE = liveness.STARTING_GRACE   # seconds a command's tab has to take its run up (sweep_runs, #339)
 
 
 def goes_now(store: Store, s, ref: str | None) -> bool:
@@ -436,6 +437,7 @@ class Hub:
         self.statuses = {s["id"]: liveness.status(s, waking=self.waking) for s in self.sessions}
         self.sweep_compactions()
         self.sweep_ops()
+        self.sweep_runs()
         self.note_quiet()
 
     def sweep_compactions(self) -> None:
@@ -461,6 +463,23 @@ class Hub:
                 if self.store.expire_requested(s["id"], s["compaction_id"], within):
                     print(f"wheelhouse: {display_name(s)}'s compaction failed: no host took it up within "
                           f"{within:g} s", file=sys.stderr, flush=True)
+
+    def sweep_runs(self) -> None:
+        """A command's run that will never say how it ended fails, so Run is never disabled for
+        ever (#339): its tab's process gone (closed, killed, or a reboot) with no outcome written,
+        which the tab's rc writes before its shell can exit; or no tab took it up within
+        RUN_GRACE of its start (outside a wake's grace, when a tab may just be late). Read first:
+        a write only for a run to fail, and only if it is still running with the tab seen."""
+        for r in self.store.running_commands():
+            if r["run_tab"]:
+                if liveness.is_alive(*json.loads(r["run_tab"])):
+                    continue
+                why = f"ran {time.strftime('%H:%M')}: failed, its tab closed before the run ended"
+            elif self.waking or not r["run_at"] or time.time() - epoch(r["run_at"]) < RUN_GRACE:
+                continue
+            else:
+                why = f"failed {time.strftime('%H:%M')}: no tab took the run up within {RUN_GRACE} s"
+            self.store.lose_run(r["session_id"], r["ref"], r["run_tab"], why)
 
     def sweep_ops(self) -> None:
         """Every park or end has a way out (#249): past its deadline (PARK_WITHIN from the press), or
@@ -1277,9 +1296,11 @@ class Hub:
         written to a 0600 file under a random key, and a quick shell's tab opened in the session's
         directory to run it (quickshell.run), its command line carrying only the database's path
         and the key. Refused, never moved to home, if that directory is gone: a command in the
-        wrong repo is the failure to avoid. Unless the output is sent, the item gains a note of the
-        run the session isn't sent (Store.ran); its status waits for the run's end, which the tab
-        writes (quickshell.ended, #335): run, or failed with the exit code, Run kept."""
+        wrong repo is the failure to avoid. The item is running (Run disabled, #339) from before
+        the tab opens, refused if it is already. Unless the output is sent, the item gains a note
+        of the run the session isn't sent (Store.ran); its status then waits for the run's end,
+        which the tab writes (quickshell.ended, #335): run, or failed with the exit code, Run
+        kept; or, if the tab goes without saying, sweep_runs fails it."""
         item = self.store.item(sid, ref)
         if item is None or item["kind"] != "command":
             self.row(sid)   # SessionGone if that's why
@@ -1291,13 +1312,20 @@ class Hub:
             return Done(False).say(f"{gone} is gone: {ref} wasn't run", "warning")
         edited = text != item["body"]
         db = self.store.path
-        key = quickshell.write(db, {"sid": sid, "ref": ref, "name": display_name(s), "cwd": cwd, "text": text,
-                                    "edited": edited, "want": bool(send)})
+        try:   # running before the tab opens, which may say how the run ended at once (#339)
+            was = self.store.start_run(sid, ref)
+        except ValueError as e:   # running already (another app's Run), or run or closed meanwhile
+            return Done(False).say(str(e), "warning")
+        key = None
         try:
+            key = quickshell.write(db, {"sid": sid, "ref": ref, "name": display_name(s), "cwd": cwd, "text": text,
+                                        "edited": edited, "want": bool(send)})
             launch.open_shell(self.store, cwd, f"{ref} {display_name(s)}",
                               [sys.executable, "-m", "claude_wheelhouse", "shell", "--db", str(db), key], note=ref)
         except (OSError, ValueError) as e:
-            (quickshell.shell_dir(db) / key).unlink(missing_ok=True)
+            if key:
+                (quickshell.shell_dir(db) / key).unlink(missing_ok=True)
+            self.store.unstart_run(sid, ref, was)
             return Done(False).say(f"couldn't open a shell: {e}", "error")
         note = None if send else f"started {time.strftime('%H:%M')}" + (", edited" if edited else "")
         self.store.ran(sid, ref, note)

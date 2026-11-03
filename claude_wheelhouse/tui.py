@@ -77,7 +77,7 @@ from .knurl import KnurlRender
 from .splitter import SlotSplitter, Splitter, fit
 from textual.css.scalar import Unit
 from .tour import LIT as tour_lit, NOTES, PAUSED, ROWS as tour_rows, SHUN as tour_shun, TOPUP, TOUR, Tour, offered, opening
-from .store import (DEFAULT_THEN, DELETED, HOST_QUESTION, DISMISSABLE, FINISHED_RANK, PARENTS, SETTLED, SETTLED_RANK, SessionGone, Store, db_path, default_runner,
+from .store import (DEFAULT_THEN, DELETED, HOST_QUESTION, DISMISSABLE, FINISHED_RANK, PARENTS, RUNNABLE, SETTLED, SETTLED_RANK, SessionGone, Store, db_path, default_runner,
                     family, inbox_rank, mcp_servers, mode, pinned, runner, spared, stamp, standing)
 from .unsent import Unsent
 
@@ -2362,8 +2362,8 @@ class CompactButtons(Horizontal):
 
 
 class RunButtons(Horizontal):
-    """Over the answer box while the item in context is a command item not closed (#257): Run,
-    which opens the command in RunCommand. A real button, never a segment of the item's text,
+    """Over the answer box while the item in context is a command item still to run (#257), or
+    running, Run disabled till its run fails (#339): Run, which opens the command in RunCommand. A real button, never a segment of the item's text,
     so no session text reaches markup."""
     DEFAULT_CSS = """
     RunButtons { height: 1; display: none; background: #12122a; }
@@ -4773,7 +4773,8 @@ BUTTONS = {
     "shell": ("Shell (Alt+H, from anywhere): a quick shell in a new terminal tab, in the session in context's "
               "directory (where it works now), or home with none; exit or Ctrl+D closes it"),
     "run-command": ("Run (on a command a session suggested): opens it in a box you can edit, with whether its output "
-                    "goes back to the session; Run there runs it in a new terminal tab in the session's directory"),
+                    "goes back to the session; Run there runs it in a new terminal tab in the session's directory. "
+                    "Disabled while it runs; back if the run fails"),
     "handover": ("Handover to Claude Code in a shell (in the session list's right-click menu only, no key): open a "
                  "session run in the wheelhouse in a real Claude Code tab; it comes back when you /exit"),
     "model": "Model (Alt+M): change the model a session run in the wheelhouse runs on, live; its prompt cache goes with the old one",
@@ -7739,11 +7740,13 @@ class WheelhouseApp(App):
                     self.refit()   # a row more or less over the answer box
         if doc_gone and not self.focus_answer():
             self.screen.set_focus(self.items_table)
-        command = self.command_item(item)
+        command = self.command_item(item, also=("running",))   # shown while running, disabled (#339)
         for row in run_rows:
             if row.display != (command is not None):
                 row.display = command is not None
                 self.refit()
+            if command is not None:
+                show_button(row, "run-command", "Run", command["status"] == "running")
         compacting = s is not None and "compact-now" in self.busy_buttons(s)
         for row in compact_rows:
             show_button(row, "compact-now", "Compact", compacting, not waiting)
@@ -9271,11 +9274,12 @@ class WheelhouseApp(App):
                                  "and takes it back when you /exit the tab."),
                          lambda yes: yes and self.host_command(sid, "shell", press_as="handover"))
 
-    def command_item(self, target):
+    def command_item(self, target, also: tuple[str, ...] = ()):
         """The item in context if it's a command item still to run (#257): open, or failed and so
-        run again (#335); not one run well or closed. Else None."""
+        run again (#335); not one running (#339), run well or closed; or one of the also statuses.
+        Else None."""
         item = target and target[1] and self.client.item(*target)
-        return item if item and item["kind"] == "command" and item["status"] in ("open", "failed") else None
+        return item if item and item["kind"] == "command" and item["status"] in (*RUNNABLE, *also) else None
 
     @on(Button.Pressed, "#run-command")
     def run_pressed(self, event: Button.Pressed) -> None:

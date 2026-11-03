@@ -1904,7 +1904,8 @@ def test_run_command(store, projects, monkeypatch, text, send, gone, ok, note, d
     done = Hub(store).run_command(sid, ref, text, send)
     assert done.ok == ok, desc
     item = store.item(sid, ref)
-    assert item["status"] == "open", f"{desc}: open until the tab says how the run ended (#335)"
+    assert item["status"] == ("running" if ok else "open"), \
+        f"{desc}: running till the tab says how the run ended (#335, #339); refused, still open"
     notes = [m["body"] for m in store.thread(sid, ref) if m["kind"] == "run"]
     assert [n.split(" ", 2)[0] + (", edited" if n.endswith("edited") else "") for n in notes] == \
         ([note] if note else []), desc
@@ -1991,3 +1992,118 @@ def test_a_command_waiting_on_the_person_sorts_as_an_open_question(store, sid, s
     same = blocked if failed else question
     assert keys[ref][:2] == keys[same][:2] if spec == "status▲" else \
         store_mod.inbox_rank(store.item(sid, ref))[0] == store_mod.inbox_rank(store.item(sid, same))[0], desc
+
+
+@pytest.mark.parametrize("before, opens, ok, after, desc", [
+    ("open", "write", False, "open", "the run's file couldn't be written: back to open, nothing opened"),
+    ("open", True, True, "running", "accepted: running before the tab opens, Run disabled everywhere"),
+    ("failed", True, True, "running", "a failed run tried again: running"),
+    ("running", True, False, "running", "running already (another app's Run): refused, no second tab"),
+    ("run", True, False, "run", "run well already: refused"),
+    ("open", False, False, "open", "the tab never opened: back to open, Run enabled"),
+    ("failed", False, False, "failed", "the tab never opened on a retry: back to failed, Run enabled"),
+])
+def test_run_command_sets_running(store, projects, monkeypatch, before, opens, ok, after, desc):
+    """#339: the daemon marks a command running when it accepts the run, before the tab can
+    report, so every attached app disables Run; a run it can't start leaves the status as was."""
+    work = projects / "work"
+    work.mkdir()
+    sid = store.create_session(str(work), name="demo")
+    ref = store.post_command(sid, "ls", "List")[0]
+    store.db.execute("UPDATE items SET status = ? WHERE ref = ?", (before, ref))
+    seen = []
+
+    def open_shell(st, cwd, title, command=None, note=""):
+        seen.append(store.item(sid, ref)["status"])
+        if not opens:
+            raise OSError("wt.exe not found")
+    monkeypatch.setattr(launch, "open_shell", open_shell)
+    if opens == "write":
+        monkeypatch.setattr(quickshell, "write", lambda *a: (_ for _ in ()).throw(OSError("disk full")))
+    done = Hub(store).run_command(sid, ref, "ls", False)
+    assert done.ok == ok, desc
+    assert store.item(sid, ref)["status"] == after, desc
+    assert seen == (["running"] if before in store_mod.RUNNABLE and opens != "write" else []), \
+        f"{desc}: running as the tab opens"
+
+
+TAB = [4242, 99, "boot"]
+
+
+@pytest.mark.parametrize("tab, age, alive, waking, outcome, status, note, desc", [
+    (TAB, 5, False, False, None, "failed", "failed, its tab closed before the run ended",
+     "its tab gone with no outcome (closed, killed, rebooted): failed, saying so, Run enabled"),
+    (TAB, 5, True, False, None, "running", None, "its tab alive: still running, however long"),
+    (TAB, 5, False, False, 0, "run", "succeeded", "the outcome written before the tab went: run, as it said"),
+    (None, 120, False, False, None, "failed", "no tab took the run up within 90 s",
+     "no tab took it up in RUN_GRACE: failed, saying so"),
+    (None, 30, False, False, None, "running", None, "no tab yet, within RUN_GRACE: still running"),
+    (None, 120, False, True, None, "running", None, "no tab yet, just woken: a late tab given its chance"),
+])
+def test_a_run_that_never_reports_fails(store, sid, monkeypatch, tab, age, alive, waking, outcome, status, note, desc):
+    """#339: Run is never disabled for ever: a running command whose tab's process has gone
+    without an outcome, or that no tab took up, fails with why on the item."""
+    ref = store.post_command(sid, "make stop", "Stop it")[0]
+    store.start_run(sid, ref)
+    when = datetime.fromtimestamp(time.time() - age, timezone.utc).isoformat(timespec="seconds")
+    store.db.execute("UPDATE items SET run_at = ? WHERE ref = ?", (when, ref))
+    if tab:
+        store.run_taken(sid, ref, *tab)
+    if outcome is not None:
+        store.outcome(sid, ref, outcome)
+    checked = []
+    monkeypatch.setattr(liveness, "is_alive", lambda *a: checked.append(list(a)) or alive)
+    hub = Hub(store)
+    hub.waking = waking
+    hub.sweep_runs()
+    assert store.item(sid, ref)["status"] == status, desc
+    notes = [m["body"].split(": ", 1)[1] for m in store.thread(sid, ref) if m["kind"] == "run"]
+    assert notes == ([note] if note else []), desc
+    assert checked == ([TAB] if tab and outcome is None else []), f"{desc}: the tab recorded is the one checked"
+    assert list(store.thread(sid, ref, in_flight=False)) == [], f"{desc}: never the session's"
+
+
+def test_the_tab_records_its_own_process(store, sid, monkeypatch):
+    """#339: the tab's process, which becomes its bash, is kept on the running item."""
+    ref = store.post_command(sid, "ls", "List")[0]
+    store.start_run(sid, ref)
+    quickshell.taken(store.path, sid, ref)
+    pid, start, boot = json.loads(store.item(sid, ref)["run_tab"])
+    assert (pid, start, boot) == (os.getpid(), liveness.start_time(os.getpid()), liveness.boot_id())
+    assert liveness.is_alive(pid, start, boot), "this very process, alive"
+
+
+@pytest.mark.parametrize("spec, desc", [
+    ("status*", "the default order: a running command with running work, below the open questions"),
+    ("status▲", "Status ▲: a running command where running work sorts"),
+])
+def test_a_running_command_sorts_as_running_work(store, sid, spec, desc):
+    """#339: a running command needs nothing of the person: not ranked as an open question."""
+    from claude_wheelhouse import ordering
+    task = store.post_item(sid, "task", "work", status="running")
+    question = store.post_item(sid, "question", "which db?")
+    ref = store.post_command(sid, "ls", "List")[0]
+    store.start_run(sid, ref)
+    keys = {it["ref"]: ordering.item_key(spec, it)[0] for it in store.items(sid)}
+    assert keys[question] < keys[ref], f"{desc}: below the open question"
+    assert keys[ref][:2] == keys[task][:2] if spec == "status▲" else \
+        store_mod.inbox_rank(store.item(sid, ref))[0] == store_mod.inbox_rank(store.item(sid, task))[0], desc
+
+
+def test_a_running_command_suggested_again_keeps_running(store, sid):
+    """#339: the session suggesting it again doesn't re-enable Run mid-run."""
+    ref = store.post_command(sid, "ls", "List")[0]
+    store.start_run(sid, ref)
+    store.post_command(sid, "ls", "List again")
+    assert store.item(sid, ref)["status"] == "running"
+
+
+def test_a_running_command_never_makes_its_session_busy(store, sid):
+    """#339: a running command is the person's shell, not the session's turn: no busy session,
+    no "mid-turn" warning on Relaunch."""
+    ref = store.post_command(sid, "make dev", "Serve it")[0]
+    store.start_run(sid, ref)
+    row = lambda: next(r for r in store.sessions() if r["id"] == sid)
+    assert row()["running"] == 0 and not hub_mod.working(row()), "a running command: not busy"
+    store.post_item(sid, "task", "work", status="running")
+    assert hub_mod.working(row()), "a running task still makes it busy"
