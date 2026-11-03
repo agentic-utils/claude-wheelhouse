@@ -264,7 +264,9 @@ def chained(command: str) -> bool:
     """Whether a Bash command is several commands chained at its top level, by &&, ||, ; or a
     newline (#329): what a session can run as separate calls without changing what each does. A
     pipeline, a subshell, a $(...), a { } group or a heredoc is one command, whatever is inside it;
-    a top-level & (a background job) or anything that doesn't parse cleanly is not chained."""
+    a top-level & (a background job, even after a chain) or anything that doesn't parse cleanly is
+    not chained. So is a chain whose first command opens a heredoc (tree-sitter-bash reads it as
+    one statement): it goes to the person, as any command not chained does."""
     import tree_sitter_bash
     from tree_sitter import Language, Parser
     root = Parser(Language(tree_sitter_bash.language())).parse(command.encode()).root_node
@@ -278,9 +280,10 @@ def chained(command: str) -> bool:
 
 def split_note(command: str) -> str:
     """The body of the settled permission item that says a split was asked for."""
+    fence = "`" * max(3, 1 + max((len(m) for m in re.findall(r"`+", command)), default=0))   # longer than any run in it
     return ("The wheelhouse answered this prompt itself: it asked the session to run these commands as "
             "separate Bash calls, so each can match its own permission rule. If the session asks again "
-            f"with the same command, it comes to you.\n\n```bash\n{command}\n```")
+            f"with the same command, it comes to you.\n\n{fence}bash\n{command}\n{fence}")
 
 
 def permission_body(name: str, inp: dict, ctx) -> str:

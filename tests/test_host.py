@@ -3021,6 +3021,7 @@ def test_mcp_ask_given_back_never_overwrites_a_newer_one(store, sid):
     ("# list\nls", False, "a comment then one command"),
     ("if then fi ((", False, "unparsable"),
     ("a &&", False, "unfinished: unparsable"),
+    ("a && b &", False, "a chain sent to the background as a whole"),
 ])
 def test_chained(command, expected, desc):
     assert host_mod.chained(command) is expected, desc
@@ -3065,6 +3066,9 @@ def test_split_note_is_settled_and_dismissable(host, store, sid):
     assert store_mod.standing(item) == "settled", "shown dimmed, never waiting on the person"
     store.dismiss(sid, item["ref"])
     assert store_mod.standing(store.item(sid, item["ref"])) == "finished", "Delete clears it"
+    waiting = store.post_item(sid, "permission", "Bash: ls")
+    with pytest.raises(KeyError):
+        store.dismiss(sid, waiting)   # an open permission: a call still waits on it
 
 
 @pytest.mark.parametrize("word", ["bypass", "around", "avoid", "circumvent", "reword", "rephrase", "obfuscat",

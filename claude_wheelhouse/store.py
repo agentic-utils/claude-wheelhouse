@@ -2196,9 +2196,10 @@ class Store:
         with self.tx() as db:
             self._require(db, sid)
             done = db.execute("UPDATE items SET dismissed = CASE WHEN ? THEN status END WHERE session_id = ? "
-                              f"AND ref = ? AND kind IN {DISMISSABLE}", (dismissed, sid, ref)).rowcount
-        if not done:
-            raise KeyError(f"no task or subagent {ref} in this session")
+                              f"AND ref = ? AND kind IN {DISMISSABLE} "
+                              "AND (kind != 'permission' OR status IN ('split'))", (dismissed, sid, ref)).rowcount
+        if not done:   # a permission only once split (#329): never one a call still waits on
+            raise KeyError(f"no dismissable item {ref} in this session")
 
     def delete_children(self, sid: str, ref: str) -> list[str]:
         """The person deleted an item with its children (family): each one not running marked
