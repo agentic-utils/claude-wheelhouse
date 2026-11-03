@@ -241,6 +241,10 @@ FEATURES: tuple[Feature, ...] = (
             note="Compaction has a fourth scene: Men in Black, with K's neuralyzer flooding the street white, "
                  "the bystanders coming out of it blank and smiling as the WIPED readout climbs, the cover story "
                  "stamped once it's done, and the agents' lines between."),
+    Feature("compactor-hitchhikers", UNRELEASED, ADVANCED,
+            note="Compaction has a fifth scene: The Hitchhiker's Guide to the Galaxy, with two missiles turned "
+                 "into a sperm whale and a bowl of petunias and the ground rushing up as the ALTITUDE readout "
+                 "falls, DON'T PANIC over it all, and the crew's lines between."),
     Feature("keepalive-50", UNRELEASED, ADVANCED,
             note="The keepalive comes every 50 minutes, ahead of Claude Code's idle compaction at about 54."),
     Feature("compact-at-keepalive-end", UNRELEASED, ADVANCED,
