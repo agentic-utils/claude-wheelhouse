@@ -237,6 +237,10 @@ FEATURES: tuple[Feature, ...] = (
             note="Compaction has a third scene: Red Dwarf, with Holly's face flaking off the monitor as her "
                  "MEMORY falls from three million years to three lines, Kryten panicking, Rimmer ordering Red "
                  "Alert and the Cat checking his reflection, and the crew's lines between."),
+    Feature("compactor-men-in-black", UNRELEASED, ADVANCED,
+            note="Compaction has a fourth scene: Men in Black, with K's neuralyzer flooding the street white, "
+                 "the bystanders coming out of it blank and smiling as the WIPED readout climbs, the cover story "
+                 "stamped once it's done, and the agents' lines between."),
     Feature("keepalive-50", UNRELEASED, ADVANCED,
             note="The keepalive comes every 50 minutes, ahead of Claude Code's idle compaction at about 54."),
     Feature("compact-at-keepalive-end", UNRELEASED, ADVANCED,

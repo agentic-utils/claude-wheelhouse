@@ -912,8 +912,11 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
   Sulu and Chekov's lines while it runs, or Red Dwarf, where Holly's face flakes off the
   monitor as her MEMORY readout falls from three million years to three lines, Kryten panicking,
   Rimmer ordering Red Alert and the Cat checking his reflection (static and a red alert if it
-  failed). With the animation off (`ANIMATION_FPS=0`) each stage is a
-  still. When the cycle ends the dock closes and its last frame stays in the conversation where
+  failed), or Men in Black, where K raises the neuralyzer, its little red light charges and the
+  street floods white, the bystanders coming out of it blank and smiling as the WIPED readout
+  climbs and an alien ducks behind a bin, the cover story stamped once compacted (the
+  bystanders shouting "ALIENS!" if it didn't take). With the animation off (`ANIMATION_FPS=0`)
+  each stage is a still. When the cycle ends the dock closes and its last frame stays in the conversation where
   the art was first drawn, with who asked or what came of it under it. The session's notes turn
   shows as one dim line ("writing its notes for after compaction · 12 lines"), never the notes
   themselves, and stays folded afterwards. While it runs, the odd panicked exchange between the

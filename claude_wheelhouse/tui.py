@@ -110,10 +110,11 @@ VOICE = {"you": MATRIX, "claude": "#e8e8e8", "pr": "#e8e8e8", "head": "#05d9e8",
          "warn": "bold #ffd300", "note": "#777777", "tool": "#777777", "doc": "#e8e8e8",
          "stage": "#2f8cff", "crew": "#2f8cff", "dock": "#2f8cff"}   # a compaction's stage lines and crew (#244): its eye's blue
 # the big compactor's roles (compactor.ROLES, #287): the walls and crew in the compaction blue,
-# sparks and the hatch light in amber, the dianoga in green, a red alert (Star Trek) in red
+# sparks and the hatch light in amber, the dianoga in green, a red alert (Star Trek) in red,
+# a neuralyzer's flash (Men in Black) in white
 ART_STYLE = {"wall": "#2f8cff", "seam": "#1f5daa", "crew": "bold #9cc8ff", "sludge": "#1f5daa",
              "spark": "bold #ffb000", "hatch": "bold #ffb000", "dianoga": "bold #6fcf3f",
-             "alert": "bold #ff4b3e", "text": "#2f8cff"}
+             "alert": "bold #ff4b3e", "flash": "bold #ffffff", "text": "#2f8cff"}
 DOCK_FPS = 6   # the dock's frames a second (#287), no more than the app's own rate (features.animation_fps)
 # a doc block (doc_blocks) longer than this is rendered on a thread (Transcript._layout): a
 # 42 KB one takes Rich a second or two, which the loop would otherwise stall for
