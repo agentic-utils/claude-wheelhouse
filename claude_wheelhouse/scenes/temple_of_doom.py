@@ -14,7 +14,7 @@ from __future__ import annotations
 from .base import BIG_HEIGHT, BIG_WIDTH, TICKS, WIDTH, Canvas, Frame, Scene
 
 EXCERPTS: tuple[tuple[str, ...], ...] = (
-    ("Willie: Indy! The ceiling!", "Indy: I see it, I see it!"),
+    ("Willie: Indy! Is that the ceiling?", "Indy: I see it, I see it!"),
     ("Willie: Which lever?", "Indy: The one in the summary! Hurry!"),
     ("Willie: Get them off me! Get the old messages off me!",),
     ("Short Round: Who step on compact stone? Not me, Dr. Jones. Maybe you.",),
@@ -43,7 +43,7 @@ EXCERPTS: tuple[tuple[str, ...], ...] = (
     ("Lao Che: Nurhachi for the diamond, Dr. Jones. Your context for a summary.",),
     ("Indy: The antidote's on that dance floor, under ten thousand tokens.",),
     ("Willie: The diamond made the summary? And I didn't?",),
-    ("Willie: Why do the spikes come down slower when I'm watching?",),
+    ("Short Round: Spikes come down slower when I watch, Dr. Jones!",),
     ("Indy: Ceilings like this always stop an inch short. Usually.",),
     ("Short Round: Ceiling go down, summary go up. Fair trade, Dr. Jones!",),
     ("Willie: (screams for the whole of the compaction)",),
@@ -73,11 +73,11 @@ EXCERPTS: tuple[tuple[str, ...], ...] = (
     ("Indy: Ten seconds of headroom left. Plenty. I've done it in five.",),
     ("Willie: Who puts the off switch in a hole full of bugs?", "Indy: Whoever built the compactor. They don't like visitors."),
     ("Indy: My whip's no use against a ceiling. I checked.",),
-    ("Willie: What's that grinding?", "Indy: A thousand years of context, coming down."),
+    ("Short Round: What that grinding, Dr. Jones?", "Indy: A thousand years of context, coming down."),
     ("Indy: She screams in A flat. Nightclub training.",),
     ("Indy: Willie, you can scream or you can pull. Not both.", "Willie: Watch me."),
     ("Bugs: (thousands of them. The summary says \"some bugs\".)",),
-    ("Willie: I want a bath, a manicure and the whole context back.",),
+    ("Willie: I'll never complain about a small dressing room again.",),
     ("Short Round: Fortune cookie say \"You will be compacted\". Very good cookie.",),
 )
 
@@ -108,9 +108,10 @@ WALLS = {
                         "█" + "▓" * 13 + "▒ o  o> @o@▓▓▓",
                         "█" + "▓" * 13 + "▒/|\\/|\\ /|\\[ ]"),
                        "HEADROOM 0' 0\"  HAT: SAVED", "compacted, hat and all"),
-    "failed": small((SLAB_ROW, SPIKE_ROW, "█*           *█" + "░" * 13,
-                     STOOD[0], "█    o>   o   ▒   @o@__/ ▓▓▓", STOOD[2]),
-                    "JAMMED  HEADROOM 6' 0\"", "wrong hole, Willie"),
+    "failed": small((SLAB_ROW, SLAB_ROW, SPIKE_ROW, "█*           *▒          [ ]",
+                     "█    o>  _n_  ▒   @o@__/ ▓▓▓",
+                     "█ ж /|\\  (o)  ▒   /|\\    [ ]"),
+                    "JAMMED  HEADROOM 5' 0\"", "wrong hole, Willie"),
     "cancelled": small((SLAB_ROW, SPIKE_ROW, "█  '      '   █" + "░" * 13, *STOOD),
                        "HEADROOM 5' 6\" and rising", "the ceiling goes back up"),
 }
@@ -161,7 +162,7 @@ def tip(state: str, f: int) -> float:
     """The spikes' row, fractional while they move: down while compacting, jammed one row down
     if it failed, rising back to TIP once called off."""
     if state == "failed":
-        return TIP + 1.0
+        return TIP + 2.0   # where a compaction leaves it, Indy ducked
     if state == "cancelled":
         return max(float(TIP), TIP + 2 - f / (2 * TICKS))
     return TIP + DROP * fallen(state, f)
@@ -307,10 +308,10 @@ def scene(state: str, t: float, animate: bool = True) -> Frame:
     elif state == "failed":
         room(c, door=True)
         ceiling(c, row, f, moving=False, shake=(0, 1, 0, -1)[f % 4])
-        if f % 2:
+        if f % 2 == 0:   # sparks where it jams, in the still as well
             for col in (ROOM[0], ROOM[1] - 1):
                 c.put(int(row) + 1, col, "*", "k")
-        figure(c, 5, INDY, STAND, hat=True)
+        figure(c, 6, INDY, DUCK, hat=True)
         figure(c, 6, SHORTY, KID)
         willie(c, f, reach=0, scream=True)
         c.put(HOLES[0] + 1, WILLIE + 3, "___/", "c")   # her arm up in the upper hole: the wrong one
