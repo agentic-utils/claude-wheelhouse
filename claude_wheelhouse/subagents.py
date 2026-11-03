@@ -36,7 +36,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import transcript, transcript_usage
+from . import transcript, transcript_usage, watchdog
 from .store import AGENT_MATCH_AFTER, AGENTS_SINCE
 
 # seconds after a subagent starts before its item is made: a session that posts its own A
@@ -153,6 +153,7 @@ class AgentWatcher:
         self.syncing = False   # a sync is in flight (set and cleared by the app)
         self.ready = False     # a first sync has finished
         self.error: str | None = None   # the last sync's failure
+        self.followers: dict[str, watchdog.Follower] = {}   # each running item's own transcript (watch)
 
     def sync(self, store, now: float | None = None, alive: bool = True) -> bool:
         """Reads what's new and brings the session's A items up to date. True if it
@@ -179,6 +180,35 @@ class AgentWatcher:
         changed = self.apply(store, now, alive)
         if not alive:
             changed = self.died(store) or changed
+        else:
+            changed = self.watch(store, now) or changed
+        return changed
+
+    def watch(self, store, now: float) -> bool:
+        """The watchdog (watchdog.py): each running item's own transcript read on, its amber
+        cleared once it writes again, and one gone quiet flagged, once per spell (the store
+        acts only on an item not flagged already, so a restart or a second wheelhouse says
+        nothing twice). True if it changed any item."""
+        running = {aid for aid, status in self.links.items() if status == "running" and aid in self.agents
+                   and self.agents[aid].log is not None}
+        for aid in [aid for aid in self.followers if aid not in running]:
+            del self.followers[aid]
+        changed, quiet, asked = False, watchdog.limit(store, self.sid), None
+        for aid in running:
+            f = self.followers.setdefault(aid, watchdog.Follower(self.agents[aid].log))
+            if f.read() and f.last_at is not None:
+                changed = store.clear_quiet(self.sid, aid, watchdog.iso(f.last_at)) or changed
+            if f.calls and asked is None:
+                asked = store.open_permissions(self.sid)
+            approving = lambda call: any(call.asked() in body for body in asked or ())
+            due = f.deadline(quiet, approving)
+            if due is None or now < due or f.told == f.last_at:
+                continue
+            f.told = f.last_at   # this spell is flagged, by this wheelhouse or another
+            waits = any(approving(c) for c in f.calls.values())
+            changed = store.flag_quiet(self.sid, aid, watchdog.iso(f.last_at),
+                                       lambda ref: watchdog.message(ref, self.agents[aid].title, aid, f, now, waits)) \
+                or changed
         return changed
 
     def unfinished(self) -> bool:

@@ -388,6 +388,11 @@ FEATURES: tuple[Feature, ...] = (
                  "goes to that item of the same session, as a search's pick does."),
     Feature("quit-confirm", UNRELEASED, ADVANCED,
             note="Ctrl+Q asks before quitting, on No, so a slip for Alt+Q quits nothing; Ctrl+Q again quits."),
+    Feature("subagent-watchdog", UNRELEASED, "subagent",
+            note="A running subagent quiet for 5 minutes (or past its tool call's own timeout) shows quiet, in "
+                 "amber, and its session is told once, naming it and its last action. A session can change the "
+                 "5 minutes (set_watchdog); a subagent can declare a quiet spell of its own (quiet).",
+            tip="A subagent that goes quiet for 5 minutes shows quiet, in amber, and its session is told."),
 
 )
 

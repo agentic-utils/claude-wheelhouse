@@ -12,7 +12,7 @@ import time
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
-from . import docroots, fingerprint, liveness, steps
+from . import docroots, fingerprint, liveness, steps, watchdog
 from .store import GONE_TEXT, SessionGone, Store, mcp_named, mcp_servers, redacted, runner, wheelhouse_item
 
 HEARTBEAT_SECONDS = 30
@@ -188,6 +188,32 @@ def set_doc_dirs(paths: list[str]) -> str:
     dirs = docroots.checked(paths, session["cwd"])
     _store.set_doc_dirs(_sid, dirs or None)
     return f"decisions are looked for in {', '.join(dirs)}" if dirs else "decisions are looked for in docs/adr"
+
+
+@wheelhouse_tool
+def set_watchdog(minutes: int) -> str:
+    """How long one of your subagents may go quiet before the wheelhouse flags it: minutes
+    with nothing new in its transcript and no tool call in flight (a call in flight gets its
+    own timeout plus a minute; one waiting on the person's approval, these minutes). 5 by
+    default, 1 to 1440. When one goes quiet, you get a [wheelhouse] message naming it and its
+    last action, so you can steer it with SendMessage or stop it and dispatch it again, and its
+    agent item turns amber. Applies to every subagent of this session from now on."""
+    _store.set_setting(watchdog.SETTING + _sid, str(watchdog.minutes(minutes)))
+    return f"subagents are flagged after {minutes} min quiet"
+
+
+@wheelhouse_tool
+def quiet(minutes: int, why: str) -> str:
+    """For a subagent: declare that you are about to go quiet on purpose for up to this many
+    minutes (1 to 1440), say while a long simulation or build runs, so the wheelhouse doesn't
+    flag you to the session that started you. why: one short line, shown if you overrun.
+    Normal watching resumes when the period ends. The wheelhouse reads this call from your own
+    transcript, so call it yourself, just before the quiet stretch; called from a main session
+    it does nothing."""
+    watchdog.minutes(minutes)
+    if not why.strip():
+        raise ValueError("why: say in a line what you are waiting on")
+    return f"noted: quiet for up to {minutes} min"
 
 
 HOSTED_TEXT = ("nothing to take: this session runs in the wheelhouse, so the person's messages "

@@ -206,7 +206,13 @@ session.
   description, then the subagent's own conversation, read live from its transcript: the
   prompt its session gave it, each tool call as one line, its replies and its result,
   following it at the end as it works unless you've scrolled up to read. `Enter` shows
-  the same full screen. If its transcript can't be found, the pane says so. An agent item
+  the same full screen. If its transcript can't be found, the pane says so. A running
+  subagent that goes 5 minutes with nothing new and no tool call in flight (a tool call gets
+  its own timeout plus a minute, one waiting on your approval the 5 minutes) shows `quiet`,
+  in amber, until it writes again or ends, and its session is told once, with its last
+  action, so it can steer it or start it again. A session can change the 5 minutes
+  (`set_watchdog`), and a subagent that will be quiet on purpose, a long simulation say,
+  declares it (`quiet`) and isn't flagged until that period ends. An agent item
   sits under the task, question or decision whose ref its description (or else its prompt)
   names first (`└ A1`), moving with it; the protocol asks sessions to name it. Failing
   that, under the one its session last posted, updated or replied on before the subagent
