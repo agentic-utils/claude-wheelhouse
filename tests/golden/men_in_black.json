@@ -217,11 +217,11 @@
 "  MEN IN BLACK                                              ",
 "                       o═╗                                  ",
 "                         ║                                  ",
-" \"Nothing to see here!\"  ║                                  ",
-"                         ║              ~                   ",
-"        ■-■   ■-■        ║             ^_^    ^_^    ^_^    ",
-"        /█\\   /█=[●]     ║    \\  /     /|\\    /|\\    /|\\    ",
-" U'.'U  / \\   / \\        ║    [__]     / \\    / \\    / \\    ",
+"               ▒▒▒▒▒▒▒   ║                                  ",
+"             ▒▒▒▓▓▓▓▓▒▒▒ ║                                  ",
+"        ■-■ ▒▒■-■████▓▓▒▒║             o_o    o_o    o_o    ",
+"        /█\\ ▒▒/█=[●]█▓▓▒▒║    \\  /     /|\\    /|\\    /|\\    ",
+" U'.'U  / \\ ▒▒/ \\████▓▓▒▒║    [__]     / \\    / \\    / \\    ",
 "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
 "  WIPED [█████·····] 1h 38m of 3h 12m                       ",
 "                     look here, please                      "
@@ -231,11 +231,11 @@
 "  wwwwwwwwwwww                                              ",
 "                       hss                                  ",
 "                         s                                  ",
-"                         s                                  ",
-"                         s              h                   ",
-"        ccc   ccc        s             hhh    hhh    hhh    ",
-"        ccc   ccccrc     s    dddd     hhh    hhh    hhh    ",
-" hhhhh  ccc   ccc        s    ssss     hhh    hhh    hhh    ",
+"               fffffff   s                                  ",
+"             fffffffffff s                                  ",
+"        ccc ffcccffffffffs             hhh    hhh    hhh    ",
+"        ccc ffccccrcfffffs    dddd     hhh    hhh    hhh    ",
+" hhhhh  ccc ffcccffffffffs    ssss     hhh    hhh    hhh    ",
 "wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
 "  hhhhh cccccccccccc cccccccccccccccc                       ",
 "                                                            "
@@ -253,7 +253,7 @@
 "        /█\\   /█=[●]     ║    \\  /     /|\\    /|\\    /|\\    ",
 " U'.'U  / \\   / \\        ║    [__]     / \\    / \\    / \\    ",
 "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
-"  WIPED [██████████] 3h 07m of 3h 12m                       ",
+"  WIPED [█████████·] 2h 56m of 3h 12m                       ",
 "                     look here, please                      "
 ],
 [
@@ -765,9 +765,9 @@
 "walls preparing": " ■-■  ■-■    \\  /  ?   ?    \n /█\\  /█\\    (oo) o_o o_o   \n / \\  / \\    [__] -|\\ /|\\   \n NEURALYZER  set: 3h 12m    \n       sunglasses on        ",
 "stage_text preparing": " ■-■  ■-■    \\  /  ?   ?    \n /█\\  /█\\    (oo) o_o o_o   \n / \\  / \\    [__] -|\\ /|\\   \n NEURALYZER  set: 3h 12m    \n       sunglasses on        \nasked for by you (Compact) · 10:39Z",
 "stage_text preparing note": " ■-■  ■-■    \\  /  ?   ?    \n /█\\  /█\\    (oo) o_o o_o   \n / \\  / \\    [__] -|\\ /|\\   \n NEURALYZER  set: 3h 12m    \n       sunglasses on        \n220k → 40k · 10:41Z",
-"walls compacting": " ■-■  ■-■ ░▒▓███▓▒░         \n /█\\  /█=[●]██████▓▒ o_o    \n / \\  / \\ ░▒▓███▓▒░  /|\\    \n WIPED [█████·····] 1h 36m  \n     look here, please      ",
-"stage_text compacting": " ■-■  ■-■ ░▒▓███▓▒░         \n /█\\  /█=[●]██████▓▒ o_o    \n / \\  / \\ ░▒▓███▓▒░  /|\\    \n WIPED [█████·····] 1h 36m  \n     look here, please      \nasked for by you (Compact) · 10:39Z",
-"stage_text compacting note": " ■-■  ■-■ ░▒▓███▓▒░         \n /█\\  /█=[●]██████▓▒ o_o    \n / \\  / \\ ░▒▓███▓▒░  /|\\    \n WIPED [█████·····] 1h 36m  \n     look here, please      \n220k → 40k · 10:41Z",
+"walls compacting": " ■-■  ■-■ ░▒▓███▓▒░         \n /█\\  /█=[●]██████▓▒ o_o    \n / \\  / \\ ░▒▓███▓▒░  /|\\    \n WIPED [█████·····] 1h 38m  \n     look here, please      ",
+"stage_text compacting": " ■-■  ■-■ ░▒▓███▓▒░         \n /█\\  /█=[●]██████▓▒ o_o    \n / \\  / \\ ░▒▓███▓▒░  /|\\    \n WIPED [█████·····] 1h 38m  \n     look here, please      \nasked for by you (Compact) · 10:39Z",
+"stage_text compacting note": " ■-■  ■-■ ░▒▓███▓▒░         \n /█\\  /█=[●]██████▓▒ o_o    \n / \\  / \\ ░▒▓███▓▒░  /|\\    \n WIPED [█████·····] 1h 38m  \n     look here, please      \n220k → 40k · 10:41Z",
 "walls completed": " ■-■  ■-■    (o-)  ^_^ ^_^  \n /█\\  /█\\    [__]  /|\\ /|\\  \n / \\  / \\          / \\ / \\  \n COVER: nothing happened    \n   nothing happened here    ",
 "stage_text completed": " ■-■  ■-■    (o-)  ^_^ ^_^  \n /█\\  /█\\    [__]  /|\\ /|\\  \n / \\  / \\          / \\ / \\  \n COVER: nothing happened    \n   nothing happened here    \n10:39Z",
 "stage_text completed note": " ■-■  ■-■    (o-)  ^_^ ^_^  \n /█\\  /█\\    [__]  /|\\ /|\\  \n / \\  / \\          / \\ / \\  \n COVER: nothing happened    \n   nothing happened here    \n220k → 40k · 10:41Z",
@@ -917,7 +917,8 @@
 "K: Don't ask questions you don't want answers to."
 ],
 [
-"J: Pass me the flashy thing. This session's seen way too much."
+"J: Pass me the flashy thing.",
+"K: It's a neuralyzer, kid. And no."
 ],
 [
 "K: (deneuralyzed) Ah. Now I remember why I compacted it."
@@ -950,7 +951,7 @@
 "Zed: Every so often I miss the old context. Then I read it again."
 ],
 [
-"Pawny: I pledge my life to the summary. My queen."
+"Zed: The rookie just compacted the briefing he was about to read."
 ],
 [
 "J: The summary says I saved the day.",
@@ -963,8 +964,8 @@
 "K: When I'm done, flash me, kid. I'd like to go home with a short summary."
 ],
 [
-"J: What's MIB rule number two?",
-"K: No idea. It got compacted."
+"J: Who decides what goes in the summary?",
+"K: Whoever's holding the neuralyzer."
 ],
 [
 "K: Raw context's so primitive it counts as a disease in the better galaxies."
@@ -1066,7 +1067,8 @@
 [
 154.60880149457603,
 [
-"J: Pass me the flashy thing. This session's seen way too much."
+"J: Pass me the flashy thing.",
+"K: It's a neuralyzer, kid. And no."
 ]
 ],
 [

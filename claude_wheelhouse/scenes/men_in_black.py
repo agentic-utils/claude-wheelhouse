@@ -56,7 +56,7 @@ EXCERPTS: tuple[tuple[str, ...], ...] = (
     ("J: How do I get back to before the compaction?",
      "Jeffrey: Jump off the Chrysler Building. Time it right."),
     ("J: What did the summary leave out?", "K: Don't ask questions you don't want answers to."),
-    ("J: Pass me the flashy thing. This session's seen way too much.",),
+    ("J: Pass me the flashy thing.", "K: It's a neuralyzer, kid. And no."),
     ("K: (deneuralyzed) Ah. Now I remember why I compacted it.",),
     ("J: Congratulations, ma'am! It's a... summary.",),
     ("Frank: Compaction? Pal, I'm a pug. My whole face is compacted.",),
@@ -67,11 +67,11 @@ EXCERPTS: tuple[tuple[str, ...], ...] = (
     ("J: Had to flash T. He cried at the summary.",),
     ("Scrad: The summary's only got room for one head.", "Charlie: The good-looking one!"),
     ("Zed: Every so often I miss the old context. Then I read it again.",),
-    ("Pawny: I pledge my life to the summary. My queen.",),
+    ("Zed: The rookie just compacted the briefing he was about to read.",),
     ("J: The summary says I saved the day.", "K: Summaries are generous, kid. Sign it."),
     ("J: K, your half of the summary just says \"no\".",),
     ("K: When I'm done, flash me, kid. I'd like to go home with a short summary.",),
-    ("J: What's MIB rule number two?", "K: No idea. It got compacted."),
+    ("J: Who decides what goes in the summary?", "K: Whoever's holding the neuralyzer."),
     ("K: Raw context's so primitive it counts as a disease in the better galaxies.",),
     ("K: Whole city saw the context overflow. Light up the Statue of Liberty.",
      "J: She's a neuralyzer?"),
@@ -98,7 +98,7 @@ WALLS = {
     "compacting": small((" ■-■  ■-■ ░▒▓███▓▒░  ",
                          " /█\\  /█=[●]██████▓▒ o_o",
                          " / \\  / \\ ░▒▓███▓▒░  /|\\"),
-                        "WIPED [█████·····] 1h 36m", "look here, please"),
+                        "WIPED [█████·····] 1h 38m", "look here, please"),
     "completed": small((" ■-■  ■-■    (o-)  ^_^ ^_^",
                         " /█\\  /█\\    [__]  /|\\ /|\\",
                         " / \\  / \\          / \\ / \\"),
@@ -130,7 +130,7 @@ BIN = 30   # the alien's bin's first column
 FOLK = (40, 47, 54)   # the bystanders' middle columns
 SKYLINE = "▂▂▅▅▅▃▃▇▇▂▂▂▅▅▆▃▃▃▆▆▂▂▄▄▄▇▇▇▂▂▃▃▅▅▂▂▂▆▆▃▃▃▇▇▂▂▄▄▄▅▅▂▂▂▃▃▆▆▂▂"
 WINDOWS = (3, 8, 14, 18, 25, 26, 33, 38, 42, 47, 53, 56)   # lit windows in the skyline
-LEAD, EVERY = 2 * TICKS, 4 * TICKS   # frames to the first flash while compacting, and between flashes
+LEAD, EVERY = 2 * TICKS, 6 * TICKS   # frames to the first flash while compacting, and between flashes
 FLASH = 8   # frames a flash lasts: a burst, a white flood, fading
 MINUTES = 192   # how far back the neuralyzer is set: 3h 12m
 STILL = {"preparing": 4.0, "compacting": (LEAD + EVERY + 1) / TICKS, "completed": 0.0, "failed": 0.0,
@@ -156,8 +156,8 @@ def hm(minutes: int) -> str:
 
 
 def flash(c: Canvas, k: int) -> None:
-    """The neuralyzer's flash, k frames in: a burst from the little red light, a white flood over
-    the whole street, then fading out in sparkles."""
+    """The neuralyzer's flash, k frames in: a burst from the little red light, one frame of white
+    over the whole street (no long strobe in a pinned dock), then fading out in sparkles."""
     row0, col0 = LIGHT
     for row in range(SKY, PAVEMENT):
         for col in range(BIG_WIDTH):
@@ -167,13 +167,13 @@ def flash(c: Canvas, k: int) -> None:
                 ch = "█" if d < 1.5 else "▓" if d < 2.5 else "▒" if d < 3.5 else ""
             elif k == 1:
                 ch = "█" if d < 5 else "▓" if d < 8 else "▒" if d < 11 else "░" if d < 14 else ""
-            elif k in (2, 3):
+            elif k == 2:
                 ch = "█"
-            elif k == 4:
+            elif k == 3:
                 ch = "▓"
-            elif k == 5:
+            elif k == 4:
                 ch = "▒"
-            elif k == 6:
+            elif k in (5, 6):
                 ch = "░" if spot < 6 else ""
             else:
                 ch = "·" if spot == 0 else ""
