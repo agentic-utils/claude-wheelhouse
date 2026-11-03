@@ -926,7 +926,10 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
   ahead of the wheels as the TRACK left in his box falls, Wallace cheerfully oblivious and Feathers
   McGraw on the rear carriage (the train running off the end of the track if it stalled), or Doctor Who's
   Flatline, where the TARDIS shrinks a size at a time with the Twelfth Doctor inside as the OUTSIDE
-  height falls, Clara ending up carrying it in her handbag (a Dalek gliding through if it stalled). With the animation off (`ANIMATION_FPS=0`)
+  height falls, Clara ending up carrying it in her handbag (a Dalek gliding through if it stalled), or Goldfinger's scrapyard, where Oddjob works the
+  crusher's lever as Mr Solo's Lincoln, the gold in its boot, is squeezed towards a cube and its
+  LINCOLN length falls, Solo shouting from the sidelines and the cube riding off on Oddjob's pickup
+  (the crusher jamming if it stalled). With the animation off (`ANIMATION_FPS=0`)
   each stage is a still. When the cycle ends the dock closes and its last frame stays in the conversation where
   the art was first drawn, with who asked or what came of it under it. The session's notes turn
   shows as one dim line ("writing its notes for after compaction · 12 lines"), never the notes
