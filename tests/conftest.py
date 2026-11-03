@@ -15,6 +15,7 @@ from claude_wheelhouse import api, features, launch, liveness, store as store_mo
 from claude_wheelhouse.store import Store
 
 SHIPPED_DWELL = tui.DWELL   # before no_dwell_timer puts it out of reach
+SHIPPED_DETAIL_INLINE = tui.DETAIL_INLINE   # before detail_inline does
 NO_CLAUDE = "/nonexistent/claude-is-never-run-in-tests"
 NO_DEFAULT_DB = Path("/nonexistent-wheelhouse-test-state/wheelhouse.db")   # unwritable: a reach for it fails
 
@@ -189,6 +190,14 @@ def steps_answered(request, monkeypatch):
     Relaunch goes straight on; a test of the dialog takes first_press."""
     if "first_press" not in request.fixturenames:
         monkeypatch.setattr(tui.WheelhouseApp, "first_press", lambda self, button: False)
+
+
+@pytest.fixture(autouse=True)
+def detail_inline(monkeypatch):
+    """Detail shows what's selected at once, rendered on the loop, as a test reads it straight
+    after: a test of the conversation rendered on a thread once the selection rests
+    (tui.show_detail) puts SHIPPED_DETAIL_INLINE back."""
+    monkeypatch.setattr("claude_wheelhouse.tui.DETAIL_INLINE", 10 ** 9)
 
 
 @pytest.fixture(autouse=True)
