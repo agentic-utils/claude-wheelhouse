@@ -136,7 +136,7 @@ STAND = (" _n_", "  o", " /|\\", " / \\")   # Indy, the hat first, rows 5 to 8
 DUCK = (" _n_", " (o)", " /|\\")   # Indy ducking, rows 6 to 8
 POUND = " /|=="   # Indy hammering on the door
 KID = (" o>", "/|\\", "/ \\")   # Short Round in his cap, rows 6 to 8
-WILLIE_POSE = ("@o@", "/|\\", "/^\\")   # Willie, rows 6 to 8
+WILLIE_POSE = ("@o@", "/|\\", "/_\\")   # Willie, rows 6 to 8
 BUGS = ((8, 3, 9), (8, 14, 7), (8, 30, 4), (5, 43, 5), (8, 43, 5), (6, 53, 2), (2, 44, 12), (3, 47, 9),
         (4, 52, 4))   # (row, first column, columns it crawls over)
 HEIGHT = 9   # feet from the floor to the ceiling's slab: a row a foot

@@ -169,7 +169,7 @@ OPEN, SHUT = 3, 29   # wall thickness, each side, open and met (58 inner cells b
 # dianoga wants), Chewie tall and furry. Each pose top row first, every row the same width
 CREW = {
     "han": {"stand": (" o ", "/H>", "/ \\"), "panic": ("\\o/", " H ", "/ \\"), "cheer": "\\o/"},
-    "leia": {"stand": ("@o@", "/|\\", "/^\\"), "panic": ("@o@", "\\|/", "/^\\"), "cheer": "@o@"},
+    "leia": {"stand": ("@o@", "/|\\", "/_\\"), "panic": ("@o@", "\\|/", "/_\\"), "cheer": "@o@"},
     "luke": {"stand": (" o ", "/|\\", "/ \\"), "panic": ("\\o/", " | ", "/ \\"), "grabbed": ("\\o/", " |)", " (("),
              "cheer": "\\o/"},
     "chewie": {"stand": ("{o}", "/#\\", "|#|", "/ \\"), "panic": ("{O}", "\\#/", "|#|", "/ \\"), "cheer": "{#}"},
