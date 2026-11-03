@@ -6290,10 +6290,10 @@ class WheelhouseApp(App):
         # the daemon's version of the sessions and the inbox (RemoteClient.version) where it was,
         # and the app's own state with it: nothing to read, compare or paint (#327). In process
         # (no version) the rows are read and compared, as the store has no stamp
-        version = getattr(self.client, "version", None)
+        version = getattr(self.client, "inbox_version", None)   # the sessions' part it reads is in the key itself
         quick = None if version is None else (
             version, self.items_state(), tuple(self.conversation_sids()), frozenset(self.compacting()),
-            frozenset(self.lifeless_sids()), self.autocleanse and int(datetime.now(timezone.utc).timestamp() // AUTOCLEANSE_POLL))   # listable's clock
+            frozenset(self.lifeless_sids()), tuple(self.session_names().items()), tuple(sorted(self.cutoffs().items())), self.autocleanse and int(datetime.now(timezone.utc).timestamp() // AUTOCLEANSE_POLL))   # listable's clock
         if quick is not None and self.items_painted is not None and self.items_painted[3] == quick \
                 and not self.repin and self.item_sink.move is None:
             self.paint_detail()

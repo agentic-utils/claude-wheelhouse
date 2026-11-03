@@ -285,6 +285,7 @@ class RemoteClient:
         # the sessions and the inbox as shown, stamped: moved by each answer of the daemon's
         # applied, so a paint that finds it where it left it has nothing new to read (#327)
         self.version = 0
+        self.inbox_version = 0   # ... and the inbox's alone: a session's heartbeat leaves it (paint_items)
         self.stamped: dict[str, object] = {}   # the sessions and the inbox as the version stamps them
 
     def make_http(self, read: float):
@@ -523,6 +524,8 @@ class RemoteClient:
         if kind in ("sessions", "inbox") and data != self.stamped.get(kind):   # the same again moves nothing
             self.stamped[kind] = data
             self.version += 1
+            if kind == "inbox":
+                self.inbox_version += 1
         if kind == "sessions":
             self.views = data
             self.by_id = {s["id"]: s for s in data}

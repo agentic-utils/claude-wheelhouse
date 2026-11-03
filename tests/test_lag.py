@@ -117,7 +117,7 @@ async def test_the_idle_tick_paints_nothing_when_the_version_has_not_moved(store
         store.post_item(sid, "task", f"task {i}")
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        app.client.version = 1   # as RemoteClient stamps it
+        app.client.inbox_version = 1   # as RemoteClient stamps it
         await pilot.pause()
         app.paint_items()
         await pilot.pause()
@@ -126,7 +126,7 @@ async def test_the_idle_tick_paints_nothing_when_the_version_has_not_moved(store
         monkeypatch.setattr(app, "ranked_keyed", lambda *a, **kw: (read.append(1), real(*a, **kw))[1])
         filled = []
         monkeypatch.setattr(tui, "fill", lambda *a, **kw: (filled.append(1), fill(*a, **kw))[1])
-        app.client.version += moved
+        app.client.inbox_version += moved
         app.paint_items()
         assert (bool(read), bool(filled)) == (moved, moved), desc
 
