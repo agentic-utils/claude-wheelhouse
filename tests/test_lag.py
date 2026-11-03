@@ -108,14 +108,17 @@ async def test_a_stale_render_never_overwrites_a_newer_one(store, sid, monkeypat
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("moved, desc", [
-    (False, "the daemon's version where it was: nothing read, compared or painted"),
-    (True, "the version moved: the inbox read and painted again"),
+@pytest.mark.parametrize("moved, autocleanse, desc", [
+    (False, 0, "the daemon's version where it was: nothing read, compared or painted"),
+    (False, 5, "autocleanse on, nothing due to go: nothing read either (review 1)"),
+    (True, 0, "the version moved: the inbox read and painted again"),
 ])
-async def test_the_idle_tick_paints_nothing_when_the_version_has_not_moved(store, sid, monkeypatch, moved, desc):
+async def test_the_idle_tick_paints_nothing_when_the_version_has_not_moved(store, sid, monkeypatch, moved, autocleanse,
+                                                                           desc):
     for i in range(5):
-        store.post_item(sid, "task", f"task {i}")
+        store.post_item(sid, "task", f"task {i}", status="done" if i % 2 else "todo")
     app = WheelhouseApp(store)
+    app.autocleanse = autocleanse
     async with app.run_test(size=(160, 40)) as pilot:
         app.client.inbox_version = 1   # as RemoteClient stamps it
         await pilot.pause()
@@ -189,3 +192,28 @@ async def test_a_tick_sort_from_a_worker_lands_only_for_its_version(store, sid, 
         app.client.inbox_version += moved
         app.items_prepared(3)
         assert (bool(paints), app.preparing) == (painted, None), desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("asks, waited, fetches, desc", [
+    (20, 0, 1, "asked again and again while the daemon can't answer: one fetch, not a spin (review 1)"),
+    (2, 2.5, 2, "asked again after CONVERSATION_RETRY: fetched again"),
+])
+async def test_a_conversation_that_cannot_be_fetched_is_not_fetched_in_a_loop(store, sid, monkeypatch, asks, waited,
+                                                                               fetches, desc):
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        fetched = []
+        monkeypatch.setattr(app.client, "remote", True)
+        monkeypatch.setattr(app.client, "has_conversation", lambda s: False)
+        monkeypatch.setattr(app.client, "conversation", lambda s: fetched.append(s))
+        clock = [100.0]
+        monkeypatch.setattr(app, "now", lambda: clock[0])
+        for i in range(asks):
+            if i:
+                clock[0] += waited
+            assert app.conversation(sid) == [("note", tui.READING)], desc
+            await pilot.app.workers.wait_for_complete()
+            await pilot.pause()
+        assert len(fetched) == fetches, desc

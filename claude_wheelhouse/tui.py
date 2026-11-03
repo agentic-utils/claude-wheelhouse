@@ -19,7 +19,7 @@ import subprocess
 import threading
 import time
 import weakref
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Callable, NamedTuple, Self
 
 from rich.console import Group, RenderableType
@@ -125,9 +125,9 @@ RENDER_OFF_LOOP = 2000
 TOUR_OFFER_KEPT = 10   # seconds tour_offer's answer is kept while nothing it reads has moved
 DETAIL_SETTLE = 0.06   # seconds a selection rests before a conversation not yet rendered renders (show_detail)
 DETAIL_INLINE = 8   # ... and the most blocks not rendered yet that render on the loop at once
-AUTOCLEANSE_POLL = 5   # seconds: with autocleanse on, the inbox is read again this often, as items age out of it
 CALLS_WAIT = 10   # seconds the app's close waits for a Delete's calls under way (delete_off_thread)
 RENDERING = ("note", "_rendering…_")
+CONVERSATION_RETRY = 2   # seconds before a conversation fetch that brought nothing (unreachable, busy) is tried again
 READING = "_reading…_"   # a conversation while it's fetched off the loop (WheelhouseApp.conversation)
 CLOSABLE = {"question": "answered", "decision": "seen", "command": "open"}   # what Delete closes, and what Ctrl+R reopening makes it
 
@@ -5241,6 +5241,7 @@ class WheelhouseApp(App):
         # bumped whenever that changes, and its one-shot timer, running only while they rest
         self.dwelling: tuple | None = None
         self.dwell_gen = 0
+        self.conversations_tried: dict[str, float] = {}   # ... and when each last landed, fetched or not
         self.conversations_asked: set[str] = set()   # conversations being fetched on a thread (conversation)
         self.detail_gen = 0   # Detail's shows, numbered: one overtaken is dropped (show_detail)
         self.detail_waiting = False   # a show from the top under way (show_detail)
@@ -5284,6 +5285,7 @@ class WheelhouseApp(App):
         self.undo_waits: set[int] = set()   # the numbers of the Ctrl+Zs waiting for a Delete to land (action_undo)
         self.acting: int | None = None   # the number of the act landing or let through now (as_typed)
         self.ranks: dict[str, tuple] = {}   # each item's rank as last shown
+        self.cleanse_due: datetime | None = None   # when autocleanse next hides a row shown (listable)
         self.preparing: int | None = None   # the inbox version a worker is sorting (prepare_items)
         self.arranged: tuple | None = None   # arrangement's last answer, and its stamp
         self.true_ranks: tuple[dict, dict] = ({}, {})   # ... and as it sorts, unpinned, with its group (arrow_only)
@@ -6299,7 +6301,7 @@ class WheelhouseApp(App):
         version = getattr(self.client, "inbox_version", None)   # the sessions' part it reads is in the key itself
         quick = None if version is None else (
             version, self.items_state(), tuple(self.conversation_sids()), frozenset(self.compacting()),
-            frozenset(self.lifeless_sids()), tuple(self.session_names().items()), tuple(sorted(self.cutoffs().items())), self.autocleanse and int(datetime.now(timezone.utc).timestamp() // AUTOCLEANSE_POLL))   # listable's clock
+            frozenset(self.lifeless_sids()), tuple(self.session_names().items()), tuple(sorted(self.cutoffs().items())), self.cleanse_due is not None and datetime.now(timezone.utc) >= self.cleanse_due)   # listable's clock
         if quick is not None and self.items_painted is not None and not self.repin and self.item_sink.move is None \
                 and (self.items_painted[3] == quick or self.arrow_only(quick)):
             self.items_painted = (*self.items_painted[:3], (*quick[:1], self.items_state(), *quick[2:]))
@@ -6526,8 +6528,16 @@ class WheelhouseApp(App):
         if self.selected and self.selected[1] and (item["session_id"], item["ref"]) == tuple(self.selected[:2]) \
                 and item_key(item) != self.peeked:   # one search showed hidden stays hidden (#273)
             return False
+        return at >= self.hides_at(item, busy, checked=True)
+
+    def hides_at(self, item, busy, checked: bool = False) -> datetime | None:
+        """When autocleanse hides a completed, settled item: self.autocleanse minutes after its
+        updated_at, or its bringing back. None for one it never hides (unfinished, or finished
+        and shown with F). checked: completed_hidden has made those checks already."""
+        if not checked and (not completed(item, busy) or standing(item, busy) != "settled"):
+            return None
         since = max(datetime.fromisoformat(item["updated_at"]), self.brought_back.get(item_key(item), datetime.min.replace(tzinfo=timezone.utc)))
-        return (at - since).total_seconds() >= self.autocleanse * 60
+        return since + timedelta(minutes=self.autocleanse)
 
     def ranked(self, items, processing, busy=frozenset()) -> list:
         """Items in inbox order (ranked_keyed)."""
@@ -6884,9 +6894,13 @@ class WheelhouseApp(App):
         off, those autocleanse hides (#235)."""
         if self.going:
             found = [it for it in found if item_key(it) not in self.going]
+        self.cleanse_due = None
         if self.autocleanse and not self.show_finished:
             at, held = datetime.now(timezone.utc), under_way_parents(found, busy)
             found = [it for it in found if item_key(it) in held or not self.completed_hidden(it, busy, at)]
+            # when the next one shown goes: the stamped paint (paint_items) reads again then, not before (#327)
+            self.cleanse_due = min((due for it in found if item_key(it) not in held
+                                    and (due := self.hides_at(it, busy)) is not None), default=None)
         return found
 
     def searched(self, picked: tuple[str, str] | None) -> None:
@@ -7264,6 +7278,9 @@ class WheelhouseApp(App):
     def conversation_landed(self, sid: str) -> None:
         """A conversation fetched on a thread (conversation): shown, if it's still the one."""
         self.conversations_asked.discard(sid)
+        self.conversations_tried[sid] = self.now()
+        if not self.client.has_conversation(sid):   # unreachable or busy: the tick asks again in a while
+            return
         if self.viewing == sid and self.screen_stack:
             self.paint_detail()
 
@@ -7353,12 +7370,15 @@ class WheelhouseApp(App):
         "reading …" shown meanwhile, and Detail painted again once it's here, if it's still
         the one shown: the loop never waits on the daemon for it (#327)."""
         if self.client.remote and not self.client.has_conversation(sid):
-            if sid not in self.conversations_asked:
+            tried = self.conversations_tried.get(sid)
+            if sid not in self.conversations_asked and (tried is None or self.now() - tried >= CONVERSATION_RETRY):
                 self.conversations_asked.add(sid)
 
                 def work() -> None:
-                    self.client.conversation(sid)
-                    self.post(functools.partial(self.conversation_landed, sid))
+                    try:
+                        self.client.conversation(sid)
+                    finally:   # fetched, refused or failed: the landing is said, and asked again no sooner than CONVERSATION_RETRY
+                        self.post(functools.partial(self.conversation_landed, sid))
                 self.spawn(work, "conversation")
             return [("note", READING)]
         blocks = self.client.conversation(sid)
