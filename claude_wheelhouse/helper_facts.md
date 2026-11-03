@@ -1,4 +1,4 @@
-<!-- fact sheet stamp: version 218, 2026-11-03T14:41:57Z, source 5f2d94ae023a561f (make facts restamps it: AGENTS.md) -->
+<!-- fact sheet stamp: version 222, 2026-11-03T15:26:14Z, source 17f8ca2ece489c96 (make facts restamps it: AGENTS.md) -->
 # Wheelhouse fact sheet
 
 What the helper chat knows before any question. The guide below is written by hand; the
@@ -34,7 +34,8 @@ daemon running.
 
 ## Words the app uses
 
-- Item: anything a session posts. Kinds: task, question, decision, subagent (A), PR, doc, command (C: a shell command a session asks the person to run, with a Run button that opens it in an editable box with a "Send the output back" checkbox, then runs it in a quick shell's tab).
+- Item: anything a session posts. Kinds: task, question, decision, subagent (A), PR, doc, command (C: a shell command a session asks the person to run, with a Run button that opens it in an editable box with a "Send the output back" checkbox, then runs it in a quick shell's tab). A command is open (yellow, at the top, like an open question) until run; the tab then records how it ended, even when the command stopped the daemon: run (Run gone) on exit 0, else failed (red) with the exit code and, if the output was captured, its last 20 lines, Run kept.
+- Daemon updated: an app whose daemon was replaced under it by other code (a make stop and make install) says "the daemon was updated: quit and restart the app" in its title, instead of "daemon unreachable: reconnecting".
 - Queued and Immediate: a session's send mode. Queued holds answers until Send (Ctrl+S).
 - Park: a session writes its handoff and stops, kept dimmed until Unpark.
 - Busy (blue eye): from Park, Stop & Forget, Relaunch, Handover, New session, Adopt, a
@@ -416,6 +417,8 @@ The app's command line args (make args). Give them to make run in ARGS, for exam
 - A dead session (not parked) keeps its red dot, and its rows dim everywhere: its session list row, its inbox items and conversation, its PRs (their lights kept bright) and the decisions only it looks at.
 - Shell (Alt+H, from anywhere) opens a quick shell in a new terminal tab, in the directory the session in context works in now, or home. Handing a session run in the wheelhouse to a Claude Code tab is now Handover to Claude Code in a shell, in its right-click menu.
 - A session can suggest a shell command for you to run: a C item with a Run button that opens it in an editable box and runs it in a new terminal tab, sending the output back if you tick it.
+- A command item waits like an open question, yellow and at the top, until you run it; then it shows how the run ended: run, with Run gone, or failed in red, with the exit code (and the output's last lines, when it was captured) and Run kept to try again.
+- An app whose daemon was replaced under it by an update says so in its title, to quit and restart it, rather than reconnecting for ever.
 - The Decisions pane follows the selected session, as the PRs pane does: its repo's decisions alone, or a line saying it has none; with no session selected, every repo's.
 - Search the inbox by id or title: click the 🔍 at its top right, or just type while it has focus. Show hidden takes in the items off the inbox too; Enter or a click goes to the item.
 - An item's id in Detail (T3, Q25, PR276 in a doc, a conversation or a thread) is a link: a click goes to that item of the same session, as a search's pick does.

@@ -501,7 +501,8 @@ session.
   a shell, in its right-click menu (no key); it comes back when you `/exit` the tab.
 - A session that wants you to run a shell command yourself (one that needs your credentials,
   your eyes, or your machine) asks with `suggest_command`, as it asks a question: a command
-  item (`C1`, `C2`...) whose detail is a line saying why and the command in a code block, with
+  item (`C1`, `C2`...), yellow and `open` until you run it and at the top of the inbox with the
+  open questions, whose detail is a line saying why and the command in a code block, with
   a Run button over the answer box. Run opens the command in a box you can edit (fill in a
   `<placeholder>`, trim a line); Run there (or Ctrl+Enter) runs exactly what the box holds, in
   a new terminal tab in the session's directory, leaving an ordinary shell after. Only
@@ -513,7 +514,12 @@ session.
   to the first 4,000 and last 12,000 characters, goes to the session as your reply on the item,
   queued or sent as your answers are. It goes into the session's transcript: untick it if the
   output may show secrets. Unticked, the session gets nothing and the item notes the run.
-  Delete closes a command you won't run. New session (directory, optional name, optional ticket, opening brief,
+  When the command ends, the tab writes how it went on the item, even if the command stopped
+  the daemon: exit 0 makes it `run` and Run goes; anything else makes it `failed` (red) with
+  the exit code, and with the output ticked, its last 20 lines, and Run stays to try again.
+  Delete closes a command you won't run. If an update replaces the daemon under a running app
+  (a `make stop` and `make install` from a Run, say), the title says the daemon was updated:
+  quit and restart the app. New session (directory, optional name, optional ticket, opening brief,
   model and effort) opens Claude in a Windows Terminal tab. The new session is selected in the session list
   as soon as its row appears, unless you have picked another session or are typing in the answer box by then;
   a fork is selected the same way once it's made.

@@ -9,9 +9,10 @@ from datetime import datetime, timezone
 
 import pytest
 
-from claude_wheelhouse import fork as fork_mod, host as host_mod, hub as hub_mod, launch, liveness, models, plan_usage, subagents, transcript, transcript_usage, tutorial, whatsnew
+from claude_wheelhouse import fork as fork_mod, host as host_mod, hub as hub_mod, launch, liveness, models, plan_usage, quickshell, subagents, transcript, transcript_usage, tutorial, whatsnew
 from claude_wheelhouse.hub import Hub
-from claude_wheelhouse.store import PROTOCOL_VERSION, Busy, SessionGone, compacting_now, mode as store_mode
+from claude_wheelhouse import store as store_mod
+from claude_wheelhouse.store import PROTOCOL_VERSION, Store, Busy, SessionGone, compacting_now, mode as store_mode
 
 real_open_session = launch.open_session   # before any test stubs it
 
@@ -1842,7 +1843,10 @@ def test_open_shell_picks_the_sessions_live_directory(store, projects, monkeypat
 @pytest.mark.parametrize("mode_, parked, busy, want, desc", [
     ("immediate", False, None, "sent", "Immediate: sent"),
     ("queued", False, None, "queued", "Queued: queued for Send"),
-    ("immediate", True, None, "queued", "parked: queued, for the resume"),
+    ("queued", False, "runner = 'sdk', activity = 'thinking'", "queued", "Queued, mid-turn: queued for Send, as a typed answer is (#335)"),
+    ("immediate", False, "runner = 'sdk', activity = 'thinking'", "sent", "Immediate, mid-turn: sent, as a typed answer is (#335)"),
+    ("queued", True, None, "queued", "Queued, parked: queued, for the resume"),
+    ("immediate", True, None, "sent", "Immediate, parked: sent, as a typed answer is, delivered on resume (#335)"),
     ("immediate", False, "compaction = 'compacting', compaction_origin = 'person'", "queued",
      "compacting (blue): queued, never refused (D232)"),
     ("immediate", False, "op = 'park', op_state = 'told'", "queued", "parking (blue): queued, never refused"),
@@ -1851,14 +1855,21 @@ def test_open_shell_picks_the_sessions_live_directory(store, projects, monkeypat
      "the quiet mark's cycle: called off and sent, as a person's answer"),
 ])
 def test_send_or_queue(store, sid, mode_, parked, busy, want, desc):
-    """#257: a run's output goes as an answer would, through #249's one busy check (operating)."""
+    """#257, #335: a run's output goes as a typed answer on its item would (Hub.submit), through
+    #249's one busy check (operating)."""
     ref = store.post_command(sid, "ls", "List")[0]
     store.db.execute("UPDATE sessions SET send_mode = ?, parked = ?", (mode_, int(parked)))
     if busy:
         store.db.execute(f"UPDATE sessions SET {busy}")
+        assert "activity" not in busy or hub_mod.working({**dict(store.session(sid)), "running": 0}), f"{desc}: mid-turn"
     assert hub_mod.send_or_queue(store, sid, ref, "out") == want, desc
     queued = [m["body"] for m in store.drafts(sid)]
     assert queued == (["out"] if want == "queued" else []), desc
+    if not busy or busy == "runner = 'sdk', activity = 'thinking'":   # a typed answer on the same item goes the same way
+        hub = Hub(store)
+        hub.dead = hub.sends_at_once = lambda *_: False
+        hub.submit((sid, ref), "typed")
+        assert ("typed" in [m["body"] for m in store.drafts(sid)]) == (want == "queued"), f"{desc}: typed"
 
 
 def test_send_or_queue_busy_after_the_look(store, sid, monkeypatch):
@@ -1874,8 +1885,8 @@ def test_send_or_queue_busy_after_the_look(store, sid, monkeypatch):
 
 
 @pytest.mark.parametrize("text, send, gone, ok, note, desc", [
-    ("ls", False, False, True, "ran", "as suggested, unticked: run, noted"),
-    ("ls -l", False, False, True, "ran, edited", "edited: noted so"),
+    ("ls", False, False, True, "started", "as suggested, unticked: started, noted"),
+    ("ls -l", False, False, True, "started, edited", "edited: noted so"),
     ("ls", True, False, True, None, "ticked: run, the output its record"),
     ("ls", False, True, False, None, "its directory gone: refused, nothing run"),
 ])
@@ -1893,7 +1904,7 @@ def test_run_command(store, projects, monkeypatch, text, send, gone, ok, note, d
     done = Hub(store).run_command(sid, ref, text, send)
     assert done.ok == ok, desc
     item = store.item(sid, ref)
-    assert item["status"] == ("run" if ok else "new"), desc
+    assert item["status"] == "open", f"{desc}: open until the tab says how the run ended (#335)"
     notes = [m["body"] for m in store.thread(sid, ref) if m["kind"] == "run"]
     assert [n.split(" ", 2)[0] + (", edited" if n.endswith("edited") else "") for n in notes] == \
         ([note] if note else []), desc
@@ -1913,7 +1924,7 @@ def test_close_and_reopen_a_command(store, sid):
     hub.close(sid, ref, True)
     assert store.item(sid, ref)["status"] == "closed"
     hub.close(sid, ref, False)
-    assert store.item(sid, ref)["status"] == "new"
+    assert store.item(sid, ref)["status"] == "open"
 
 
 def test_a_runs_note_is_never_the_sessions(store, sid):
@@ -1924,3 +1935,59 @@ def test_a_runs_note_is_never_the_sessions(store, sid):
     assert [m["body"] for m in store.thread(sid, ref)] == ["ran 14:05"]
     assert list(store.thread(sid, ref, in_flight=False)) == []
     assert (sid, ref) not in store.awaiting()
+
+
+@pytest.mark.parametrize("code, output, status, note, desc", [
+    (0, "done", "run", "succeeded", "exit 0: run, Run gone"),
+    (2, "a\nb\nfatal: not a repo", "failed", "failed, exit 2\n\na\nb\nfatal: not a repo",
+     "captured, failed: the exit code and the output's tail, Run kept"),
+    (1, None, "failed", "failed, exit 1", "unticked, failed: the exit code alone"),
+    (0, "\n".join(map(str, range(50))), "run", "succeeded", "succeeded: no output kept"),
+    (3, "\n".join(map(str, range(50))), "failed", "failed, exit 3\n\n" + "\n".join(map(str, range(30, 50))),
+     "a long capture: its last TAIL_LINES lines"),
+])
+def test_a_runs_outcome(store, sid, code, output, status, note, desc):
+    """#335: the quick shell's tab records how a run ended, straight into the store, so it
+    lands even when the command stops the daemon."""
+    ref = store.post_command(sid, "make stop", "Stop it")[0]
+    quickshell.ended(store.path, sid, ref, code, output)
+    assert store.item(sid, ref)["status"] == status, desc
+    body, = [m["body"] for m in store.thread(sid, ref) if m["kind"] == "run"]
+    assert body.split(": ", 1)[1] == note, desc
+    assert list(store.thread(sid, ref, in_flight=False)) == [], f"{desc}: never the session's"
+
+
+def test_a_closed_command_stays_closed_whatever_its_run(store, sid):
+    ref = store.post_command(sid, "ls", "List")[0]
+    store.close_command(sid, ref)
+    quickshell.ended(store.path, sid, ref, 1)
+    assert store.item(sid, ref)["status"] == "closed"
+
+
+def test_old_new_commands_become_open(store, sid):
+    """#335: a command posted under older code, status new, waits as an open question does."""
+    ref = store.post_command(sid, "ls", "List")[0]
+    store.db.execute("UPDATE items SET status = 'new' WHERE ref = ?", (ref,))
+    assert Store(store.path).item(sid, ref)["status"] == "open"
+
+
+@pytest.mark.parametrize("spec, failed, desc", [
+    ("status*", False, "the default order: a command not yet run among the open questions, at the top"),
+    ("status*", True, "the default order: a failed run with the blocked, above what's running"),
+    ("status▲", False, "Status ▲: a command not yet run where an open question sorts"),
+    ("status▲", True, "Status ▲: a failed run with the blocked"),
+])
+def test_a_command_waiting_on_the_person_sorts_as_an_open_question(store, sid, spec, failed, desc):
+    """#335: a command not yet run is the person's move, as an open question is."""
+    from claude_wheelhouse import ordering
+    task = store.post_item(sid, "task", "work", status="running")
+    question = store.post_item(sid, "question", "which db?")
+    ref = store.post_command(sid, "ls", "List")[0]
+    if failed:
+        store.outcome(sid, ref, 1)
+    blocked = store.post_item(sid, "task", "stuck", status="blocked") if failed else None
+    keys = {it["ref"]: ordering.item_key(spec, it)[0] for it in store.items(sid)}
+    assert keys[ref] < keys[task], f"{desc}: above what's running"
+    same = blocked if failed else question
+    assert keys[ref][:2] == keys[same][:2] if spec == "status▲" else \
+        store_mod.inbox_rank(store.item(sid, ref))[0] == store_mod.inbox_rank(store.item(sid, same))[0], desc

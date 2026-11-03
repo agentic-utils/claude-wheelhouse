@@ -542,3 +542,50 @@ def test_a_seen_marks_failed_fetch_is_left_to_the_fetching_thread(store, sid, se
             "the inbox left to the fetching thread, the sessions fetched"
     finally:
         c.disconnect()
+
+
+@pytest.mark.parametrize("other_code, replaced, desc", [
+    (False, None, "the same code started again (a restart): reconnected, nothing more said"),
+    (True, client_mod.REPLACED, "other code started under the app (an update): said as replaced, restart the app"),
+    ("own", None, "first joined on other code, then one on the app's own: nothing to restart for"),
+    ("token", client_mod.REPLACED, "a token refused meanwhile, then other code: the update said all the same"),
+])
+def test_a_daemon_replaced_under_the_app_is_said(store, sid, served, heard, no_launch, monkeypatch,
+                                                  other_code, replaced, desc):
+    """#335: an app whose daemon was replaced by one on other code says to restart it, rather
+    than carry on as if nothing had changed."""
+    from claude_wheelhouse import fingerprint
+    d = served(store.path)
+    c = heard(d.client())
+    try:
+        until(lambda: c.daemon_code is not None, desc="the first daemon's code kept")
+        if other_code == "own":
+            c.daemon_code = "another package's"
+        if other_code == "token":
+            c.replaced = client_mod.REPLACED_TOKEN   # as the stream's 401 sets it
+        port = d.port
+        d.stop()
+        until(lambda: not c.connected, desc="the stream ends")
+        if other_code in (True, "token"):
+            monkeypatch.setattr(fingerprint, "code", lambda: "newer")
+        served(store.path, port)
+        until(lambda: c.connected, desc="reconnected")
+        assert c.replaced == replaced, desc
+        assert (("notice", client_mod.REPLACED) in heard.said) == (replaced is not None), desc
+    finally:
+        c.disconnect()
+
+
+def test_a_refused_token_put_right_is_no_longer_replaced(store, served):
+    """#335: only the stream's 401 says replaced, never a fetch's error, and it clears once the
+    stream is back on a good token."""
+    d = served(store.path)
+    c = d.client()
+    try:
+        c.refused("a route failed (500)")
+        assert c.replaced is None, "a fetch's error is no replaced daemon"
+        c.replaced = client_mod.REPLACED_TOKEN   # as the stream's 401 sets it
+        c.found()
+        assert c.replaced is None, "the token put right"
+    finally:
+        c.disconnect()

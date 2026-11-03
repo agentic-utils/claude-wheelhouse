@@ -607,19 +607,19 @@ def test_suggest_command(store, sid, command, why, want_output, error, desc):
     assert mcp_server.suggest_command(command, why, want_output) == "C1: shown", desc
     item = store.item(sid, "C1")
     assert (item["kind"], item["title"], item["body"], item["status"], bool(item["want_output"])) == \
-        ("command", why, command, "new", want_output), desc
+        ("command", why, command, "open", want_output), desc
 
 
 def test_suggesting_a_command_again_updates_its_item(store, sid):
-    """#257: the same command from the same session is the same item, back to new."""
+    """#257: the same command from the same session is the same item, back to open."""
     from claude_wheelhouse import mcp_server
     mcp_server._store, mcp_server._sid = store, sid
     mcp_server.suggest_command("ls", "List")
-    store.ran(sid, "C1", "ran 14:05")
+    store.outcome(sid, "C1", 0)
     assert mcp_server.suggest_command("ls", "List again", True) == "C1: shown"
     assert mcp_server.suggest_command("pwd", "Where") == "C2: shown"
     item = store.item(sid, "C1")
-    assert (item["title"], item["status"], item["want_output"]) == ("List again", "new", 1)
+    assert (item["title"], item["status"], item["want_output"]) == ("List again", "open", 1)
 
 
 def test_a_command_is_posted_only_with_suggest_command_and_its_status_is_the_persons(store, sid):

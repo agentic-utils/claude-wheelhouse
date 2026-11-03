@@ -42,12 +42,20 @@ STATUSES = {
     "doc": {"new", "updated", "read"},
     # GitHub's, never the session's or the person's (set_pr_states, from the PRs pane's fetch)
     "pr": {"draft", "open", "merged", "closed"},
-    # the person's: new until run, run once run at least once, closed if dismissed unrun
-    "command": {"new", "run", "closed"},
+    # the person's: open until run (as an open question: the person's move, #335), run once a
+    # run ended well, failed when its last run ended with an error (Run kept), closed if dismissed
+    "command": {"open", "run", "failed", "closed"},
 }
 INITIAL_STATUS = {"task": "todo", "question": "open", "agent": "running", "decision": "unseen",
-                  "permission": "open", "doc": "new", "pr": "open", "command": "new"}
+                  "permission": "open", "doc": "new", "pr": "open", "command": "open"}
 CLOSED = {"done", "dropped", "closed", "failed", "allowed", "denied", "split"}
+# statuses in CLOSED that are still the person's move for a kind: a command whose run failed (#335)
+STILL_OPEN = {"command": {"failed"}}
+
+
+def is_closed(item) -> bool:
+    """Whether an item's status closes it (CLOSED), but for one its kind keeps open (STILL_OPEN)."""
+    return item["status"] in CLOSED and item["status"] not in STILL_OPEN.get(item["kind"], ())
 # Where an item stands in the inbox (standing), one table for every kind (T71). Active: ranked
 # as it has always been. Settled: done with, but kept in sight: dimmed, after the rest. Finished:
 # off the inbox until F shows it (closed, a permission answered, or dismissed by the person).
@@ -695,6 +703,8 @@ class Store:
             for column in ("model", "effort"):
                 if ("sessions", f"{column}_chosen_at") in added:
                     db.execute(f"UPDATE sessions SET {column}_chosen_at = ? WHERE {column} IS NOT NULL", (stamp(),))
+            # a command's first status was new before it waited as an open question does (#335)
+            db.execute("UPDATE items SET status = 'open' WHERE kind = 'command' AND status = 'new'")
             for statement in INDEXES.split(";"):
                 if statement.strip():
                     db.execute(statement)
@@ -1656,13 +1666,13 @@ class Store:
                 ref, new = self._insert_item(db, sid, "command", why, command, INITIAL_STATUS["command"]), True
             else:
                 ref, new = row["ref"], False
-            db.execute("UPDATE items SET title = ?, status = 'new', dismissed = NULL, want_output = ?, updated_at = ?, "
+            db.execute("UPDATE items SET title = ?, status = 'open', dismissed = NULL, want_output = ?, updated_at = ?, "
                        "session_at = ? WHERE session_id = ? AND ref = ?", (why, int(want_output), now(), now(), sid, ref))
             return ref, new
 
     def close_command(self, sid: str, ref: str, closed: bool = True, status: str | None = None) -> None:
-        """The person closes a command item unrun (Delete), or reopens it, as new or as status (#257)."""
-        status = "closed" if closed else status or "new"
+        """The person closes a command item unrun (Delete), or reopens it, as open or as status (#257)."""
+        status = "closed" if closed else status or "open"
         self._check_status("command", status)
         with self.tx() as db:
             self._require(db, sid)
@@ -1671,17 +1681,37 @@ class Store:
                 raise KeyError(f"no command {ref} in this session")
 
     def ran(self, sid: str, ref: str, note: str | None = None) -> None:
-        """The person ran a command item (#257): it goes to run, and with note, its thread gains
-        it as a note of theirs the session is never sent (messages.kind 'run', delivered)."""
+        """The person started a command item's run (#257): its status waits for the run's end
+        (outcome, #335); with note, its thread gains it as a note of theirs the session is never
+        sent (messages.kind 'run', delivered)."""
         with self.tx() as db:
             self._require(db, sid)
-            if not db.execute("UPDATE items SET status = 'run', updated_at = ? WHERE session_id = ? AND ref = ? "
-                              "AND kind = 'command'", (now(), sid, ref)).rowcount:
+            if not db.execute("SELECT 1 FROM items WHERE session_id = ? AND ref = ? AND kind = 'command'",
+                              (sid, ref)).fetchone():
                 raise KeyError(f"no command {ref} in this session")
             if note:
-                db.execute("INSERT INTO messages (session_id, item_ref, author, body, created_at, claimed_at, "
+                self._run_note(db, sid, ref, note)
+
+    @staticmethod
+    def _run_note(db, sid: str, ref: str, note: str) -> None:
+        db.execute("INSERT INTO messages (session_id, item_ref, author, body, created_at, claimed_at, "
                            "delivered_at, kind) VALUES (?, ?, 'person', ?, ?, ?, ?, 'run')",
                            (sid, ref, note, now(), now(), now()))
+
+    def outcome(self, sid: str, ref: str, code: int, tail: str | None = None) -> None:
+        """How a command item's run ended (#335), written by the quick shell's tab, which
+        outlives a daemon the command stops: run on exit 0, failed otherwise, with a note of the
+        exit code and, when the output was captured, its last lines (the session is never sent
+        the note). One closed meanwhile stays closed. SessionGone if the session has gone."""
+        status = "run" if code == 0 else "failed"
+        note = f"ran {time.strftime('%H:%M')}: " + ("succeeded" if code == 0 else f"failed, exit {code}")
+        if code and tail:
+            note += "\n\n" + tail
+        with self.tx() as db:
+            self._require(db, sid)
+            db.execute("UPDATE items SET status = ?, updated_at = ? WHERE session_id = ? AND ref = ? "
+                       "AND kind = 'command' AND status != 'closed'", (status, now(), sid, ref))
+            self._run_note(db, sid, ref, note)
 
     def post_doc(self, sid: str, title: str, path: str, parent: str | None = None, pinned: bool = True) -> str:
         """A markdown document the session declares for the person to read: its absolute path,
@@ -2097,7 +2127,7 @@ class Store:
                  WHERE (? IS NULL AND s.parked = 0) OR i.session_id = ?"""
         rows = self._all(sql, (sid, sid))
         if not include_closed:
-            rows = [r for r in rows if r["status"] not in CLOSED]
+            rows = [r for r in rows if not is_closed(r)]
         processing = self.processing()
         return sorted(rows, key=lambda r: inbox_rank(r, processing))
 
@@ -2449,8 +2479,8 @@ class Store:
     def processing(self) -> set[tuple[str, str]]:
         """Unfinished items of any kind the session is working on (D28): the person's word sent,
         awaiting its reply, nothing more queued."""
-        return {(r["session_id"], r["ref"]) for r in self._all(f"SELECT session_id, ref, status FROM items i WHERE {PROCESSING}")
-                if r["status"] not in CLOSED}
+        return {(r["session_id"], r["ref"]) for r in self._all(f"SELECT session_id, ref, kind, status FROM items i WHERE {PROCESSING}")
+                if not is_closed(r)}
 
     def pending(self, sid: str) -> list[sqlite3.Row]:
         return self._all(
@@ -2518,7 +2548,7 @@ def ranked_status(item) -> str:
     return "running" if item["kind"] == "pr" and item["status"] in ("draft", "open") else item["status"]
 
 
-RANK = {"open": 0, "blocked": 1, "waiting": 1, "answered": 2, "processing": 2, "unseen": 2, "seen": 2,
+RANK = {"open": 0, "blocked": 1, "waiting": 1, "failed": 1, "answered": 2, "processing": 2, "unseen": 2, "seen": 2,
         "running": 3, "todo": 4}
 SETTLED_RANK, FINISHED_RANK = 10, 11   # after every active item's rank
 # in a write that may set an item's status (the first parameter, or NULL to leave it): a change
@@ -2677,7 +2707,7 @@ def standing(item, busy=frozenset()) -> str:
     active, even if they dismissed it: the ball isn't back with them. A pin changes none of
     this: a pinned item finished is still finished (the inbox shows it with F off all the same)."""
     status, waiting = item["status"], (item["session_id"], item["ref"]) in busy
-    if status in CLOSED - SETTLED[item["kind"]] or item["dismissed"] == DELETED or (
+    if (is_closed(item) and status not in SETTLED[item["kind"]]) or item["dismissed"] == DELETED or (
             item["dismissed"] == status and not waiting):
         return "finished"
     if status in SETTLED[item["kind"]] and not waiting:

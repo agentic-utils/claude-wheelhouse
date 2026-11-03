@@ -25,6 +25,7 @@ MAX_LINES = 20
 MAX_CHARS = 2000
 CAP, HEAD, TAIL = 16_000, 4_000, 12_000   # a capture's characters kept: the first HEAD and the last TAIL
 KEY = re.compile(r"[0-9a-f]{48}")   # write's token_hex(24)
+TAIL_LINES = 20   # a failed run's last lines of output kept on its item, when it was captured (#335)
 STALE = 24 * 3600   # seconds after which a shell file left behind (a tab closed mid-run) is deleted
 
 
@@ -134,23 +135,31 @@ def take(db: Path, key: str) -> dict:
 
 
 # the rc the tab's bash starts with: the person's own, then the command shown, put in history
-# and (unless it ran already under script) eval'd, leaving an ordinary shell at the prompt
+# and (unless it ran already under script) eval'd in this very shell, so a cd or export stays,
+# its exit status then recorded on the item (ended, #335), leaving an ordinary shell at the prompt.
+# -P: a cd into a checkout never puts another copy of the package first on the path
 RC = r"""[ -f ~/.bashrc ] && . ~/.bashrc
 rm -f -- "$WH_RC"
 printf '\n\033[2m%s\033[0m\n%s\n\n' "$WH_HEAD" "$WH_CMD"
 history -s -- "$WH_CMD"
-if [ -z "$WH_RAN" ]; then eval "$WH_CMD"; fi
-unset WH_CMD WH_HEAD WH_RC WH_RAN
+if [ -z "$WH_RAN" ]; then
+  eval "$WH_CMD"
+  PYTHONPATH="$WH_PATH" "$WH_PY" -P -m claude_wheelhouse shell --db "$WH_DB" --ended "$WH_SID" "$WH_REF" "$?"
+fi
+unset WH_CMD WH_HEAD WH_RC WH_RAN WH_PY WH_PATH WH_DB WH_SID WH_REF
 """
 
 
-def bash(db: Path, env: dict, cmd: str, head: str, ran: bool = False) -> None:
-    """Exec bash with RC, the command in its environment."""
+def bash(db: Path, env: dict, cmd: str, head: str, item: tuple[str, str], ran: bool = False) -> None:
+    """Exec bash with RC, the command in its environment, with what records its end on item
+    (session, ref): this interpreter, this package's folder first on the path, the database."""
     rc = shell_dir(db) / (secrets.token_hex(24) + ".rc")
     fd = os.open(rc, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "w") as f:
         f.write(RC)
-    env = {**env, "WH_CMD": cmd, "WH_HEAD": head, "WH_RC": str(rc), **({"WH_RAN": "1"} if ran else {})}
+    path = os.pathsep.join(filter(None, [str(Path(__file__).resolve().parent.parent), env.get("PYTHONPATH")]))
+    env = {**env, "WH_CMD": cmd, "WH_HEAD": head, "WH_RC": str(rc), "WH_PY": sys.executable, "WH_PATH": path,
+           "WH_DB": str(db), "WH_SID": item[0], "WH_REF": item[1], **({"WH_RAN": "1"} if ran else {})}
     exe = shutil.which("bash") or "/bin/bash"
     os.execve(exe, [exe, "--rcfile", str(rc), "-i"], env)
 
@@ -164,6 +173,23 @@ def message(payload: dict, status: int, output: str) -> str:
         cmd_fence = "`" * max(3, max((len(m) for m in re.findall(r"`+", payload["text"])), default=0) + 1)
         lines += ["", f"{cmd_fence}bash", payload["text"], cmd_fence]
     return "\n".join(lines + ["", fence, output or "(no output)", fence])
+
+
+def tail(output: str, lines: int = TAIL_LINES) -> str:
+    """A captured run's last lines, where an error usually is."""
+    return "\n".join(output.split("\n")[-lines:])
+
+
+def ended(db: Path, sid: str, ref: str, code: int, output: str | None = None) -> None:
+    """A run's end recorded on its item (Store.outcome, #335), by the tab, which outlives a
+    daemon the command stops: run on exit 0, else failed with the exit code and, when the
+    output was captured, its tail. Said in the tab if it can't be."""
+    import sqlite3
+    from .store import SessionGone, Store
+    try:
+        Store(db).outcome(sid, ref, code, tail(output) if output else None)
+    except (SessionGone, sqlite3.Error, ValueError) as e:
+        print(f"claude-wheelhouse: {ref}'s outcome (exit {code}) wasn't recorded: {e}")
 
 
 def run(key: str, db: Path) -> None:
@@ -183,8 +209,9 @@ def run(key: str, db: Path) -> None:
     with open(db.parent / "launch.log", "a") as log:
         print(now(), payload["sid"], "run", ref, cwd, "output sent" if payload["want"] else "output not sent",
               json.dumps(text), file=log)
+    item = (payload["sid"], ref)
     if not payload["want"]:
-        bash(db, env, text, head)
+        bash(db, env, text, head, item)
         return
     out = shell_dir(db) / (key + ".out")
     fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -205,6 +232,7 @@ def run(key: str, db: Path) -> None:
         captured = cap(clean(out.read_bytes()))
     finally:
         out.unlink(missing_ok=True)
+    ended(db, payload["sid"], ref, status, captured)
     store = Store(db)
     print()
     how = None
@@ -215,4 +243,4 @@ def run(key: str, db: Path) -> None:
         print(f"{name} has gone from the wheelhouse: the output wasn't sent")
     if how:
         print(f"output {how} to {name} as a reply on {ref}")
-    bash(db, env, text, head, ran=True)
+    bash(db, env, text, head, item, ran=True)

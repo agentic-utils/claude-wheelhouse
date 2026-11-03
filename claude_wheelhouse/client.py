@@ -23,7 +23,7 @@ import time
 import uuid
 from typing import Callable, NamedTuple
 
-from . import adopt, api, auth, docroots, features, fork, plan_usage, served, transcript_usage, tutorial
+from . import adopt, api, auth, docroots, features, fingerprint, fork, plan_usage, served, transcript_usage, tutorial
 from .hub import RUNNING, Done, Event, Hub, host_context, requested
 from .store import NOTES_SEEN, TOUR_AT, SessionGone
 
@@ -38,6 +38,9 @@ USAGE_POLL = 60     # the account's usage, as the hub fetches it
 ROOTS_EVERY = 5.0   # seconds a --local app keeps the modules' doc roots before asking again (read_doc)
 UNREACHABLE = "not connected to the daemon: nothing was sent"
 REFUSED = "its token isn't this daemon's: claude-wheelhouse token, on its machine, prints it"
+# the daemon replaced under the app (#335): one on other code, or one refusing the app's token
+REPLACED = "the daemon was updated: quit and restart the app"
+REPLACED_TOKEN = "the daemon was restarted with another token: quit and restart the app"
 LOST = "lost the daemon mid-command: it may or may not have been done, so check before trying again"
 
 
@@ -56,6 +59,7 @@ class LocalClient(Hub):
     remote = False
     elsewhere = False   # the sessions are on this machine
     connected = True
+    replaced = None   # no daemon to be replaced under it
 
     def land(self) -> None:
         pass   # in process, every read is the store's own: nothing waits to be shown
@@ -271,6 +275,9 @@ class RemoteClient:
         self.layout: dict | None = None   # the kept splitter sizes, read once
         self.stream_socket = None   # the stream's connection, while it's open
         self.refusal: str | None = None   # why the daemon refuses this client, said once
+        self.daemon_code: str | None = None   # the code of the daemon first joined, from its /hello
+        self.own_code = fingerprint.code()   # this app's code, as loaded
+        self.replaced: str | None = None   # why the app must be restarted, once its daemon was replaced (#335)
         self.in_flight = False   # the fetching thread is fetching what it took from dirty
 
     def make_http(self, read: float):
@@ -1017,6 +1024,8 @@ class RemoteClient:
 
     def found(self) -> None:
         self.refusal = None
+        if self.replaced == REPLACED_TOKEN:   # the token put right (the file read again): not replaced after all
+            self.replaced = None
         if not self.connected:
             self.connected = True
             self.post(lambda: self.emit(Event("link", "reconnected to the daemon")))
@@ -1061,6 +1070,7 @@ class RemoteClient:
                         self.stream_socket = events.response.extensions.get("network_stream")
                         if self.stopping:
                             return
+                        self.check_replaced(http)
                         self.found()
                         for event in events:
                             if self.stopping:
@@ -1083,12 +1093,28 @@ class RemoteClient:
                         old, self.http = self.http, self.make_http(TIMEOUT)
                         old.close()
                 if refused and self.token == refused_token:   # not one about to be put right by the file
+                    self.replaced = self.replaced or REPLACED_TOKEN   # the stream's 401 alone, never a fetch's error
                     self.refused(self.why_refused() if self.why_refused else REFUSED)
                 with self.lock:
                     self.lock.wait(BACKOFF[min(tries, len(BACKOFF) - 1)])
                 tries += 1
         finally:
             http.close()
+
+    def check_replaced(self, http) -> None:
+        """The daemon's code, as its /hello says: the first joined kept, and one on other code
+        joined since (started under the app by an update, #335) said as replaced, once. An app
+        on older code than its daemon can't count on their speaking alike: restarting it is the
+        cure, not reconnecting."""
+        try:
+            code = http.get("/hello").json().get("code")
+        except (self.httpx.TransportError, ValueError, AttributeError):
+            return
+        if self.daemon_code is None:
+            self.daemon_code = code
+        elif code not in (self.daemon_code, self.own_code) and self.replaced in (None, REPLACED_TOKEN):   # never one on the app's own
+            self.replaced = REPLACED
+            self.post(lambda: self.emit(Event("notice", REPLACED, "error")))
 
     def heard(self, event: dict) -> None:
         """An event: a notice said; anything else marks what it moved to fetch, and a

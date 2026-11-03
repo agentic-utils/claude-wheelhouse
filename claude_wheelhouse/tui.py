@@ -70,7 +70,7 @@ from textual.widgets import (
 from . import api, away, callout, compactor, quickshell, columns, docblocks, docroots, emoji, features, helper, models, ordering, prs, search, steps, subagents, transcript, transcript_usage, tutorial, whatsnew
 from .rows import KIND_COLOUR, KeepColours, RowTips, faded, marked, plain
 from .callout import TourCallout
-from .client import LocalClient, Unreachable
+from .client import LOST, LocalClient, Unreachable
 from .host import MCP_CONNECTOR, NUDGE_TOKENS, SHELL_OPENING
 from .hub import COMPACT_RELAUNCH_WAIT, VERBS, Done, wake_verb, compacting_now, operating, lifeless, state as hub_state, Event, aimed, display_name, host_context, short
 from .knurl import KnurlRender
@@ -123,7 +123,7 @@ DOCK_FPS = 6   # the compaction overlay's frames a second (#287), no more than t
 RENDER_OFF_LOOP = 2000
 CALLS_WAIT = 10   # seconds the app's close waits for a Delete's calls under way (delete_off_thread)
 RENDERING = ("note", "_rendering…_")
-CLOSABLE = {"question": "answered", "decision": "seen", "command": "new"}   # what Delete closes, and what Ctrl+R reopening makes it
+CLOSABLE = {"question": "answered", "decision": "seen", "command": "open"}   # what Delete closes, and what Ctrl+R reopening makes it
 
 
 def closable(item) -> bool:
@@ -571,7 +571,9 @@ def thread_blocks(found, session_name: str = "") -> list[tuple[str, str]]:
            ("claude", command_body(item)) if item["kind"] == "command" else ("claude", item["body"] or "_no detail_")]
     for m in msgs:
         if m["author"] == "person" and "kind" in m.keys() and m["kind"] == "run":   # a run whose output wasn't sent: never the session's (#257)
-            out.append(("note", f"_{m['body']}_"))
+            head, _, tail = m["body"].partition("\n\n")   # a failed run's captured tail, as it showed (#335)
+            fence = "`" * max(3, max((len(r) for r in re.findall(r"`+", tail)), default=0) + 1)
+            out.append(("note", f"_{head}_" + (f"\n\n{fence}\n{tail}\n{fence}" if tail else "")))
         elif m["author"] == "person":
             out.append(("you", f"**you{' · queued' if m['draft'] else ' · sending' if not m['delivered_at'] else ''}** · "
                                f"{m['created_at']}\n\n"
@@ -5798,7 +5800,9 @@ class WheelhouseApp(App):
     def paint_title(self) -> None:
         """The title at this frame: one line, never a new size. The daemon out of reach says so
         there, until it's back. Drawn only when its look changes (TitleBar.show)."""
-        if self.client.connected:
+        if self.client.replaced:   # reconnecting won't cure it (#335)
+            self.title_bar.show("replaced", Text(f" {self.client.replaced} ", style=UNREACHABLE.style))
+        elif self.client.connected:
             self.title_bar.show(shimmer_phase(self.frame), shimmer(self.frame))
         else:
             self.title_bar.show("unreachable", UNREACHABLE)
@@ -6345,7 +6349,7 @@ class WheelhouseApp(App):
             else "processing" if key in processing else it["status"]
         style = "dim" if where != "active" else "bold #05d9e8" if status == "queued" \
             else "bold #ffd300" if status == "open" and it["kind"] != "pr" else DECISION if status in UNREAD \
-            else "bold #ff2a6d" if status in ("blocked", "waiting") else MATRIX
+            else "bold #ff2a6d" if status in ("blocked", "waiting", "failed") else MATRIX
         name = names.get(it["session_id"], "")[:14]
         if status == "processing" or key in awaiting and status != "queued":
             # the person spoke last: the ball is in the session's court until it replies. A
@@ -9268,9 +9272,10 @@ class WheelhouseApp(App):
                          lambda yes: yes and self.host_command(sid, "shell", press_as="handover"))
 
     def command_item(self, target):
-        """The item in context if it's a command item not closed (#257), else None."""
+        """The item in context if it's a command item still to run (#257): open, or failed and so
+        run again (#335); not one run well or closed. Else None."""
         item = target and target[1] and self.client.item(*target)
-        return item if item and item["kind"] == "command" and item["status"] != "closed" else None
+        return item if item and item["kind"] == "command" and item["status"] in ("open", "failed") else None
 
     @on(Button.Pressed, "#run-command")
     def run_pressed(self, event: Button.Pressed) -> None:
@@ -9294,8 +9299,17 @@ class WheelhouseApp(App):
                          lambda answer: answer and self.run_command(target, answer))
 
     def run_command(self, target: tuple[str, str], answer: dict) -> None:
+        """The Run dialog's answer sent. A run the daemon never had says so on its ref and why
+        (the daemon replaced, out of reach, or lost mid-request), not a bare link error (#335)."""
+        if self.client.replaced:
+            self.notify(f"{target[1]} wasn't run: {self.client.replaced}", severity="error")
+            return
         try:
-            self.told(self.client.run_command(*target, answer["text"], answer["send"]))
+            done = self.client.run_command(*target, answer["text"], answer["send"])
+            if not done.ok:
+                done.notices = [dataclasses.replace(n, text=f"{target[1]} {'may not have run' if n.text == LOST else 'was not run'}: "
+                                                    f"{n.text}") if n.severity == "error" else n for n in done.notices]
+            self.told(done)
         except ValueError as e:   # in process: the hub's own check (the dialog's ran first)
             self.notify(str(e), severity="warning")
         self.refresh_data()

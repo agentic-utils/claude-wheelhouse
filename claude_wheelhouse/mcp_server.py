@@ -99,8 +99,9 @@ def suggest_command(command: str, why: str, want_output: bool = False) -> str:
     ASCII and newlines only, at most 20 lines and 2000 characters; write a placeholder as
     <name>. Refused otherwise, saying where. want_output=True if you need what it prints: the
     output then comes back as their reply on the item when they run it, unless they untick
-    that. Without it you see nothing, so don't wait for it. Suggesting the same command again
-    updates its item. Returns "C4: shown"."""
+    that. Without it you see nothing, so don't wait for it. Its status is the person's: open
+    until they run it, run once a run exits 0, failed when one doesn't. Suggesting the same
+    command again updates its item and opens it again. Returns "C4: shown"."""
     ref, _ = _store.post_command(_sid, command, why, bool(want_output))
     return f"{ref}: shown"
 
