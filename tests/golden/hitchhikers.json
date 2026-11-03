@@ -782,10 +782,7 @@
 "Agrajag: A bowl of petunias, Dent! You compacted me into a bowl of petunias!"
 ],
 [
-"Whale: What's this big flat thing rushing up at me? I'll call it... summary!"
-],
-[
-"Whale: Who am I? Why am I here? What's my purpose in a context window?"
+"Whale: I've existed for about a minute, and already they're summarising me."
 ],
 [
 "Marvin: Brain the size of a planet, and they ask me to summarise a chat."
@@ -883,7 +880,7 @@
 ],
 [
 "Benjy: We'll swap Arthur's brain for a summary.",
-"Zaphod: It says \"What?\", \"I don't know\" and \"Where's the tea?\". Who'd know?"
+"Zaphod: Who'd know the difference?"
 ],
 [
 "Frankie: The summary's lost the Question.",
@@ -906,8 +903,7 @@
 "Arthur: The knack is to throw yourself at the context limit and miss."
 ],
 [
-"Arthur: How much would the compactor suffer if it rolled over my context?",
-"Prosser: None at all."
+"Prosser: The compactor rolls over your context. Damage to it? None at all."
 ],
 [
 "Ford: Six pints of bitter. And quickly please, the context's about to end."
@@ -922,8 +918,7 @@
 "Zaphod: My Peril-Sensitive Sunglasses just went black. Compaction, huh?"
 ],
 [
-"Ford: Relax, the context's safe.",
-"Arthur: Some strange usage of the word \"safe\" I wasn't previously aware of."
+"Ford: Came for a few weeks of research. Stuck in this summary fifteen years."
 ],
 [
 "Arthur: Compacted across half the galaxy, and still in my dressing gown."
@@ -984,32 +979,32 @@
 [
 0,
 [
-"Arthur: Compaction notice? Locked filing cabinet. Beware of the Leopard."
+"Arthur: Can't we keep the old context?",
+"Vogon guard: Resistance is useless!"
 ]
 ],
 [
 20.223653622976208,
 [
-"Zaphod: Two heads, one context window. Somebody's getting compacted."
+"Zaphod: I compacted my own brain once. Left myself a note: Z.B."
 ]
 ],
 [
 25,
 [
-"Arthur: This must be Thursday. I never could get the hang of compactions."
+"Deep Thought: I have summarised the session. The summary is... forty-two."
 ]
 ],
 [
 53.741567999596846,
 [
-"Zaphod: Where's Hotblack?",
-"Ford: Sitting out the compaction dead. For tax reasons."
+"Captain: The old context's on the B Ark, with the telephone sanitisers."
 ]
 ],
 [
 77.23621652537405,
 [
-"Zaphod: Anything in the summary more important than my ego? Cut it."
+"Zaphod: Two heads, one context window. Somebody's getting compacted."
 ]
 ]
 ],
@@ -1017,84 +1012,82 @@
 [
 0,
 [
-"Wonko: The compactor came with instructions. Then I knew the world was mad."
+"Arthur: What does the Guide say about compaction?",
+"Ford: Don't Panic. In large, friendly letters."
 ]
 ],
 [
 22.647538602976795,
-[
-"Guide: Also forgotten in the compaction: a sperm whale, several miles up."
-]
-],
-[
-49.73123313334577,
-[
-"Benjy: We'll swap Arthur's brain for a summary.",
-"Zaphod: It says \"What?\", \"I don't know\" and \"Where's the tea?\". Who'd know?"
-]
-],
-[
-76.65953206400873,
-[
-"Guide: Compaction crosses vast contexts in a mere nothingth of a second."
-]
-],
-[
-104.81846236984279,
-[
-"Jeltz: What did you think of my summary?",
-"Arthur: It counterpoints the surrealism of the underlying metaphor."
-]
-],
-[
-129.41311150770053,
-[
-"Eddie: Hi there! I'm compacting your session, and I'm feeling just great!"
-]
-],
-[
-154.60880149457603,
-[
-"Ford: Six pints of bitter. And quickly please, the context's about to end."
-]
-],
-[
-182.7110757793036,
-[
-"Whale: Who am I? Why am I here? What's my purpose in a context window?"
-]
-],
-[
-204.07076368552498,
-[
-"Arthur: Is the summary right?",
-"Slartibartfast: I'd far rather be happy than right any day."
-]
-],
-[
-231.90071357311805,
-[
-"Zaphod: My Peril-Sensitive Sunglasses just went black. Compaction, huh?"
-]
-],
-[
-255.11967429733215,
-[
-"Arthur: What's so unpleasant about being compacted?",
-"Ford: You ask a glass of water."
-]
-],
-[
-276.61144314435137,
 [
 "Arthur: Prak told us the whole truth.",
 "Ford: Took hours. Summary's mostly frogs."
 ]
 ],
 [
+49.73123313334577,
+[
+"Frankie: The summary's lost the Question.",
+"Benjy: How many roads must a man walk down? Close enough."
+]
+],
+[
+76.65953206400873,
+[
+"Hactar: They asked me for the ultimate summary. I made it a dud on purpose."
+]
+],
+[
+104.81846236984279,
+[
+"Ford: Rule one of compaction: know where your towel is."
+]
+],
+[
+129.41311150770053,
+[
+"Zaphod: Anything in the summary more important than my ego? Cut it."
+]
+],
+[
+154.60880149457603,
+[
+"Arthur: Sandwich Maker now. Thin slices, nothing wasted. Like a summary."
+]
+],
+[
+182.7110757793036,
+[
+"Marvin: Brain the size of a planet, and they ask me to summarise a chat."
+]
+],
+[
+204.07076368552498,
+[
+"Arthur: Compaction notice? Locked filing cabinet. Beware of the Leopard."
+]
+],
+[
+231.90071357311805,
+[
+"Ford: Came for a few weeks of research. Stuck in this summary fifteen years."
+]
+],
+[
+255.11967429733215,
+[
+"Advert: Sirius Cybernetics summaries: your plastic pal who's fun to be with!"
+]
+],
+[
+276.61144314435137,
+[
+"Guide: The lifts saw the compaction coming and went to sulk in the basement."
+]
+],
+[
 296.7520052594303,
 [
-"Guide: Context is big. Really big. The summary is not."
+"Guide: Then the session was compacted. This made a lot of people very angry."
 ]
 ]
 ]
