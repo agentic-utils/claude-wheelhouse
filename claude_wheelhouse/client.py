@@ -60,12 +60,16 @@ class LocalClient(Hub):
     elsewhere = False   # the sessions are on this machine
     connected = True
     replaced = None   # no daemon to be replaced under it
+    inbox_version = None   # the store has no stamp: the app reads and compares (RemoteClient.inbox_version)
 
     def land(self) -> None:
         pass   # in process, every read is the store's own: nothing waits to be shown
 
     def sessions_loaded(self) -> bool:
         return True   # read from the store at every refresh
+
+    def has_conversation(self, sid: str) -> bool:
+        return True   # in process, a conversation is read where it's asked for
 
     def background(self) -> None:
         """The hub's reading at each tick: context sizes, the tab sessions' keepalive,
@@ -279,6 +283,11 @@ class RemoteClient:
         self.own_code = fingerprint.code()   # this app's code, as loaded
         self.replaced: str | None = None   # why the app must be restarted, once its daemon was replaced (#335)
         self.in_flight = False   # the fetching thread is fetching what it took from dirty
+        # the sessions and the inbox as shown, stamped: moved by each answer of the daemon's
+        # applied, so a paint that finds it where it left it has nothing new to read (#327)
+        self.version = 0
+        self.inbox_version = 0   # ... and the inbox's alone: a session's heartbeat leaves it (paint_items)
+        self.stamped: dict[str, object] = {}   # the sessions and the inbox as the version stamps them
 
     def make_http(self, read: float):
         """A connection whose every request carries the token."""
@@ -513,6 +522,11 @@ class RemoteClient:
         """A fetch's answer, as shown from now: under the lock."""
         kind = key[0]
         self.shown_seq[key] = seq
+        if kind in ("sessions", "inbox") and data != self.stamped.get(kind):   # the same again moves nothing
+            self.stamped[kind] = data
+            self.version += 1
+            if kind == "inbox":
+                self.inbox_version += 1
         if kind == "sessions":
             self.views = data
             self.by_id = {s["id"]: s for s in data}
@@ -653,6 +667,12 @@ class RemoteClient:
 
     def conversation(self, sid: str) -> list[tuple[str, str]] | None:
         return blocks(self.shown(("conversation", sid)))
+
+    def has_conversation(self, sid: str) -> bool:
+        """Whether a session's conversation is here already, so conversation() answers without
+        a request to the daemon: the app asks for one that isn't on a thread (#327)."""
+        with self.lock:
+            return ("conversation", sid) in self.cache or self.synchronous
 
     def agent_conversation(self, sid: str, ref: str) -> list[tuple[str, str]] | None:
         """A subagent item's own conversation; None, unasked, for any other item."""

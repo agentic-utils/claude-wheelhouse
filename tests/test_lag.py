@@ -1,0 +1,250 @@
+"""What keeps the loop free for keys and clicks (#327): the inbox rebuilt in linear time,
+Detail rendered once a burst of arrows rests and off the loop, a stale render never
+landing, an idle tick that paints nothing, and the animation's frame rates."""
+import asyncio
+
+import pytest
+from textual import events
+from textual.widgets import DataTable
+
+from claude_wheelhouse import features, tui
+from claude_wheelhouse.tui import WheelhouseApp, fill
+from conftest import SHIPPED_DETAIL_INLINE
+
+
+@pytest.fixture
+def anyio_backend():
+    return "asyncio"
+
+
+def blocks_of(name: str, n: int = 30) -> list[tuple[str, str]]:
+    return [("claude", f"{name}: turn {i} of a long conversation") for i in range(n)]
+
+
+def counting_ordered_rows(monkeypatch) -> list[int]:
+    """DataTable.ordered_rows, its rebuilds (a cache miss) counted."""
+    built, real = [0], DataTable.ordered_rows.fget
+
+    def ordered_rows(self):
+        built[0] += (self.row_count, self._update_count) not in self._ordered_row_cache
+        return real(self)
+    monkeypatch.setattr(DataTable, "ordered_rows", property(ordered_rows))
+    return built
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("items, desc", [
+    (20, "a small inbox"),
+    (200, "ten times the rows"),
+    (800, "forty times the rows"),
+])
+async def test_an_inbox_rebuild_reads_its_row_order_a_fixed_number_of_times(store, sid, monkeypatch, items, desc):
+    for i in range(items):
+        store.post_item(sid, "task", f"task {i}")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        table = app.items_table
+        rows = [(k, tuple(table.get_row(k))) for k in table.keys()]
+        built = counting_ordered_rows(monkeypatch)
+        assert fill(table, rows, rebuild=True), desc
+        assert table.row_count == len(rows), desc
+        assert built[0] <= 2, f"{desc}: {built[0]} rebuilds of the row order for {len(rows)} rows (#327)"
+
+
+async def settle(pilot, seconds: float = 0.4) -> None:
+    await asyncio.sleep(seconds)
+    await pilot.pause()
+    await pilot.app.workers.wait_for_complete()
+    await pilot.pause()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("arrows, desc", [
+    (1, "one arrow"),
+    (4, "a burst of four"),
+])
+async def test_detail_paints_a_conversation_once_after_a_burst_of_arrows(store, tmp_path, monkeypatch, arrows, desc):
+    monkeypatch.setattr(tui, "DETAIL_INLINE", SHIPPED_DETAIL_INLINE)
+    sids = [store.create_session(str(tmp_path), name=f"s{i}") for i in range(6)]
+    tui._block_strips.cache_clear()
+    app = WheelhouseApp(store)
+    monkeypatch.setattr(app.client, "conversation", lambda sid: blocks_of(sid))
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.focus()
+        app.items_table.move_cursor(row=0)
+        await settle(pilot)
+        updates = []
+        real = app.detail.update
+        monkeypatch.setattr(app.detail, "update", lambda content, top=False: (updates.append(content), real(content, top)))
+        for _ in range(arrows):   # a burst, as the terminal's driver posts keys, faster than the loop handles them
+            app.post_message(events.Key("down", None))
+        await settle(pilot)
+        sid_now = app.viewing
+        assert sid_now in sids, desc
+        assert len(updates) == 1, f"{desc}: Detail painted {len(updates)} times"
+        assert app.detail.blocks == blocks_of(sid_now) or app.detail.blocks[0][1].startswith(sid_now), desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("first, second, desc", [
+    (30, 30, "two conversations rendered on threads: the second's lands"),
+    (30, 2, "one on a thread, then a short one at once: the thread's never lands over it"),
+])
+async def test_a_stale_render_never_overwrites_a_newer_one(store, sid, monkeypatch, first, second, desc):
+    monkeypatch.setattr(tui, "DETAIL_INLINE", SHIPPED_DETAIL_INLINE)
+    tui._block_strips.cache_clear()
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        old, new = blocks_of("old", first), blocks_of("new", second)
+        app.show_detail(old, True, False)
+        app.show_detail(new, True, False)
+        await settle(pilot)
+        assert app.detail.blocks == new, desc
+        app.detail_shown(app.detail_gen - 1, old, True, False)   # a result overtaken, arriving late
+        assert app.detail.blocks == new, desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("moved, autocleanse, desc", [
+    (False, 0, "the daemon's version where it was: nothing read, compared or painted"),
+    (False, 5, "autocleanse on, nothing due to go: nothing read either (review 1)"),
+    (True, 0, "the version moved: the inbox read and painted again"),
+])
+async def test_the_idle_tick_paints_nothing_when_the_version_has_not_moved(store, sid, monkeypatch, moved, autocleanse,
+                                                                           desc):
+    for i in range(5):
+        store.post_item(sid, "task", f"task {i}", status="done" if i % 2 else "todo")
+    app = WheelhouseApp(store)
+    app.autocleanse = autocleanse
+    async with app.run_test(size=(160, 40)) as pilot:
+        app.client.inbox_version = 1   # as RemoteClient stamps it
+        await pilot.pause()
+        app.paint_items()
+        await pilot.pause()
+        read = []
+        real = app.ranked_keyed
+        monkeypatch.setattr(app, "ranked_keyed", lambda *a, **kw: (read.append(1), real(*a, **kw))[1])
+        filled = []
+        monkeypatch.setattr(tui, "fill", lambda *a, **kw: (filled.append(1), fill(*a, **kw))[1])
+        app.client.inbox_version += moved
+        app.paint_items()
+        assert (bool(read), bool(filled)) == (moved, moved), desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("asked, app_fps, overlay_fps, desc", [
+    (10, 5, 4, "the default 10: eyes and shimmer at 5, the overlay at 4"),
+    (3, 3, 3, "a lower rate asked: both at it"),
+    (0, None, 0, "animation off: no timer"),
+])
+async def test_frame_rates(store, sid, monkeypatch, asked, app_fps, overlay_fps, desc):
+    monkeypatch.setattr(features, "animation_fps", lambda: float(asked))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        got = None if app.animation is None else round(1 / app.animation._interval, 2)
+        assert got == app_fps, desc
+        assert min(tui.DOCK_FPS, asked) == overlay_fps, desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("moved, sorts, desc", [
+    (False, False, "an arrow over items that keep their ranks: nothing sorted again"),
+    (True, True, "the inbox moved meanwhile: sorted again"),
+])
+async def test_an_arrow_moves_the_cursor_without_sorting_the_inbox_again(store, sid, monkeypatch, moved, sorts, desc):
+    for i in range(6):
+        store.post_item(sid, "task", f"task {i}")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        app.client.inbox_version = 1   # as RemoteClient stamps it
+        app.items_table.focus()
+        app.items_table.move_cursor(row=1)
+        await pilot.pause()
+        app.paint_items()
+        await pilot.pause()
+        sorted_ = []
+        real = app.ranked_keyed
+        monkeypatch.setattr(app, "ranked_keyed", lambda *a, **kw: (sorted_.append(1), real(*a, **kw))[1])
+        app.client.inbox_version += moved
+        await pilot.press("down")
+        await pilot.pause()
+        assert bool(sorted_) == sorts, desc
+        assert app.selected and app.items_table.cursor_key() == f"{app.selected[0]}|{app.selected[1] or ''}", desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("moved, painted, desc", [
+    (False, True, "the inbox where the worker sorted it: painted as the sort lands"),
+    (True, False, "the inbox moved on while it sorted: the stale sort dropped, the next tick's lands"),
+])
+async def test_a_tick_sort_from_a_worker_lands_only_for_its_version(store, sid, monkeypatch, moved, painted, desc):
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.client.inbox_version = 3
+        app.preparing = 3
+        paints = []
+        monkeypatch.setattr(app, "paint_items", lambda: paints.append(1))
+        app.client.inbox_version += moved
+        app.items_prepared(3)
+        assert (bool(paints), app.preparing) == (painted, None), desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("brings, asks, waited, fetches, desc", [
+    (False, 20, 0, 1, "asked again and again while the daemon can't answer: one fetch, not a spin (review 1)"),
+    (False, 2, 2.5, 2, "asked again after CONVERSATION_RETRY: fetched again"),
+    (True, 2, 0, 2, "fetched, let go, asked again at once: fetched at once, no wait (review 2)"),
+])
+async def test_a_conversation_that_cannot_be_fetched_is_not_fetched_in_a_loop(store, sid, monkeypatch, brings, asks,
+                                                                               waited, fetches, desc):
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        fetched = []
+        monkeypatch.setattr(app.client, "remote", True)
+        have = [False]
+        monkeypatch.setattr(app.client, "has_conversation", lambda s: have[0])
+        def conversation(s):   # a fetch when it isn't here; once it is, a read of what's kept
+            if not have[0]:
+                fetched.append(s)
+            have[0] = brings
+            return []
+        monkeypatch.setattr(app.client, "conversation", conversation)
+        clock = [100.0]
+        monkeypatch.setattr(app, "now", lambda: clock[0])
+        for i in range(asks):
+            if i:
+                clock[0] += waited
+            have[0] = False   # not here (again): let go by a refresh, or never fetched
+            assert app.conversation(sid) == [("note", tui.READING)], desc
+            await pilot.app.workers.wait_for_complete()
+            await pilot.pause()
+        assert len(fetched) == fetches, desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("selected, desc", [
+    (None, "nothing selected: the row past its time hidden, the next due is the other's"),
+    ("T1", "the row past its time selected, kept: the next due is still the other's, not one already past (review 2)"),
+])
+async def test_autocleanse_waits_for_the_next_row_due_not_one_kept_past_its_time(store, sid, selected, desc):
+    from datetime import datetime, timedelta, timezone
+    for ref, minutes in (("T1", 10), ("T2", 2)):
+        store.post_item(sid, "task", ref, status="done")
+        at = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat(timespec="seconds")
+        store.db.execute("UPDATE items SET updated_at = ? WHERE session_id = ? AND ref = ?", (at, sid, ref))
+    app = WheelhouseApp(store)
+    app.autocleanse = 5
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app._selected = selected and (sid, selected)
+        found, processing, queued, awaiting = app.client.inbox(None)
+        shown = [it["ref"] for it in app.listable(found, queued | awaiting)]
+        assert ("T1" in shown) == bool(selected), desc
+        left = (app.cleanse_due - datetime.now(timezone.utc)).total_seconds()
+        assert 150 < left < 190, f"{desc}: due in {left:.0f} s"
