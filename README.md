@@ -931,7 +931,8 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
   bystanders shouting "ALIENS!" if it didn't take), or The Hitchhiker's Guide to the Galaxy,
   where the Improbability Drive turns two missiles into a sperm whale and a bowl of petunias
   over Magrathea and the ground rushes up to meet them as the ALTITUDE readout falls, DON'T
-  PANIC over it all (the whale flickering back into a missile if it stalled), or Indiana Jones
+  PANIC over it all, the whale bursting over the camera's lens when it lands and sliding slowly
+  down it (the whale flickering back into a missile if it stalled), or Indiana Jones
   and the Temple of Doom, where a ceiling of spikes grinds down on Indy and Short Round as the
   HEADROOM readout falls while Willie, out in the tunnel, screams at the bugs and feels in two
   square holes for the lever (the ceiling jamming if she picked the wrong one), or Wallace and
@@ -951,6 +952,14 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
   else). When the cycle ends its last frame stays 8 seconds, then goes. The session's notes turn
   shows as one dim line ("writing its notes for after compaction · 12 lines"), never the notes
   themselves, and stays folded afterwards.
+  To watch a scene without compacting anything, `make scene NAME=hitchhikers` (`claude-wheelhouse
+  scene hitchhikers`) plays one in the terminal as the app shows it, a whole compaction at a
+  time and again until `Ctrl+C`: `ARGS="--compacting 60"` makes its compacting stage last a
+  minute, and `ARGS="--end failed"` (or `cancelled`) ends it that way. No `NAME`, or one that
+  isn't a scene, lists them. To have the app itself play one scene every time, start it with
+  `WHEELHOUSE_SCENE=hitchhikers` set: `make stop`, then `WHEELHOUSE_SCENE=hitchhikers make run`
+  (the daemon picks the scene, so it must start with it set). Unset, or not a scene's name,
+  each compaction picks one at random as ever.
   A session in a terminal tab gets the same, from the plugin's PreCompact hook, whether
   `/compact` was typed there or Claude Code compacted by itself; there the wheelhouse can hold
   only what it sends, never what's typed in the tab. The session can also ask for a compaction itself, with

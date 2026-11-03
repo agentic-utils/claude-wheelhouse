@@ -154,12 +154,16 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   `.plan/docs-section.md`.
   Never imports Textual.
 - `compactor.py`: what every compaction scene shares: the cycle's scene (`scene_for`, seeded
-  by the cycle's id, never the session's previous one while there's another), the cast's
+  by the cycle's id, never the session's previous one while there's another, unless
+  `WHEELHOUSE_SCENE` names one, #340), the cast's
   excerpts drawn per cycle without repeats (`schedule`, seeded the same way) (#244), the
   conversation's plain line per stage (`stage_line`), and the `dock` entry (`dock_text`: stage,
   start, cycle id, scene, newest excerpt), which the app's `CompactorOverlay` shows over the
   middle of the conversation while a cycle runs and for `LINGER` seconds after it ends (#287,
   #324). Never imports Textual.
+- `preview.py`: `claude-wheelhouse scene <name>` (`make scene NAME=<name>`, #340), one scene
+  played in the terminal through the hub's `compaction_entries` and the app's own
+  `CompactorOverlay`, a made-up cycle at a time, with no daemon or session.
 - `scenes/`: the compactor's scenes (#304), one module each, in `SCENES` (`scenes/__init__.py`):
   `base.py` the `Scene` interface (excerpts, captions, small stills, the big animated frame) and
   the canvas, frame sizes (60 by 12 big, in every frame), tick rate and colour roles they
@@ -208,7 +212,8 @@ and `transcripts.py` the transcripts the core's and the stats module's tests wri
   alone syncs the default groups, every module included. The stats module's tests share
   core's `tests/transcripts.py` (pytest's `pythonpath = ["."]`) and skip without it installed. `make args` (`claude-wheelhouse args`, hidden from `--help`, `cli.args_text`)
   lists the app's flags with their settings' names (`features.SETTINGS`).
-  `make stop` (`claude-wheelhouse daemon --stop`) stops the daemon. `make tutorial` (`claude-wheelhouse tutorial`), with the app and daemon stopped, has the
+  `make stop` (`claude-wheelhouse daemon --stop`) stops the daemon. `make scene NAME=<name>`
+  (`claude-wheelhouse scene`) plays a compaction scene in the terminal (`preview.py`). `make tutorial` (`claude-wheelhouse tutorial`), with the app and daemon stopped, has the
   next start offer the tutorial again. `make` lists the targets. Python 3.12, managed by uv.
 - The install is editable: `.venv` imports this checkout. In another clone or worktree,
   that venv's `pytest` script imports the main checkout, not yours. Run
@@ -253,7 +258,8 @@ that keeps files of its own gets it as `api.Context.state_dir`. Environment vari
 `WHEELHOUSE_DB`, `WHEELHOUSE_PORT` and the other settings' variables (`features.given`),
 `WHEELHOUSE_TOKEN` (`--connect`), `WHEELHOUSE_DECISIONS=0`,
 `WHEELHOUSE_SESSION_ID` and `WHEELHOUSE_PYTHON`, which a launched session is given,
-`WHEELHOUSE_RUNNER` (`tab` or `sdk`; it never turns SDK mode on by itself), and
+`WHEELHOUSE_RUNNER` (`tab` or `sdk`; it never turns SDK mode on by itself),
+`WHEELHOUSE_SCENE` (the scene every compaction plays, read by the hub: `compactor.FORCE`), and
 `TEXTUAL_COLOR_SYSTEM`, which overrides the truecolour the app assumes under Windows
 Terminal (`WT_SESSION` set and `COLORTERM` not: `cli.truecolour`), and
 `WHEELHOUSE_CLAUDE`, the `claude` the usage probe runs instead (the tests' missing one).

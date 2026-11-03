@@ -285,6 +285,13 @@ def parser() -> argparse.ArgumentParser:
     mods.add_argument("name", nargs="?", help="the module's id, as the list shows it")
     mods.add_argument("--connect", metavar="HOST:PORT", help=argparse.SUPPRESS)   # refused: said why
     sub.add_parser("token", help="print the daemon's token, for a client on another machine (--connect)")
+    scene = sub.add_parser("scene", help="play a compaction scene in this terminal, as the app shows it, until "
+                           "Ctrl+C (no daemon or session needed)")
+    scene.add_argument("name", help="the scene's name (an unknown one lists them)")
+    scene.add_argument("--compacting", type=float, default=20.0, metavar="SECONDS",
+                       help="how long its compacting stage runs (default 20)")
+    scene.add_argument("--end", choices=("completed", "failed", "cancelled"), default="completed",
+                       help="how the compaction ends (default completed)")
     return p
 
 
@@ -388,6 +395,12 @@ def main() -> None:
         if bool(args.action) != bool(args.name):
             sys.exit("claude-wheelhouse: modules disable or enable takes a module's id")
         modules_command(args.action, args.name)
+    elif args.cmd == "scene":
+        from .scenes import SCENES
+        if args.name not in SCENES:
+            sys.exit(f"claude-wheelhouse: no scene {args.name!r}: one of {', '.join(sorted(SCENES))}")
+        from .preview import main as preview
+        preview(args.name, args.compacting, args.end)
     elif args.cmd == "open-items":
         open_items()
     elif args.cmd == "compaction-start":
