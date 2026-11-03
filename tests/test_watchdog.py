@@ -3,6 +3,7 @@ session as a notice and to the person as an amber `quiet` status. Times are pass
 `now`, a fake clock: nothing sleeps."""
 
 import json
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -30,6 +31,12 @@ def result(at, tid="toolu_x"):
 
 def thinking(at):
     return rec("assistant", at, {"type": "thinking", "thinking": "", "signature": "x"})
+
+
+def said(at, stop="end_turn"):
+    r = rec("assistant", at, {"type": "text", "text": "All done: 3 findings."})
+    r["message"]["stop_reason"] = stop
+    return r
 
 
 def api_request(at):
@@ -98,6 +105,12 @@ def ten_minutes(sub):
     ([call(0, name="mcp__wheelhouse__quiet", tid="toolu_q", minutes=20, why="x"), result(1, "toolu_q"), thinking(1300)],
      None, [(1500, 0), (1599, 0), (1600, 1)], "once the period has ended, normal watching resumes"),
     ([thinking(0)], ten_minutes, [(300, 0), (599, 0), (600, 1)], "the coordinator's set_watchdog default applies"),
+    ([said(0)], None, [(3600, 0)], "a turn ended (end_turn) waits on nothing: its finish is the session's to read"),
+    ([call(0, name="SubagentHandback", message="report"), result(1)], None, [(3600, 0)],
+     "a hand-back answered ends its turn too"),
+    ([said(0, stop=None)], None, [(300, 1)], "text mid-turn, with no end_turn, is no end"),
+    ([call(0, name="mcp__wheelhouse__quiet", tid="toolu_q", minutes=20, why="sim"), result(1, "toolu_q"), call(2, **SIM)],
+     approval, [(301, 0), (302, 1)], "a call awaiting approval fires at 5 min inside a declared quiet period too"),
 ])
 def test_fires(sub, recs, setup, checks, desc):
     sub.write(*recs)
@@ -123,6 +136,25 @@ def test_the_message_names_the_agent_and_its_last_action(sub):
                        ("Bash: pytest tests/test_x.py (still running)", "its last action, still in flight"),
                        ("SendMessage", "what the session can do")]:
         assert part in said, desc
+
+
+def test_a_subagent_of_its_own_writing_keeps_it_from_quiet(sub):
+    sub.s.agent("a2", "nested review", parentAgentId="a1", spawnDepth=2, started=T)
+    child = sub.s.folder / "agent-a2.jsonl"
+    sub.write(call(0, name="Agent", tid="toolu_n", description="nested review", prompt="go"))
+    for t, flagged, desc in [(400, 0, "past its own limit plus 1 min, but its child wrote at 300"),
+                             (659, 0, "still within the limit plus 1 min of the child's last write"),
+                             (660, 1, "the child silent too: flagged")]:
+        if t == 400:
+            os.utime(child, (T + 300, T + 300))
+        assert sub.at(t) == flagged, desc
+
+
+def test_an_old_declaration_is_not_named_again(sub):
+    sub.write(call(0, name="mcp__wheelhouse__quiet", tid="toolu_q", minutes=10, why="the sim runs"), result(1, "toolu_q"))
+    assert sub.at(600) == 1 and "the sim runs" in sub.notices()[0], "its own spell's notice names the period"
+    sub.write(thinking(700))
+    assert sub.at(1000) == 2 and "quiet period" not in sub.notices()[1], "a later spell's doesn't"
 
 
 def cells(item):

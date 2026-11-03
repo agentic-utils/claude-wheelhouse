@@ -154,6 +154,7 @@ class AgentWatcher:
         self.ready = False     # a first sync has finished
         self.error: str | None = None   # the last sync's failure
         self.followers: dict[str, watchdog.Follower] = {}   # each running item's own transcript (watch)
+        self.children: dict[str, list[Path]] = {}   # agent id: its own subagents' transcripts
 
     def sync(self, store, now: float | None = None, alive: bool = True) -> bool:
         """Reads what's new and brings the session's A items up to date. True if it
@@ -201,7 +202,7 @@ class AgentWatcher:
             if f.calls and asked is None:
                 asked = store.open_permissions(self.sid)
             approving = lambda call: any(call.asked() in body for body in asked or ())
-            due = f.deadline(quiet, approving)
+            due = f.deadline(quiet, approving, self.nested_at(aid) if f.nesting() else None)
             if due is None or now < due or f.told == f.last_at:
                 continue
             f.told = f.last_at   # this spell is flagged, by this wheelhouse or another
@@ -224,6 +225,16 @@ class AgentWatcher:
             if aid in self.agents:
                 self.agents[aid].status, self.agents[aid].note = "failed", DIED
         return bool(gone)
+
+    def nested_at(self, aid: str) -> float | None:
+        """When a subagent's own subagents last wrote, by their transcripts' mtimes."""
+        times = []
+        for log in self.children.get(aid, ()):
+            try:
+                times.append(log.stat().st_mtime)
+            except OSError:
+                continue
+        return max(times, default=None)
 
     def list_agents(self) -> None:
         folder = self.main.parent / self.sid / "subagents"
@@ -256,6 +267,8 @@ class AgentWatcher:
             return
         if d.get("parentAgentId") or (d.get("spawnDepth") or 1) > 1:
             self.skipped.add(aid)
+            if d.get("parentAgentId"):   # its writes keep its parent from counting as quiet (watch)
+                self.children.setdefault(d["parentAgentId"], []).append(log)
             return
         started = first_stamp(log) or datetime.fromtimestamp(launched, timezone.utc)
         kind = d.get("agentType") or "subagent"

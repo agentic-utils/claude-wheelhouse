@@ -269,7 +269,11 @@ SDK and tab sessions, rather than relying on the session to post them
   a tab's prompt leaves no trace, so a call there is held to its timeout. A `quiet(minutes,
   why)` call in the subagent's own transcript stretches the deadline to its end: the MCP
   server can't tell which agent called (they share the session's connection, and a call
-  carries no agent id), so where the call is written is what attributes it. Quiet, the item's
+  carries no agent id), so where the call is written is what attributes it; a call awaiting
+  approval is still due at the limit inside one, and a record after the period ends it. A turn
+  that has ended (an `end_turn` record, or its `SubagentHandback` answered) is never quiet: its
+  finish is the session's transcript's to report. While a subagent's own Agent call runs, its
+  children's transcripts' writes (by mtime) count as its own. Quiet, the item's
   `quiet_at` is set to the newest record's time and the session gets a notice naming the item,
   the agent id and its last action, in one transaction that acts only while `quiet_at` is
   NULL: one alert per quiet spell, across restarts and a second wheelhouse. A record newer

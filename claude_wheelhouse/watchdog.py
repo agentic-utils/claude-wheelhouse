@@ -33,6 +33,8 @@ MAX_TIMEOUT = 600     # seconds: the most a call's timeout counts for
 SETTING = "watchdog."   # + session id: its limit in minutes, as set_watchdog stored it
 QUIET_TOOL = re.compile(r"^mcp__\w*wheelhouse\w*__quiet$")
 ACTION_MAX = 160
+HANDBACK = {"SubagentHandback"}   # a subagent's final report: answered, its turn is over
+AGENT_TOOLS = {"Agent", "Task"}   # a subagent starting one of its own
 
 
 def minutes(value, what: str = "minutes") -> int:
@@ -96,6 +98,7 @@ class Follower:
     until: float | None = None     # a declared quiet period's end
     why: str = ""                  # and the reason it gave
     told: float | None = None      # the last_at of the spell last flagged
+    ended: bool = False            # its turn has ended (end_turn, or its hand-back answered): nothing to wait on
 
     def read(self) -> bool:
         """Whatever it has written since: True if any record."""
@@ -122,6 +125,10 @@ class Follower:
         if t is None:
             return False
         self.last_at = max(self.last_at or t, t)
+        if self.until and t > self.until:   # a record after a declared period: that period is over
+            self.until, self.why = None, ""
+        msg = rec.get("message") or {}
+        self.ended = rec.get("type") == "assistant" and msg.get("stop_reason") == "end_turn"
         content = (rec.get("message") or {}).get("content")
         for block in content if isinstance(content, list) else []:
             if not isinstance(block, dict):
@@ -137,19 +144,30 @@ class Follower:
                     except ValueError:
                         pass   # refused by the tool too
             elif block.get("type") == "tool_result":
-                self.calls.pop(block.get("tool_use_id"), None)
+                answered = self.calls.pop(block.get("tool_use_id"), None)
+                self.ended = self.ended or bool(answered and answered.name in HANDBACK)
             elif block.get("type") == "text" and rec.get("type") == "assistant" and block.get("text", "").strip():
                 self.action, self.action_call = f"wrote: {' '.join(block['text'].split())}"[:ACTION_MAX], None
         return True
 
-    def deadline(self, quiet: int, approving=lambda call: False) -> float | None:
-        """When it counts as quiet (epoch seconds), None before its first record."""
-        if self.last_at is None:
+    def nesting(self) -> bool:
+        """A subagent call of its own is in flight: its children's writes count as its own."""
+        return any(c.name in AGENT_TOOLS for c in self.calls.values())
+
+    def deadline(self, quiet: int, approving=lambda call: False, nested_at: float | None = None) -> float | None:
+        """When it counts as quiet (epoch seconds): None before its first record, or once its
+        turn has ended (its finish is read from the session's transcript). nested_at: the
+        newest write of a subagent of its own, while one runs. A call awaiting approval is due
+        at the limit even inside a declared quiet period: the person must answer it."""
+        if self.last_at is None or self.ended:
             return None
-        if not self.calls or any(approving(c) for c in self.calls.values()):
-            due = self.last_at + quiet
+        last = max(self.last_at, nested_at or 0)
+        if any(approving(c) for c in self.calls.values()):
+            return last + quiet
+        if not self.calls:
+            due = last + quiet
         else:
-            due = self.last_at + max(c.timeout(quiet) for c in self.calls.values()) + AFTER
+            due = last + max(c.timeout(quiet) for c in self.calls.values()) + AFTER
         return max(due, self.until) if self.until else due
 
     def last(self) -> str:
