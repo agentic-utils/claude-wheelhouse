@@ -197,19 +197,23 @@ class AgentWatcher:
         changed, quiet, asked = False, watchdog.limit(store, self.sid), None
         for aid in running:
             f = self.followers.setdefault(aid, watchdog.Follower(self.agents[aid].log))
-            if f.read() and f.last_at is not None:
-                changed = store.clear_quiet(self.sid, aid, watchdog.iso(f.last_at)) or changed
+            new = f.read()
+            if f.last_at is None:
+                continue
+            # its own subagents' writes, while one runs, count as its own
+            last = max(f.last_at, (self.nested_at(aid) if f.nesting() else None) or 0)
+            if new or (f.told is not None and last > f.told):
+                changed = store.clear_quiet(self.sid, aid, watchdog.iso(last)) or changed
             if f.calls and asked is None:
                 asked = store.open_permissions(self.sid)
             approving = lambda call: any(call.asked() in body for body in asked or ())
-            due = f.deadline(quiet, approving, self.nested_at(aid) if f.nesting() else None)
-            if due is None or now < due or f.told == f.last_at:
+            due = f.deadline(quiet, approving, last)
+            if due is None or now < due or f.told == last:
                 continue
-            f.told = f.last_at   # this spell is flagged, by this wheelhouse or another
+            f.told = last   # this spell is flagged, by this wheelhouse or another
             waits = any(approving(c) for c in f.calls.values())
-            changed = store.flag_quiet(self.sid, aid, watchdog.iso(f.last_at),
-                                       lambda ref: watchdog.message(ref, self.agents[aid].title, aid, f, now, waits)) \
-                or changed
+            changed = store.flag_quiet(self.sid, aid, watchdog.iso(last), lambda ref: watchdog.message(
+                ref, self.agents[aid].title, aid, f, now, waits, last)) or changed
         return changed
 
     def unfinished(self) -> bool:

@@ -177,11 +177,13 @@ class Follower:
         return f"{self.action} (still running)" if self.action_call in self.calls else self.action
 
 
-def message(ref: str, title: str, aid: str, follower: Follower, now: float, approving: bool) -> str:
-    """What the session is told, without the [wheelhouse] mark (a notice gets it delivered)."""
-    quiet = max(1, round((now - follower.last_at) / 60))
+def message(ref: str, title: str, aid: str, follower: Follower, now: float, approving: bool, last: float) -> str:
+    """What the session is told, without the [wheelhouse] mark (a notice gets it delivered). last:
+    its newest write, its own subagents' included."""
+    quiet = max(1, round((now - last) / 60))
     waits = " It is waiting on the person's approval." if approving else ""
-    declared = f" It had declared a quiet period, now over: {follower.why}." if follower.until and follower.why \
-        else " It had declared a quiet period, now over." if follower.until else ""
+    why = f": {follower.why}" if follower.why else ""
+    declared = "" if not follower.until else f" It had declared a quiet period, now over{why}." \
+        if now >= follower.until else f" It is inside a quiet period it declared, until {iso(follower.until)[11:16]}Z{why}."
     return (f"Subagent {ref} \"{title}\" (agent {aid}) has been quiet for {quiet} min. Its last action: "
             f"{follower.last()}.{waits}{declared} Steer it with SendMessage, or stop it and dispatch it again.")

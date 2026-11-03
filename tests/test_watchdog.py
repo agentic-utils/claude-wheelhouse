@@ -148,6 +148,19 @@ def test_a_subagent_of_its_own_writing_keeps_it_from_quiet(sub):
         if t == 400:
             os.utime(child, (T + 300, T + 300))
         assert sub.at(t) == flagged, desc
+    os.utime(child, (T + 700, T + 700))
+    assert (sub.at(701), sub.item()["quiet_at"]) == (1, None), "the child writing again clears the amber"
+    assert sub.at(1060) == 2, "and a new spell is told again"
+
+
+def test_an_approval_inside_a_declared_period_says_the_period_is_running(sub):
+    sub.write(call(0, name="mcp__wheelhouse__quiet", tid="toolu_q", minutes=20, why="sim"), result(1, "toolu_q"),
+              call(2, **SIM))
+    approval(sub)
+    assert sub.at(302) == 1, "flagged at the limit"
+    for part, desc in [("waiting on the person's approval", "the approval"),
+                       ("inside a quiet period it declared, until", "the period, still running"), (": sim.", "its why")]:
+        assert part in sub.notices()[0], desc
 
 
 def test_an_old_declaration_is_not_named_again(sub):
