@@ -1,4 +1,4 @@
-<!-- fact sheet stamp: version 179, 2026-11-03T00:11:32Z, source ff84a931bf7bb694 (make facts restamps it: AGENTS.md) -->
+<!-- fact sheet stamp: version 180, 2026-11-03T00:50:47Z, source 93b75e6f9afba642 (make facts restamps it: AGENTS.md) -->
 # Wheelhouse fact sheet
 
 What the helper chat knows before any question. The guide below is written by hand; the
@@ -378,6 +378,7 @@ The app's command line args (make args). Give them to make run in ARGS, for exam
 - Compaction has a second scene, picked per cycle: Star Trek's engine room, with Scotty thumping the console as the warp core races and the CONTEXT gauge falls to a sliver, Kirk pacing and Spock unmoved, and the bridge crew's lines between.
 - Compaction has a third scene: Red Dwarf, with Holly's face flaking off the monitor as her MEMORY falls from three million years to three lines, Kryten panicking, Rimmer ordering Red Alert and the Cat checking his reflection, and the crew's lines between.
 - Compaction has a fourth scene: Men in Black, with K's neuralyzer flooding the street white, the bystanders coming out of it blank and smiling as the WIPED readout climbs, the cover story stamped once it's done, and the agents' lines between.
+- Compaction has a fifth scene: The Hitchhiker's Guide to the Galaxy, with two missiles turned into a sperm whale and a bowl of petunias and the ground rushing up as the ALTITUDE readout falls, DON'T PANIC over it all, and the crew's lines between.
 - The keepalive comes every 50 minutes, ahead of Claude Code's idle compaction at about 54.
 - A session run in the wheelhouse that was being kept warm is compacted when the keepalive's hours run out, while its cache is warm; a tab idle-compacts then, past 150k tokens.
 - Sessions keep a handoff with the write_handoff tool, shown as their handoff doc; Stop & Forget and Compact ask for one.

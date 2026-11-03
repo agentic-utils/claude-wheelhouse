@@ -915,7 +915,10 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
   failed), or Men in Black, where K raises the neuralyzer, its little red light charges and the
   street floods white, the bystanders coming out of it blank and smiling as the WIPED readout
   climbs and an alien ducks behind a bin, the cover story stamped once compacted (the
-  bystanders shouting "ALIENS!" if it didn't take). With the animation off (`ANIMATION_FPS=0`)
+  bystanders shouting "ALIENS!" if it didn't take), or The Hitchhiker's Guide to the Galaxy,
+  where the Improbability Drive turns two missiles into a sperm whale and a bowl of petunias
+  over Magrathea and the ground rushes up to meet them as the ALTITUDE readout falls, DON'T
+  PANIC over it all (the whale flickering back into a missile if it stalled). With the animation off (`ANIMATION_FPS=0`)
   each stage is a still. When the cycle ends the dock closes and its last frame stays in the conversation where
   the art was first drawn, with who asked or what came of it under it. The session's notes turn
   shows as one dim line ("writing its notes for after compaction · 12 lines"), never the notes
