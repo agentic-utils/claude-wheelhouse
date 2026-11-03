@@ -1,4 +1,4 @@
-<!-- fact sheet stamp: version 192, 2026-11-03T02:12:09Z, source f7ee676966a62eac (make facts restamps it: AGENTS.md) -->
+<!-- fact sheet stamp: version 193, 2026-11-03T03:01:58Z, source 6658b11398408e4b (make facts restamps it: AGENTS.md) -->
 # Wheelhouse fact sheet
 
 What the helper chat knows before any question. The guide below is written by hand; the
@@ -380,6 +380,7 @@ The app's command line args (make args). Give them to make run in ARGS, for exam
 - Compaction has a fourth scene: Men in Black, with K's neuralyzer flooding the street white, the bystanders coming out of it blank and smiling as the WIPED readout climbs, the cover story stamped once it's done, and the agents' lines between.
 - Compaction has a fifth scene: The Hitchhiker's Guide to the Galaxy, with two missiles turned into a sperm whale and a bowl of petunias and the ground rushing up as the ALTITUDE readout falls, DON'T PANIC over it all, and the crew's lines between.
 - Compaction has a sixth scene: Indiana Jones and the Temple of Doom, with a ceiling of spikes grinding down on Indy and Short Round as the HEADROOM readout falls, Willie screaming at the bugs as she feels for the lever, and the cast's lines between.
+- Compaction has a seventh scene: Wallace and Gromit's The Wrong Trousers, with Gromit laying track a piece ahead of the toy train as the TRACK left in his box falls, Wallace cheerfully oblivious, Feathers McGraw on the rear carriage, and the cast's lines between.
 - The keepalive comes every 50 minutes, ahead of Claude Code's idle compaction at about 54.
 - A session run in the wheelhouse that was being kept warm is compacted when the keepalive's hours run out, while its cache is warm; a tab idle-compacts then, past 150k tokens.
 - Sessions keep a handoff with the write_handoff tool, shown as their handoff doc; Stop & Forget and Compact ask for one.

@@ -921,7 +921,10 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
   PANIC over it all (the whale flickering back into a missile if it stalled), or Indiana Jones
   and the Temple of Doom, where a ceiling of spikes grinds down on Indy and Short Round as the
   HEADROOM readout falls while Willie, out in the tunnel, screams at the bugs and feels in two
-  square holes for the lever (the ceiling jamming if she picked the wrong one). With the animation off (`ANIMATION_FPS=0`)
+  square holes for the lever (the ceiling jamming if she picked the wrong one), or Wallace and
+  Gromit's The Wrong Trousers, where Gromit rides the toy train at full tilt, laying track a piece
+  ahead of the wheels as the TRACK left in his box falls, Wallace cheerfully oblivious and Feathers
+  McGraw on the rear carriage (the train running off the end of the track if it stalled). With the animation off (`ANIMATION_FPS=0`)
   each stage is a still. When the cycle ends the dock closes and its last frame stays in the conversation where
   the art was first drawn, with who asked or what came of it under it. The session's notes turn
   shows as one dim line ("writing its notes for after compaction · 12 lines"), never the notes
