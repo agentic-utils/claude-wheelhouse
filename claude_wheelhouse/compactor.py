@@ -8,6 +8,7 @@ Never imports Textual.
 
 from __future__ import annotations
 
+import os
 import random
 from typing import NamedTuple
 
@@ -20,9 +21,15 @@ ENDS = ("completed", "failed", "cancelled")
 LINGER = 8   # seconds a cycle's final frame stays on the overlay after its end (#324)
 
 
+FORCE = "WHEELHOUSE_SCENE"   # names the scene every cycle plays (#340), in the hub's process: for watching one
+
+
 def scene_for(cycle_id: str, previous: str | None) -> Scene:
-    """The cycle's scene (D253): seeded by its id, so every app and every refresh agrees on it,
-    and never previous (the session's last cycle's scene, by name) while there is another."""
+    """The cycle's scene (D253): the one WHEELHOUSE_SCENE names, if it names one; else seeded by
+    its id, so every app and every refresh agrees on it, and never previous (the session's last
+    cycle's scene, by name) while there is another."""
+    if (forced := SCENES.get(os.environ.get(FORCE, ""))) is not None:
+        return forced
     names = sorted(n for n in SCENES if n != previous) or sorted(SCENES)
     return SCENES[random.Random("scene " + cycle_id).choice(names)]
 

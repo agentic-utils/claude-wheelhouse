@@ -1,4 +1,4 @@
-<!-- fact sheet stamp: version 227, 2026-11-03T17:38:57Z, source 2a58146f67f296ad (make facts restamps it: AGENTS.md) -->
+<!-- fact sheet stamp: version 229, 2026-11-03T20:31:43Z, source d50b31b07b326e93 (make facts restamps it: AGENTS.md) -->
 # Wheelhouse fact sheet
 
 What the helper chat knows before any question. The guide below is written by hand; the
@@ -387,7 +387,8 @@ The app's command line args (make args). Give them to make run in ARGS, for exam
 - Compaction has a second scene, picked per cycle: Star Trek's engine room, with Scotty thumping the console as the warp core races and the CONTEXT gauge falls to a sliver, Kirk pacing and Spock unmoved, and the bridge crew's lines between.
 - Compaction has a third scene: Red Dwarf, with Holly's face flaking off the monitor as her MEMORY falls from three million years to three lines, Kryten panicking, Rimmer ordering Red Alert and the Cat checking his reflection, and the crew's lines between.
 - Compaction has a fourth scene: Men in Black, with K's neuralyzer flooding the street white, the bystanders coming out of it blank and smiling as the WIPED readout climbs, the cover story stamped once it's done, and the agents' lines between.
-- Compaction has a fifth scene: The Hitchhiker's Guide to the Galaxy, with two missiles turned into a sperm whale and a bowl of petunias and the ground rushing up as the ALTITUDE readout falls, DON'T PANIC over it all, and the crew's lines between.
+- Compaction has a fifth scene: The Hitchhiker's Guide to the Galaxy, with two missiles turned into a sperm whale and a bowl of petunias and the ground rushing up as the ALTITUDE readout falls, DON'T PANIC over it all, the petunias thinking "Oh no, not again!" just before the whale lands and bursts over the lens, and the crew's lines between.
+- make scene NAME=hitchhikers plays a compaction scene in the terminal as the app shows it, without compacting anything; WHEELHOUSE_SCENE=hitchhikers makes every compaction play that one.
 - Compaction has a sixth scene: Indiana Jones and the Temple of Doom, with a ceiling of spikes grinding down on Indy and Short Round as the HEADROOM readout falls, Willie screaming at the bugs as she feels for the lever, and the cast's lines between.
 - Compaction has a seventh scene: Wallace and Gromit's The Wrong Trousers, with Gromit laying track a piece ahead of the toy train as the TRACK left in his box falls, Wallace cheerfully oblivious, Feathers McGraw on the rear carriage, and the cast's lines between.
 - Compaction has an eighth scene: Doctor Who's Flatline, with the TARDIS shrinking a size at a time with the Twelfth Doctor inside as its OUTSIDE height falls, Clara ending up carrying it in her handbag, Rigsy and the Boneless about, and the cast's lines between.

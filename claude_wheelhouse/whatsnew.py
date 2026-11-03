@@ -246,7 +246,11 @@ FEATURES: tuple[Feature, ...] = (
     Feature("compactor-hitchhikers", UNRELEASED, ADVANCED,
             note="Compaction has a fifth scene: The Hitchhiker's Guide to the Galaxy, with two missiles turned "
                  "into a sperm whale and a bowl of petunias and the ground rushing up as the ALTITUDE readout "
-                 "falls, DON'T PANIC over it all, and the crew's lines between."),
+                 "falls, DON'T PANIC over it all, the petunias thinking \"Oh no, not again!\" just before the whale "
+                 "lands and bursts over the lens, and the crew's lines between."),
+    Feature("scene-preview", UNRELEASED, ADVANCED,
+            note="make scene NAME=hitchhikers plays a compaction scene in the terminal as the app shows it, "
+                 "without compacting anything; WHEELHOUSE_SCENE=hitchhikers makes every compaction play that one."),
     Feature("compactor-temple-of-doom", UNRELEASED, ADVANCED,
             note="Compaction has a sixth scene: Indiana Jones and the Temple of Doom, with a ceiling of spikes "
                  "grinding down on Indy and Short Round as the HEADROOM readout falls, Willie screaming at the "

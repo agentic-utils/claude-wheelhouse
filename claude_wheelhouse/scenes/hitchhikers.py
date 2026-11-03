@@ -2,8 +2,8 @@
 compaction is the ground rushing up. Two missiles close on the Heart of Gold above Magrathea; the
 Infinite Improbability Drive turns them into a sperm whale and a bowl of petunias, and the sky
 shrinks as the ground climbs to meet them, the ALTITUDE readout falling, DON'T PANIC over it all
-in large friendly letters. Once compacted the whale has met the ground and the petunias have a
-thought.
+in large friendly letters. Once compacted the petunias have a thought as they fall the last of
+the way, then the whale meets the ground and bursts over the lens (#340).
 
 Each excerpt is one line or a two-line exchange, drawn at random without repeats for the length
 of one compaction cycle (compactor.schedule).
@@ -137,11 +137,89 @@ MORPH = 2 * TICKS   # frames of improbability before the missiles are a whale an
 RISE = 4   # rows the ground climbs to meet them; a long /compact gets close, never there
 HEIGHT = 30000   # feet above Magrathea when the drive cuts out
 CLOSEST = 0.9   # the most of the way the ground gets while compacting: 3,000 ft short
-STILL = {"preparing": 4.0, "compacting": (MORPH + 4 * TICKS) / TICKS, "completed": 0.0,
-         "failed": 0.0, "cancelled": 3.0}   # compacting: the ground half way up
+STILL = {"preparing": 4.0, "compacting": (MORPH + 4 * TICKS) / TICKS, "completed": 6.0,
+         "failed": 0.0, "cancelled": 3.0}   # compacting: the ground half way up; completed: mid-smear
 THOUGHTS = ("What's happening?", "Er, excuse me, who am I?", "Hello?", "Why am I here?",
             "What's my purpose in life?")
 RUSHING = "What's this thing suddenly coming towards me very fast?"
+FALLING = 2 * TICKS   # frames of the fall left once compacted, before the whale lands
+THOUGHT = "Oh no, not again!"   # the petunias' one thought, over them while they fall
+THINK_AT = (SAY, 37)   # its bubble's row and first column, clear of DON'T PANIC
+
+# The wet thud (#340): the whale bursts where it lands and its chunks fly at the viewer, growing as
+# they come, until they hit the lens. There they splat, over everything else in the frame, and
+# slowly smear their way down it, each leaving a thinning streak, drips pulling ahead. All of it
+# fixed here, so a frame is a pure function of t. A space in a splat is clear lens
+IMPACT = (4, 17)   # where the whale meets the ground (its middle, on the ground's top row)
+FLIGHT = 4   # frames from the impact to the lens
+GROWING = ".oO"   # a chunk as it comes at the viewer: a speck, a lump, a blob
+SPLATS = (   # (shape, its top row and first column on the lens, launch frame, slide and drip in rows a second, drip column)
+    ((" .%@@%.", "%@@@@@@%", " '%@@%'"), (2, 2), 0, 0.30, 1.1, 3),
+    ((".@@,", "@@@@%", " '@'"), (6, 19), 1, 0.45, 0.9, 2),
+    (("o@%", " '"), (2, 28), 0, 0.20, 1.4, 1),
+    (("  ,.", ".%@@@%:", " :@@%", "  '"), (3, 49), 2, 0.35, 0.8, 3),
+    (("%@.", "@@@%"), (7, 38), 1, 0.55, 1.2, 1),
+    ((" .@%%.", ":@@@@@", "  '%@"), (6, 3), 2, 0.25, 1.0, 4),
+    (("@%", "'"), (1, 56), 1, 0.40, 1.3, 0),
+)
+DEBRIS = ((-4, -30), (-5, 8), (3, -25), (4, 30), (-3, 35), (5, -8))   # chunks that miss the lens: where they head, from IMPACT
+HOLD = 3   # frames a splat clings before it starts to slide
+TEXT_ROWS = (READOUT, BIG_HEIGHT - 1)   # the readout and the caption show through the lens
+
+
+def chunk(c: Canvas, f: int, launch: int, to: tuple[int, int]) -> None:
+    """A chunk of whale in flight from IMPACT towards to, f frames in, growing as it comes."""
+    p = (f - launch + 1) / FLIGHT
+    if 0 < p <= 1:   # its last frame at the lens, the splat the next
+        row, col = (round(IMPACT[i] + (to[i] - IMPACT[i]) * p * p) for i in (0, 1))
+        c.put(row, col, GROWING[min(len(GROWING) - 1, int(p * len(GROWING)))], "r")
+
+
+def splat(f: int, shape: tuple[str, ...], at: tuple[int, int], launch: int, slide: float, drip: float,
+          dcol: int) -> list[tuple[int, int, str]]:
+    """The cells of one splat on the lens f frames after the impact (row, col, glyph): its shape
+    sliding down at slide rows a second once it has clung HOLD frames, its streak thinning above
+    it (|, then :, then '), a drip running ahead of it at drip rows a second."""
+    landed = f - launch - FLIGHT
+    if landed < 0:
+        return []
+    s = max(0, landed - HOLD) / TICKS
+    top, left = at
+    down = int(slide * s)
+    cells = [(top + down + r, left + k, ch) for r, line in enumerate(shape) for k, ch in enumerate(line) if ch != " "]
+    if landed < 2:   # the instant it hits: a spray of droplets round it
+        width = max(map(len, shape))
+        cells += [(top - 1, left + width // 2, "."), (top + 1, left - 1, "."), (top + len(shape), left + width, "'")]
+    cols = [left + k for k, ch in enumerate(max(shape, key=lambda line: len(line.replace(" ", "")))) if ch != " "]
+    middle = cols[len(cols) // 2:len(cols) // 2 + 1]
+    for back in range(1, down + 1):
+        streak = (cols[1:-1] if back <= 1 else cols[1:-1:2] if back <= 3 else []) or middle
+        cells += [(top + down - back, col, "|" if back <= 1 else ":" if back <= 3 else "'") for col in streak if back <= 6]
+    bottom = top + down + len(shape)
+    run = int(drip * s) - down
+    for r in range(bottom, bottom + run):
+        cells.append((r, left + dcol, "o" if r == bottom + run - 1 else "|" if r - bottom < 2 else ":"))
+    return cells
+
+
+def lens(c: Canvas, f: int) -> None:
+    """The whale, after it lands: chunks in flight, then splatted on the lens over everything
+    else, smearing down it. The text rows show through (TEXT_ROWS), so every word stays read."""
+    if f < 2:
+        for dr, dc in ((-1, 0), (0, -2), (0, 2), (-1, -3), (-1, 3)):
+            c.put(IMPACT[0] + dr, IMPACT[1] + dc, "*" if (f + dr + dc) % 2 else "#", "f")
+    for shape, at, launch, *_ in SPLATS:
+        chunk(c, f, launch, (at[0] + len(shape) // 2, at[1] + len(shape[0]) // 2))
+    for k, to in enumerate(DEBRIS):
+        chunk(c, f, k % 3, (IMPACT[0] + to[0], IMPACT[1] + to[1]))
+    shown = {row: (min(i for i, ch in enumerate(c.cells[row]) if ch != " "),
+                   max(i for i, ch in enumerate(c.cells[row]) if ch != " "))
+             for row in TEXT_ROWS if c.cells[row].count(" ") < BIG_WIDTH}
+    for spec in SPLATS:
+        for row, col, ch in splat(f, *spec):
+            if row in shown and shown[row][0] <= col <= shown[row][1]:
+                continue
+            c.put(row, col, ch, "r")
 
 
 def fallen(state: str, f: int) -> float:
@@ -179,10 +257,10 @@ def sky(c: Canvas, top: int, f: int) -> None:
             c.put(row, col, "·" if i % 3 else "*", "s")
 
 
-def whale(c: Canvas, f: int, falling: bool) -> None:
-    """The sperm whale, its flukes flapping and its eye blinking, wind streaming past while it
-    falls."""
-    row, col = WHALE_AT
+def whale(c: Canvas, f: int, falling: bool, row: int = WHALE_AT[0]) -> None:
+    """The sperm whale, its top on row, its flukes flapping and its eye blinking, wind streaming
+    past while it falls."""
+    col = WHALE_AT[1]
     for r, text in enumerate(WHALE):
         c.put(row + r, col, text, "c")
     if f // 3 % 2:
@@ -232,7 +310,7 @@ def readout(c: Canvas, state: str, f: int) -> None:
         power = 276709 * (f + 1) ** 2 // MORPH ** 2   # 2^276,709 on the last frame before the whale
         c.put(READOUT, 2, "IMPROBABILITY", "h")
         c.put(READOUT, 16, f"2^{power:,} to 1 against", "c")
-    elif state == "completed":
+    elif state == "completed" and f >= FALLING:
         c.put(READOUT, 4, "And the rest, after a sudden wet thud, was silence.", "c")
     elif state == "failed":
         c.put(READOUT, 2, "IMPROBABILITY DRIVE", "h")
@@ -240,7 +318,8 @@ def readout(c: Canvas, state: str, f: int) -> None:
             c.put(READOUT, 22, "** STALLED **", "r")
         c.put(READOUT, 37, f"ALTITUDE {altitude(0.0)}", "c")
     else:
-        fall = fallen(state, f) if state == "compacting" else sunk(f) / RISE
+        fall = fallen(state, f) if state == "compacting" else CLOSEST + (1 - CLOSEST) * f / FALLING \
+            if state == "completed" else sunk(f) / RISE
         full = int(10 * fall)
         c.put(READOUT, 2, "ALTITUDE", "h")
         c.put(READOUT, 11, "[" + "█" * full + "·" * (10 - full) + "]", "c")
@@ -283,17 +362,23 @@ def scene(state: str, t: float, animate: bool = True) -> Frame:
         whale(c, f, falling=True)
         petunias(c, f)
         say(c, WHALE_AT[1] + 10, RUSHING if fall > 0.6 else THOUGHTS[beat % len(THOUGHTS)])
+    elif state == "completed" and f < FALLING:   # the last of the fall: the petunias have a thought
+        top = FLOOR - RISE + 1   # a row of air under them: they touch the ground only as the whale bursts
+        sky(c, top, f)
+        ground(c, top, f, dust=True)
+        whale(c, f, falling=True)
+        petunias(c, f)
+        c.put(THINK_AT[0], THINK_AT[1], f"( {THOUGHT} )", "s")
+        c.put(THINK_AT[0], THINK_AT[1] + 2, THOUGHT, "f")
     elif state == "completed":
         top = FLOOR - RISE
         sky(c, top, f)
         ground(c, top, f, dust=False)
         c.put(top - 1, WHALE_AT[1], FLAT, "c")
         for k, col in enumerate((WHALE_AT[1] - 2, WHALE_AT[1] + 10, WHALE_AT[1] + len(FLAT) + 1)):
-            if f < 2 * TICKS and (f + k) % 2:
+            if f - FALLING < 2 * TICKS and (f + k) % 2:
                 c.put(top - 2, col, "*", "k")
         petunias(c, f, row=top - 3)
-        if f % (4 * TICKS) < 3 * TICKS:
-            say(c, PETUNIAS_AT[1] + 1, "Oh no, not again.")
     elif state == "failed":
         sky(c, FLOOR, f)
         ground(c, FLOOR, f, dust=False)
@@ -316,6 +401,8 @@ def scene(state: str, t: float, animate: bool = True) -> Frame:
             say(c, WHALE_AT[1] + 10, "Oh. Never mind.")
     readout(c, state, f)
     c.put(BIG_HEIGHT - 1, 0, CAPTIONS.get(state, "").center(BIG_WIDTH), " ")
+    if state == "completed" and f >= FALLING:
+        lens(c, f - FALLING)
     return c.done()
 
 

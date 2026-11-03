@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help args install run stop tutorial test stamp facts hooks helper-eval uv-check
+.PHONY: help args install run scene stop tutorial test stamp facts hooks helper-eval uv-check
 
 # where Astral's installer puts uv, which isn't on PATH until a new shell
 export PATH := $(PATH):$(HOME)/.local/bin
@@ -46,6 +46,9 @@ $(STAMP): pyproject.toml uv.lock $(wildcard modules/*/pyproject.toml) | uv-check
 
 run: uv-check $(STAMP) ## Run the wheelhouse app, installing first if needed (ARGS="..." passes args: make args lists them)
 	$(RUN) claude-wheelhouse $(ARGS)
+
+scene: uv-check $(STAMP) ## Play a compaction scene in this terminal as the app shows it, until Ctrl+C (make scene NAME=hitchhikers; no NAME lists them)
+	$(RUN) claude-wheelhouse scene "$(NAME)" $(ARGS)
 
 stop: uv-check $(STAMP) ## Stop the daemon (quit the app first, or it starts a new one)
 	$(RUN) claude-wheelhouse daemon --stop
