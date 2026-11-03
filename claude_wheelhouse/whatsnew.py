@@ -257,6 +257,10 @@ FEATURES: tuple[Feature, ...] = (
             note="Compaction has an eighth scene: Doctor Who's Flatline, with the TARDIS shrinking a size at a "
                  "time with the Twelfth Doctor inside as its OUTSIDE height falls, Clara ending up carrying it in "
                  "her handbag, Rigsy and the Boneless about, and the cast's lines between."),
+    Feature("compactor-goldfinger", UNRELEASED, ADVANCED,
+            note="Compaction has a ninth scene: Goldfinger's scrapyard, with Mr Solo's Lincoln squeezed towards a "
+                 "cube in the crusher as its LINCOLN length falls, Oddjob at the lever, Solo shouting from the "
+                 "sidelines, and the cast's lines between."),
     Feature("keepalive-50", UNRELEASED, ADVANCED,
             note="The keepalive comes every 50 minutes, ahead of Claude Code's idle compaction at about 54."),
     Feature("compact-at-keepalive-end", UNRELEASED, ADVANCED,
