@@ -287,7 +287,7 @@ def parser() -> argparse.ArgumentParser:
     sub.add_parser("token", help="print the daemon's token, for a client on another machine (--connect)")
     scene = sub.add_parser("scene", help="play a compaction scene in this terminal, as the app shows it, until "
                            "Ctrl+C (no daemon or session needed)")
-    scene.add_argument("name", help="the scene's name (an unknown one lists them)")
+    scene.add_argument("name", nargs="?", default="", help="the scene's name (none lists them)")
     scene.add_argument("--compacting", type=float, default=20.0, metavar="SECONDS",
                        help="how long its compacting stage runs (default 20)")
     scene.add_argument("--end", choices=("completed", "failed", "cancelled"), default="completed",
@@ -397,6 +397,11 @@ def main() -> None:
         modules_command(args.action, args.name)
     elif args.cmd == "scene":
         from .scenes import SCENES
+        if not args.name:
+            print("\n".join(sorted(SCENES)))
+            return
+        if args.compacting <= 0:
+            sys.exit("claude-wheelhouse: --compacting takes a number of seconds above 0")
         if args.name not in SCENES:
             sys.exit(f"claude-wheelhouse: no scene {args.name!r}: one of {', '.join(sorted(SCENES))}")
         from .preview import main as preview

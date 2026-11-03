@@ -170,7 +170,7 @@ TEXT_ROWS = (READOUT, BIG_HEIGHT - 1)   # the readout and the caption show throu
 def chunk(c: Canvas, f: int, launch: int, to: tuple[int, int]) -> None:
     """A chunk of whale in flight from IMPACT towards to, f frames in, growing as it comes."""
     p = (f - launch + 1) / FLIGHT
-    if 0 < p < 1:
+    if 0 < p <= 1:   # its last frame at the lens, the splat the next
         row, col = (round(IMPACT[i] + (to[i] - IMPACT[i]) * p * p) for i in (0, 1))
         c.put(row, col, GROWING[min(len(GROWING) - 1, int(p * len(GROWING)))], "r")
 

@@ -22,10 +22,21 @@ def test_wheelhouse_scene_forces_the_pick(monkeypatch, forced, previous, want, d
     assert picks == want, desc
 
 
-def test_the_preview_refuses_an_unknown_scene_and_lists_them(monkeypatch):
-    monkeypatch.setattr(sys, "argv", ["claude-wheelhouse", "scene", "nosuch"])
-    with pytest.raises(SystemExit, match="no scene 'nosuch': one of " + ", ".join(sorted(SCENES))):
+@pytest.mark.parametrize("argv, refused, desc", [
+    (["nosuch"], "no scene 'nosuch': one of " + ", ".join(sorted(SCENES)), "an unknown name: the valid ones listed"),
+    (["hitchhikers", "--compacting", "0"], "--compacting takes a number of seconds above 0", "no compacting stage"),
+])
+def test_the_preview_refuses_an_unknown_scene_and_lists_them(monkeypatch, argv, refused, desc):
+    monkeypatch.setattr(sys, "argv", ["claude-wheelhouse", "scene", *argv])
+    with pytest.raises(SystemExit, match=refused):
         cli.main()
+        pytest.fail(desc)
+
+
+def test_the_preview_with_no_name_lists_the_scenes(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["claude-wheelhouse", "scene"])
+    cli.main()
+    assert capsys.readouterr().out.split() == sorted(SCENES)
 
 
 @pytest.mark.parametrize("at, state, desc", [

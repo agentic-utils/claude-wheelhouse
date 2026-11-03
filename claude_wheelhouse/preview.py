@@ -61,7 +61,6 @@ class ScenePreview(App):
         yield CompactorOverlay(id="compactor-overlay")
 
     def on_mount(self) -> None:
-        self.title = f"{self.scene}: Ctrl+C, q or Esc to quit"
         self.overlay = self.query_one(CompactorOverlay)
         self.overlay.under = self.query_one("#conversation", VerticalScroll)
         self.lines = self.query_one("#lines", Static)
