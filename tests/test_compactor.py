@@ -1,4 +1,4 @@
-"""Tests for the compaction cycle's scenes: the pick, the excerpts, the stage art and the big frames."""
+"""Tests for the compaction cycle's scenes: the pick, the excerpts, the stage lines, the stills and the big frames."""
 
 import json
 import pathlib
@@ -96,19 +96,19 @@ def test_every_stages_rows_are_the_same_width(scene, state):
     assert {cell_len(r) for r in rows} == {compactor.WIDTH} and compactor.WIDTH <= 40, f"{scene.name} {state}: {rows}"
 
 
-@pytest.mark.parametrize("state, origin, note, want, desc", [
-    ("requested", "you (Compact)", "", None, "requested: no art"),
-    ("preparing", "you (Compact)", "", "asked for by you (Compact) · 10:39Z", "who asked, under the art"),
-    ("completed", "you (Compact)", "220k → 40k", "220k → 40k · 10:41Z", "what came of it"),
-    ("completed", None, "", "10:41Z", "nothing to say: the time alone"),
+@pytest.mark.parametrize("state, note, took, want, desc", [
+    ("requested", "", 0, None, "requested: no line, usually under a second"),
+    ("preparing", "", 0.4, "Compaction: preparing (notes turn)", "preparing"),
+    ("compacting", "", 30, "Compaction: compacting", "compacting"),
+    ("completed", "", 102, "Compaction: completed in 1 m 42 s", "completed, with how long it took"),
+    ("completed", "220k → 40k", 42.4, "Compaction: completed in 42 s · 220k → 40k", "completed, under a minute, its note after"),
+    ("completed", "", 3780, "Compaction: completed in 1 h 3 m", "completed, over an hour"),
+    ("failed", "its host stopped", 5, "Compaction: failed: its host stopped", "failed, with the reason"),
+    ("cancelled", "aborted from the notes question", 5, "Compaction: cancelled: aborted from the notes question", "cancelled, with the reason"),
 ])
-def test_stage_text_puts_the_detail_under_the_art(state, origin, note, want, desc):
-    stamp = "10:39Z" if state == "preparing" else "10:41Z"
-    text = compactor.stage_text(SW, state, origin, note, stamp)
-    if want is None:
-        assert text is None, desc
-    else:
-        assert text == SW.walls[state] + "\n" + want, desc
+def test_stage_line_is_plain_and_sober(state, note, took, want, desc):
+    """#324: the conversation's line per stage, no art: the overlay has that."""
+    assert compactor.stage_line(state, note, took) == want, desc
 
 
 @pytest.mark.parametrize("windows, at_least, desc", [
@@ -171,21 +171,19 @@ def test_the_crew_and_the_dianoga_show():
 
 @EVERY
 @pytest.mark.parametrize("state", STAGES)
-def test_dock_text_and_state_of_round_trip(scene, state):
-    """The dock entry carries its scene; a stage's art is recognised against every scene's."""
-    text = compactor.dock_text(scene, state, 1761990000.5, "you (Compact)", "", "23:30Z")
-    assert compactor.docked(text)[:3] == (scene, state, 1761990000.5)
-    assert compactor.state_of(compactor.stage_text(scene, state, None, "", "23:30Z")) == (scene, state)
-    assert compactor.state_of("Han: hello") is None
+def test_dock_text_round_trips(scene, state):
+    """The dock entry carries its scene, stage, start, cycle and newest excerpt (#304, #324)."""
+    excerpt = scene.excerpts[0]
+    text = compactor.dock_text(scene, state, 1761990000.5, "c0ffee01", excerpt)
+    assert compactor.docked(text) == (scene, state, 1761990000.5, "c0ffee01", excerpt)
 
 
 @pytest.mark.parametrize("text, want, desc", [
-    ("compacting\n1761990000.5\nasked for by you (Compact) · 23:30Z", (SW, "compacting", 1761990000.5, "asked for by you (Compact) · 23:30Z"), "a daemon on older code: no scene line, Star Wars"),
-    ("compacting\n1761990000.5\n\nstar_wars", (SW, "compacting", 1761990000.5, ""), "no dim line, the scene still read"),
-    ("preparing\nnot a time\n\nunknown", (SW, "preparing", 0.0, ""), "a scene no longer registered, a bad time: the first scene, time zero"),
+    ("requested\n1761990000.5\nc0ffee01\nstar_wars", (SW, "requested", 1761990000.5, "c0ffee01", ()), "no excerpt due yet"),
+    ("compacting\n1761990000.5\nc0ffee01\nstar_wars\nHan: one\nLeia: two", (SW, "compacting", 1761990000.5, "c0ffee01", ("Han: one", "Leia: two")), "a two-line excerpt"),
+    ("preparing\nnot a time\nc0ffee01\nunknown", (SW, "preparing", 0.0, "c0ffee01", ()), "a scene no longer registered, a bad time: the first scene, time zero"),
 ])
 def test_docked_reads_every_dock_entry(text, want, desc):
-    """#304: the scene goes last, so the stage, start and line stay where older code reads them."""
     assert compactor.docked(text) == want, desc
 
 
@@ -237,8 +235,6 @@ def golden_cases(scene: Scene) -> dict:
         cases[f"caption {state}"] = lambda s=state: scene.captions[s]
     for state in ("requested", *scene.walls):
         cases[f"walls {state}"] = lambda s=state: scene.walls.get(s)
-        cases[f"stage_text {state}"] = lambda s=state: compactor.stage_text(scene, s, "you (Compact)", "", "10:39Z")
-        cases[f"stage_text {state} note"] = lambda s=state: compactor.stage_text(scene, s, None, "220k → 40k", "10:41Z")
     cases["excerpts"] = lambda: list(map(list, scene.excerpts))
     for cid, windows in (("c0ffee01", [(0, 25), (25, 100)]), ("deadbeef", [(0, 300)])):
         cases[f"schedule {cid}"] = lambda c=cid, w=windows: [[t, list(e)] for t, e in compactor.schedule(c, w, scene)]

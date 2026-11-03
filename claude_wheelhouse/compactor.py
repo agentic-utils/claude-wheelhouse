@@ -1,13 +1,15 @@
 """A compaction's scene (#244, #304): what is shown while a session compacts, and when. Each
-cycle plays one scene (scenes/, picked by scene_for): its stage art, the big animated frame the
-dock pins (#287) and its cast's excerpts, dealt without repeats for the length of the cycle
-(schedule). This module holds what every scene shares: the pick, the cadence and the stages.
+cycle plays one scene (scenes/, picked by scene_for): the big animated frame and its cast's
+excerpts, dealt without repeats for the length of the cycle (schedule), which the app overlays
+on the conversation (#324), while the conversation has a plain line per stage (stage_line).
+This module holds what every scene shares: the pick, the cadence and the stages.
 Never imports Textual.
 """
 
 from __future__ import annotations
 
 import random
+from typing import NamedTuple
 
 from .scenes import SCENES, Scene
 from .scenes.base import BIG_HEIGHT, BIG_WIDTH, ROLES, TICKS, WIDTH   # shared by every scene: the app reads them here
@@ -15,6 +17,7 @@ from .scenes.base import BIG_HEIGHT, BIG_WIDTH, ROLES, TICKS, WIDTH   # shared b
 CADENCE = (20, 30)
 SHOWN = ("preparing", "compacting")   # the states the crew panic through
 ENDS = ("completed", "failed", "cancelled")
+LINGER = 8   # seconds a cycle's final frame stays on the overlay after its end (#324)
 
 
 def scene_for(cycle_id: str, previous: str | None) -> Scene:
@@ -45,38 +48,51 @@ class Excerpts:
         return self._pool[self._order.pop()]
 
 
-def stage_text(scene: Scene, state: str, origin: str | None, note: str, stamp: str = "") -> str | None:
-    """A stage's art (the scene's walls), then (dim) a line of who asked or what came of it, and
-    when (stamp). None for a stage with no art (requested: usually under a second, and the eye
-    covers it). Plain Text in the compaction blue, never Markdown."""
-    if state not in scene.walls:
-        return None
-    return scene.walls[state] + "\n" + detail(state, origin, note, stamp)
+def stage_line(state: str, note: str, took: float) -> str | None:
+    """A stage's plain line in the conversation (#324), sober while the overlay has the art: None
+    for requested (usually under a second). took: seconds since the cycle's first stage."""
+    said = {"preparing": "preparing (notes turn)", "compacting": "compacting",
+            "completed": " · ".join(filter(None, (f"completed in {duration(took)}", note))),
+            "failed": ": ".join(filter(None, ("failed", note))), "cancelled": ": ".join(filter(None, ("cancelled", note)))}.get(state)
+    return said and "Compaction: " + said
 
 
-def detail(state: str, origin: str | None, note: str, stamp: str) -> str:
-    """The dim line under a stage's art: what came of it, else who asked, and when."""
-    said = note or (f"asked for by {origin}" if state in SHOWN + ("requested",) and origin else "")
-    return " · ".join(filter(None, (said, stamp)))
+def duration(seconds: float) -> str:
+    """Seconds as "42 s", "1 m 42 s" or "1 h 3 m"."""
+    m, s = divmod(round(max(seconds, 0)), 60)
+    h, m = divmod(m, 60)
+    return f"{h} h {m} m" if h else f"{m} m {s} s" if m else f"{s} s"
 
 
-def dock_text(scene: Scene, state: str, since: float, origin: str | None, note: str, stamp: str) -> str:
-    """The running cycle's "dock" entry (#287): its stage (requested drawn as preparing), when
-    that stage began (epoch, the animation's time zero), its dim line and its scene (#304, last,
-    so an app on older code reads the first three as it always has), one a line (docked)."""
+class Docked(NamedTuple):
+    """A dock entry read back (docked)."""
+    scene: Scene
+    state: str
+    since: float
+    cycle: str
+    excerpt: tuple[str, ...]
+
+
+def dock_text(scene: Scene, state: str, since: float, cycle: str, excerpt: tuple[str, ...] = ()) -> str:
+    """The "dock" entry the app's overlay shows (#287, #324): its stage (requested drawn as
+    preparing), when that stage began (epoch: the animation's time zero, and an end's LINGER
+    from), the cycle's id (what hides it for the rest of the cycle), its scene, then the newest
+    excerpt, one a line (docked)."""
     shown = state if state in scene.walls else "preparing"
-    return "\n".join((shown, repr(since), detail(state, origin, note, stamp), scene.name))
+    return "\n".join((shown, repr(since), cycle, scene.name, *excerpt))
 
 
-def docked(text: str) -> tuple[Scene, str, float, str]:
-    """A dock entry's scene, stage, start and dim line (dock_text). One from a daemon on older
-    code has no scene line: the first registered scene (Star Wars, then the only one)."""
-    state, since, line, name = (text.split("\n", 3) + ["", "", ""])[:4]
+def docked(text: str) -> Docked:
+    """A dock entry's fields (dock_text): a scene no longer registered is the first one, a bad
+    start time zero."""
+    parts = text.split("\n")
+    state, since, cycle, name = (parts + [""] * 4)[:4]
     scene = SCENES.get(name) or next(iter(SCENES.values()))
     try:
-        return scene, state, float(since), line
+        start = float(since)
     except ValueError:
-        return scene, state, 0.0, line
+        start = 0.0
+    return Docked(scene, state, start, cycle, tuple(parts[4:]))
 
 
 def schedule(cycle_id: str, windows: list[tuple[float, float]], scene: Scene) -> list[tuple[float, tuple[str, ...]]]:
@@ -92,13 +108,3 @@ def schedule(cycle_id: str, windows: list[tuple[float, float]], scene: Scene) ->
             out.append((at, pool.next()))
             at += gap(rng)
     return out
-
-
-def state_of(art: str) -> tuple[Scene, str] | None:
-    """Which scene and stage a stage entry's art shows, from its rows, against every registered
-    scene's walls: None for any other text."""
-    for scene in SCENES.values():
-        for state, rows in scene.walls.items():
-            if art.startswith(rows):
-                return scene, state
-    return None

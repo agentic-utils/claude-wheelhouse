@@ -27,7 +27,7 @@ import sqlite3
 import sys
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -35,7 +35,7 @@ from . import adopt, api, away, quickshell, compactor, features, fingerprint, fo
 from .docroots import DOC_CAP
 from .host import (KEEPALIVE_AFTER, KEEPALIVE_TOKENS, MCP_CONNECTOR, MCP_DOS, keepalive_body,
                    waits_on_person)
-from .store import (COMPACT_QUESTION, NOTES_WAIT, ORIGIN_WORDS, Refused, Busy, REQUESTS, wheelhouse_item, COMPACT_TIMEOUT, OP_DOING, PARK_WITHIN, STARTING_WITHIN, HANDOVER_WITHIN, DISMISSABLE, compacting_now, operating, op_overdue, PRS_SINCE, STATUSES, SessionGone, requested_expired, Store, can_queue,
+from .store import (COMPACT_QUESTION, NOTES_WAIT, Refused, Busy, REQUESTS, wheelhouse_item, COMPACT_TIMEOUT, OP_DOING, PARK_WITHIN, STARTING_WITHIN, HANDOVER_WITHIN, DISMISSABLE, compacting_now, operating, op_overdue, PRS_SINCE, STATUSES, SessionGone, requested_expired, Store, can_queue,
                     PROTOCOL_VERSION, mcp_servers, mode, needs_relaunch, runner, standing)
 
 RUNNING = ("live", "stalled", "starting")
@@ -99,49 +99,35 @@ def short(sid: str) -> str:
 
 
 def compaction_entries(stages, active: bool, at: float | None = None) -> list:
-    """A session's compaction stages as conversation entries (#244): one art per cycle, drawn
-    where its first stage with art was, showing its latest stage's (art B, then dim who asked or
-    what came of it, with its time), so each stage replaces the last in place (#277); and while a
-    cycle is preparing or compacting the crew's excerpts (compactor.schedule), those due by now
-    (at, epoch). Placed by time among the transcript's entries (transcript.blocks); the task
-    item's thread has the stages' notes, never the excerpts. The cycle still running (active, its
-    latest stage not an end) draws no art there: one "dock" entry instead (dock_text), which the
-    app pins under the conversation, animated (#287), until its end puts the art back in place."""
+    """A session's compaction stages as conversation entries: a plain line per stage (#324,
+    compactor.stage_line), placed by time among the transcript's entries (transcript.blocks),
+    never art or the crew's excerpts. And one "dock" entry (dock_text) for the session's last
+    cycle while it runs (active, its latest stage not an end) or for compactor.LINGER seconds
+    after its end, which the app overlays on the conversation, animated (#287), with the newest
+    of the cycle's excerpts due by now (at, epoch; compactor.schedule)."""
     at = time.time() if at is None else at
-    out, cycles, drawn, scenes = [], {}, {}, {}
-    last = stages[-1]["cycle_id"] if stages else None
-    running = last if active and stages and stages[-1]["state"] not in compactor.ENDS else None
-    previous = None
+    out, cycles, scenes, previous = [], {}, {}, None
     for st in stages:   # each cycle's scene (#304), never the one before's while there's another
         if st["cycle_id"] not in scenes:
             scenes[st["cycle_id"]] = previous = compactor.scene_for(st["cycle_id"], previous and previous.name)
-    for st in stages:
-        text = compactor.stage_text(scenes[st["cycle_id"]], st["state"], ORIGIN_WORDS.get(st["origin"]), st["note"], st["at"][11:16] + "Z")
-        if st["cycle_id"] == running:
-            continue
-        if text is not None:
-            if (i := drawn.get(st["cycle_id"])) is None:
-                drawn[st["cycle_id"]] = len(out)
-                out.append(transcript.Entry("stage", text, st["at"]))
-            else:
-                out[i] = transcript.Entry("stage", text, out[i].at)
-    for st in stages:
-        cycles.setdefault(st["cycle_id"], []).append(st)
-    if running:
-        st = cycles[running][-1]
-        out.append(transcript.Entry("dock", compactor.dock_text(scenes[running], st["state"], epoch(st["at"]), ORIGIN_WORDS.get(st["origin"]),
-                                                                st["note"], st["at"][11:16] + "Z"), st["at"]))
-    for cid, run in cycles.items():
-        windows = []
-        for i, st in enumerate(run):
-            if st["state"] not in compactor.SHOWN:
-                continue
-            end = (epoch(run[i + 1]["at"]) if i + 1 < len(run) else at if active and cid == last else epoch(st["at"]))
-            windows.append((epoch(st["at"]), min(end, at)))
-        for when, excerpt in compactor.schedule(cid, windows, scenes[cid]):
-            if when <= at:
-                stamp_ = datetime.fromtimestamp(when, timezone.utc).isoformat(timespec="microseconds")
-                out.append(transcript.Entry("crew", "\n".join(excerpt), stamp_))
+        run = cycles.setdefault(st["cycle_id"], [])
+        run.append(st)
+        if (line := compactor.stage_line(st["state"], st["note"], epoch(st["at"]) - epoch(run[0]["at"]))) is not None:
+            out.append(transcript.Entry("stage", line, st["at"]))
+    if not stages:
+        return out
+    cid = stages[-1]["cycle_id"]
+    run, st = cycles[cid], stages[-1]
+    ended = st["state"] in compactor.ENDS
+    if not (ended and at - epoch(st["at"]) < compactor.LINGER or active and not ended):
+        return out
+    windows = []
+    for i, s in enumerate(run):
+        if s["state"] in compactor.SHOWN:
+            windows.append((epoch(s["at"]), min(epoch(run[i + 1]["at"]) if i + 1 < len(run) else at, at)))
+    due = [excerpt for when, excerpt in compactor.schedule(cid, windows, scenes[cid]) if when <= at]
+    out.append(transcript.Entry("dock", compactor.dock_text(scenes[cid], st["state"], epoch(st["at"]), cid,
+                                                            due[-1] if due else ()), st["at"]))
     return out
 
 

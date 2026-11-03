@@ -370,8 +370,8 @@ def blocks(name: str, tab: str | None, recs: list[dict] | None, queued=(), full=
     who is head, warn, note, tool, you or claude: the app colours
     the person's words apart from Claude's. tab None: the session runs in the wheelhouse,
     where its permission prompts and questions are items, so there's no tab to wait in.
-    full: the person's message by id (entries). stages: a compaction's stage lines and crew
-    excerpts (#244), as Entry("stage" or "crew", text, at), placed by time among the rest."""
+    full: the person's message by id (entries). stages: a compaction's stage lines and its
+    overlay's dock entry (#244, #324), as Entry("stage" or "dock", text, at), placed by time among the rest."""
     where = (f"_Tab: **{tab}**. Permission prompts and slash commands need that tab._" if tab else
              "_Runs in the wheelhouse: its permission prompts and questions come to the inbox. "
              "Shell opens it in a terminal tab._")
@@ -407,7 +407,7 @@ def entry_block(e: Entry, label: str | None = None) -> tuple[str, str]:
         return "tool", "`⚙ " + e.text.replace("`", "'") + "`"
     if e.who == "note":
         return "note", f"_{e.text}{_hhmm(e.at)}_"
-    if e.who in ("stage", "crew", "dock"):   # plain Text, never Markdown (#244): the app renders it as is
+    if e.who in ("stage", "dock"):   # plain Text, never Markdown (#244): the app renders it as is
         return e.who, e.text
     text = hard_breaks(e.text) if e.who == "you" else e.text
     return e.who, f"**{label or e.who}**{_hhmm(e.at)}\n\n{text}"

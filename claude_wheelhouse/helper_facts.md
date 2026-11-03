@@ -1,4 +1,4 @@
-<!-- fact sheet stamp: version 209, 2026-11-03T06:01:22Z, source 9140fc5b7cf3d802 (make facts restamps it: AGENTS.md) -->
+<!-- fact sheet stamp: version 210, 2026-11-03T08:56:28Z, source 662f5ac498b40808 (make facts restamps it: AGENTS.md) -->
 # Wheelhouse fact sheet
 
 What the helper chat knows before any question. The guide below is written by hand; the
@@ -51,8 +51,11 @@ daemon running.
 - Session steps: what the wheelhouse tells a session at compaction, ending, resuming or a
   merged PR (command palette, Session steps).
 - Compaction: in a tab, Claude Code compacting (by itself, or `/compact` typed there) shows as a
-  task in the inbox ("Compact <name>: <k>k context", done once compacted) and blue lines in the
-  conversation, and the session's eye is blue meanwhile; what you send it waits until it's done.
+  task in the inbox ("Compact <name>: <k>k context", done once compacted) and a plain blue line
+  per stage in the conversation ("Compaction: compacting"), and the session's eye is blue
+  meanwhile; what you send it waits until it's done. Its animated art shows over the middle of
+  the conversation with the crew's latest line; Esc or a click hides it until the next compaction,
+  and its last frame stays 8 seconds after the end.
 - Tour: the guided tour, resumed with Alt+T while the title bar shows its badge.
 - Doc editor: a click on a doc (an item's or a decision, in Detail or full screen) opens an
   editor below it. Ctrl+S saves to the file; the pane's title says `edited · Ctrl+S saves`
@@ -116,7 +119,7 @@ This fact sheet describes claude-wheelhouse 0.2.0.dev0.
 
 - **Alt+Shift+M**: MCP servers: the session in context's, as its host last saw them, each with a button to sign in or reconnect it (a claude.ai connector in every session the wheelhouse hosts); a tab's: /mcp there
 
-- **Esc**: Clear a text selection first, then the marks, then dismiss the card of what happened while you were away, else show every session's items again
+- **Esc**: Hide a compaction's art over the conversation first, then clear a text selection, then the marks, then dismiss the card of what happened while you were away, else show every session's items again
 
 - **Alt+V**: Show or hide finished items
 
@@ -374,7 +377,7 @@ The app's command line args (make args). Give them to make run in ARGS, for exam
 - Mark PRs in the PRs pane as in the inbox (Ctrl+click, Shift+click, Ctrl+Space, Shift+Up/Down) and act on them all; Close closes a PR unmerged, asked first, as Merge is.
 - A PR's buttons that can't apply are greyed, and say why on hover (Merge on a PR awaiting review, say), and Mark ready or Make draft switches a PR between draft and ready for review.
 - The wheelhouse tells a session before it ends or resumes (and, in SDK mode, compacts), so its own instructions can act, and can keep a handoff doc for it. Session steps, in the command palette, has every switch; the first press asks once.
-- A running compaction's trash compactor is pinned above the answer box, big and animated: the walls grind in, the crew dodge, sparks fly and the dianoga grabs Luke. Its last frame stays in the conversation, and the session's notes for compaction fold to one line.
+- A running compaction's trash compactor shows over the middle of the conversation, big and animated, with the crew's latest line under it: the walls grind in, the crew dodge, sparks fly and the dianoga grabs Luke. The conversation under it keeps a plain line per stage; Esc or a click hides it until the next compaction, and its last frame stays 8 seconds. The session's notes for compaction fold to one line.
 - Compaction has a second scene, picked per cycle: Star Trek's engine room, with Scotty thumping the console as the warp core races and the CONTEXT gauge falls to a sliver, Kirk pacing and Spock unmoved, and the bridge crew's lines between.
 - Compaction has a third scene: Red Dwarf, with Holly's face flaking off the monitor as her MEMORY falls from three million years to three lines, Kryten panicking, Rimmer ordering Red Alert and the Cat checking his reflection, and the crew's lines between.
 - Compaction has a fourth scene: Men in Black, with K's neuralyzer flooding the street white, the bystanders coming out of it blank and smiling as the WIPED readout climbs, the cover story stamped once it's done, and the agents' lines between.
@@ -403,7 +406,7 @@ The app's command line args (make args). Give them to make run in ARGS, for exam
 - A completed item leaves the inbox 5 minutes after it completed (AUTOCLEANSE_MINUTES in a .env, 0 for never); Alt+V shows it again.
 - Back after two hours or more away, a card at the top of the inbox says what happened meanwhile: what needs you, what landed, which sessions went quiet and what was decided. Esc dismisses it.
 - The ⓘ at the stats pane's top right shows the selected session's info: its id (C copies it), user, machine, branch, model, transcript, and its MCP server's code, flagged when it needs a relaunch.
-- Every compaction, in a tab too, is a task in the inbox that follows it to done, failed or dropped, and the conversation shows its stages as the trash compactor's walls closing in, with the crew and the droids panicking while it runs.
+- Every compaction, in a tab too, is a task in the inbox that follows it to done, failed or dropped, and the conversation shows a line for each of its stages.
 - Park, Stop & Forget, Relaunch, Handover, New session, Adopt and a fork's new session keep it blue from the press until done: sends and other operations wait, queueing stays open, Interrupt aborts it, and one that can't finish in time is called off with a warning.
 - A dead session (not parked) keeps its red dot, and its rows dim everywhere: its session list row, its inbox items and conversation, its PRs (their lights kept bright) and the decisions only it looks at.
 - Shell (Alt+H, from anywhere) opens a quick shell in a new terminal tab, in the directory the session in context works in now, or home. Handing a session run in the wheelhouse to a Claude Code tab is now Handover to Claude Code in a shell, in its right-click menu.

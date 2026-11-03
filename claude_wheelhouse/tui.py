@@ -22,6 +22,7 @@ import weakref
 from datetime import datetime, timezone
 from typing import Callable, NamedTuple, Self
 
+from rich.console import Group, RenderableType
 from rich.markdown import Markdown as RichMarkdown
 from rich.segment import Segment
 from rich.style import Style
@@ -108,14 +109,14 @@ UNDO_LANDING = "{key}: the undo is still putting rows back, try again in a momen
 # the person's words in terminal green, Claude's in white as in the Claude app
 VOICE = {"you": MATRIX, "claude": "#e8e8e8", "pr": "#e8e8e8", "head": "#05d9e8",
          "warn": "bold #ffd300", "note": "#777777", "tool": "#777777", "doc": "#e8e8e8",
-         "stage": "#2f8cff", "crew": "#2f8cff", "dock": "#2f8cff"}   # a compaction's stage lines and crew (#244): its eye's blue
+         "stage": "#2f8cff", "crew": "#9cc8ff", "dock": "#2f8cff"}   # a compaction's stage lines (#244) in its eye's blue, the overlay's crew (#324) lighter
 # the big compactor's roles (compactor.ROLES, #287): the walls and crew in the compaction blue,
 # sparks and the hatch light in amber, the dianoga in green, a red alert (Star Trek) in red,
 # a neuralyzer's flash (Men in Black) in white
 ART_STYLE = {"wall": "#2f8cff", "seam": "#1f5daa", "crew": "bold #9cc8ff", "sludge": "#1f5daa",
              "spark": "bold #ffb000", "hatch": "bold #ffb000", "dianoga": "bold #6fcf3f",
              "alert": "bold #ff4b3e", "flash": "bold #ffffff", "text": "#2f8cff"}
-DOCK_FPS = 6   # the dock's frames a second (#287), no more than the app's own rate (features.animation_fps)
+DOCK_FPS = 6   # the compaction overlay's frames a second (#287), no more than the app's own rate (features.animation_fps)
 # a doc block (doc_blocks) longer than this is rendered on a thread (Transcript._layout): a
 # 42 KB one takes Rich a second or two, which the loop would otherwise stall for
 RENDER_OFF_LOOP = 2000
@@ -593,7 +594,7 @@ def _block_lines(who: str, md: str, width: int, console) -> list:
     """A block's rendered segments at one width: rendered once, though Textual measures a
     widget's height and then draws it, and a new turn leaves every older block as it was."""
     r = Text(md.strip("`"), style=VOICE[who]) if who == "tool" else pr_text(md) if who == "pr" \
-        else stage_text(who, md, width) if who in ("stage", "crew") else RichMarkdown(md, style=VOICE[who])
+        else Text(md, style=VOICE[who]) if who == "stage" else RichMarkdown(md, style=VOICE[who])
     return list(console.render(r, console.options.update_width(width)))
 
 
@@ -608,23 +609,6 @@ def art_text(rows: tuple[str, ...], roles: tuple[str, ...]) -> Text:
             if j == len(row) or role[j] != role[start]:
                 out.append(row[start:j], style=ART_STYLE[compactor.ROLES[role[start]]])
                 start = j
-    return out
-
-
-def stage_text(who: str, text: str, width: int = 0) -> Text:
-    """A compaction's stage lines or crew excerpt (#244) as plain Text, never Markdown (which
-    would turn its art into rules and bullets): each line cut with an ellipsis, not wrapped; a
-    stage's last line (who asked or what came of it, and when) dim under its art (#277). A
-    stage's art in a pane at least compactor.BIG_WIDTH wide is the big one's still (#287)."""
-    if who == "stage" and width >= compactor.BIG_WIDTH and (found := compactor.state_of(text)):
-        scene, state = found
-        line = text[len(scene.walls[state]) + 1:]
-        return art_text(*scene.frame(state, 0.0, animate=False)).append("\n" + line, style=VOICE[who] + " dim")
-    out = Text(no_wrap=True, overflow="ellipsis")
-    lines = text.split("\n")
-    for i, line in enumerate(lines):
-        dim = who == "stage" and i and i == len(lines) - 1
-        out.append(("\n" if i else "") + line, style=VOICE[who] + (" dim" if dim else ""))
     return out
 
 
@@ -1951,69 +1935,143 @@ def under_way(button: str, s, status: str, relaunching: bool) -> bool:
     return False
 
 
-class CompactorDock(Widget, can_focus=False):
-    """The compactor pinned under the conversation while its session's cycle runs (#287): big
-    and moving where the pane is compactor.BIG_WIDTH wide, the #277 art below that, and a still
-    per stage with the app's animation off. Its own timer, at DOCK_FPS (or the app's rate if
-    lower), runs only while it shows, and draws only this widget: never the inbox (#268)."""
-    DEFAULT_CSS = "CompactorDock { height: auto; display: none; padding: 0 1; }"
+class CompactorOverlay(Widget, can_focus=False):
+    """A compaction's art over the middle of the conversation (#324), from the hub's dock entry
+    (compactor.dock_text): big and moving where the conversation is wide enough for the 60 by
+    12 frame (big), the scene's small still below that or with the app's animation off the big
+    still, and the cycle's newest crew excerpt under it. Absolute, so it takes no height from
+    the conversation, which scrolls and follows under it as ever (a wheel over it scrolls it).
+    Esc or a click hides it for the rest of its cycle (dismiss); an end's final frame stays
+    compactor.LINGER seconds, then it goes the same way. Its own timer, at DOCK_FPS (or the
+    app's rate if lower), runs only while it shows, and draws only this widget (#287, #268)."""
+    DEFAULT_CSS = """
+    CompactorOverlay { position: absolute; overlay: screen; display: none; height: auto; padding: 0 1;
+                       border: round #2f8cff; background: #0a0a1a; }
+    """
     timer = None
-    shown: tuple | None = None   # its scene, stage, start and dim line (compactor.docked)
+    linger = None   # an end's one-shot: the final frame's LINGER seconds out
+    shown: "compactor.Docked | None" = None
     drawn = None   # what the last frame drew (paint): the same again draws nothing
-    fps = 0.0   # its rate, read as it opens (dock)
+    fps = 0.0   # its rate, read as it opens (show)
+    under: Widget | None = None   # the conversation it's centred on (WheelhouseApp.on_mount)
+
+    def __init__(self, **kw) -> None:
+        super().__init__(**kw)
+        self.dismissed: set[str] = set()   # cycles hidden for the rest of their run, by id
 
     @staticmethod
     def now() -> float:
         """The animation's clock, epoch seconds as a stage's start is (a test runs it on its own)."""
         return time.time()
 
-    def dock(self, text: str | None) -> None:
-        """Show a dock entry's stage (compactor.dock_text), or with None close: hidden, its timer stopped."""
-        if text is None:
-            if self.timer is not None:
-                self.timer.stop()
-                self.timer = None
-            self.shown = self.drawn = None
-            self.display = False
+    def big(self) -> bool:
+        """Whether the conversation is wide enough for the big frame, border and padding with it."""
+        return self.under is not None and self.under.size.width >= compactor.BIG_WIDTH + 4
+
+    def show(self, text: str | None) -> None:
+        """Show a dock entry (compactor.dock_text), or with None (or its cycle dismissed) close."""
+        shown = None if text is None else compactor.docked(text)
+        if shown is None or shown.cycle in self.dismissed:
+            self.close()
             return
-        shown = compactor.docked(text)
         if shown != self.shown:
             self.shown, self.drawn, self.display = shown, None, True
+            self.ends()
+            if self.shown is None:   # its linger already out
+                return
             self.paint()
         if self.timer is None:   # the rate read as it opens, never at each frame (it reads the .env files)
             self.fps = min(DOCK_FPS, features.animation_fps())
-        fps = self.fps
-        if fps and self.timer is None:
-            self.timer = self.set_interval(1 / fps, self.paint)
+        if self.fps and self.timer is None:
+            self.timer = self.set_interval(1 / self.fps, self.paint)
+
+    def ends(self) -> None:
+        """An end's final frame: dismissed LINGER seconds after that stage began."""
+        if self.linger is not None:
+            self.linger.stop()
+            self.linger = None
+        if self.shown.state in compactor.ENDS:
+            left = self.shown.since + compactor.LINGER - self.now()
+            if left <= 0:
+                self.dismiss()
+            else:
+                self.linger = self.set_timer(left, self.dismiss)
+
+    def close(self) -> None:
+        """Hidden, its timers stopped."""
+        for t in (self.timer, self.linger):
+            if t is not None:
+                t.stop()
+        self.timer = self.linger = self.shown = self.drawn = None
+        self.display = False
+
+    def dismiss(self) -> bool:
+        """Hidden for the rest of its cycle (Esc, a click, its linger out): whether it showed."""
+        if self.shown is None:
+            return False
+        self.dismissed.add(self.shown.cycle)
+        self.close()
+        return True
+
+    def on_click(self, event: events.Click) -> None:
+        event.stop()
+        self.dismiss()
+
+    def on_mouse_scroll_down(self, event: events.MouseScrollDown) -> None:
+        if self.under is not None:   # the conversation under it scrolls, as with nothing on top
+            event.stop()
+            self.under._forward_event(event)
+
+    def on_mouse_scroll_up(self, event: events.MouseScrollUp) -> None:
+        if self.under is not None:
+            event.stop()
+            self.under._forward_event(event)
 
     def frame(self) -> tuple:
         """What this moment draws: the stage, big or not, and its frame number (compactor.TICKS)."""
-        _, state, since, _ = self.shown
-        big = self.content_size.width >= compactor.BIG_WIDTH
+        big = self.big()
         moving = big and self.fps > 0
-        return state, big, int(max(0.0, self.now() - since) * compactor.TICKS) if moving else -1
+        return self.shown.state, big, int(max(0.0, self.now() - self.shown.since) * compactor.TICKS) if moving else -1
 
     def paint(self) -> None:
         """The frame for now, drawn only if it differs from the last."""
         if self.shown is None:
             return
         frame = self.frame()
-        if frame != self.drawn:   # a new size (big or not, a new stage's line) lays it out again
+        if frame != self.drawn:   # a new size (big or not) lays it out again
             resized = self.drawn is None or frame[:2] != self.drawn[:2]
             self.drawn = frame
+            if resized:
+                self.place()
             self.refresh(layout=resized)
 
-    def render(self) -> Text:
+    def place(self) -> None:
+        """Its width (the frame's, border and padding with it, no wider than the conversation),
+        centred on the conversation (under), in its parent's coordinates."""
+        if self.under is None or self.parent is None or not self.display:
+            return
+        box, pane = self.under.region, self.parent.content_region
+        width = min((compactor.BIG_WIDTH if self.big() else compactor.WIDTH) + 4, box.width)   # cut, never off the pane
+        if self.styles.width is None or self.styles.width.value != width:
+            self.styles.width = width
+        offset = (max(0, box.x - pane.x + (box.width - width) // 2),
+                  max(0, box.y - pane.y + (box.height - self.outer_size.height) // 2))
+        if tuple(int(v.value) for v in self.styles.offset) != offset:
+            self.styles.offset = offset
+
+    def render(self) -> RenderableType:
         if self.shown is None or self.drawn is None:
             return Text()
-        (state, big, f), (scene, *_, line) = self.drawn, self.shown
-        if not big:
-            return stage_text("stage", scene.walls[state] + "\n" + line)
-        art = art_text(*scene.frame(state, max(f, 0) / compactor.TICKS, animate=f >= 0))
-        return art.append("\n" + line, style=VOICE["stage"] + " dim")
+        state, big, f = self.drawn
+        scene = self.shown.scene
+        art = art_text(*scene.frame(state, max(f, 0) / compactor.TICKS, animate=f >= 0)) if big \
+            else Text(scene.walls[state], style=VOICE["stage"], no_wrap=True, overflow="ellipsis")
+        if not self.shown.excerpt:
+            return art
+        return Group(art, Text(""), Text("\n".join(self.shown.excerpt), style=VOICE["crew"]))
 
     def on_resize(self) -> None:
-        self.paint()
+        self.place()
 
 
 class ConversationScroll(VerticalScroll, can_focus=False):
@@ -2026,6 +2084,7 @@ class ConversationScroll(VerticalScroll, can_focus=False):
     follows (paint_detail's test)."""
     _seen_size: tuple[int, int] | None = None   # the view's size as last laid out
     at_end = False   # at its end (within a line), as last laid out or scrolled; not once it shows something else
+    overlay: "CompactorOverlay | None" = None   # centred on it, so placed again as it resizes (#324)
 
     def watch_scroll_y(self, old_value: float, new_value: float) -> None:
         super().watch_scroll_y(old_value, new_value)
@@ -2036,6 +2095,9 @@ class ConversationScroll(VerticalScroll, can_focus=False):
         if self.at_end and before is not None and self._seen_size != before:   # its own size, not only its content's
             self.scroll_end(animate=False, immediate=True)
         self.at_end = self.scroll_y >= self.max_scroll_y - 1
+        if self.overlay is not None:   # big or not by its width, and centred again
+            self.overlay.paint()
+            self.overlay.place()
 
     def on_mouse_down(self) -> None:
         self.app.focus_answer()
@@ -4615,8 +4677,8 @@ DESCRIBE = {
     "relaunch_all": "Relaunch all: every Available session (not running, not parked)",
     "mcp_servers": ("MCP servers: the session in context's, as its host last saw them, each with a button to sign in "
                     "or reconnect it (a claude.ai connector in every session the wheelhouse hosts); a tab's: /mcp there"),
-    "clear_filter": ("Clear a text selection first, then the marks, then dismiss the card of what happened while you "
-                     "were away, else show every session's items again"),
+    "clear_filter": ("Hide a compaction's art over the conversation first, then clear a text selection, then the marks, "
+                     "then dismiss the card of what happened while you were away, else show every session's items again"),
     "show_finished(True)": "Show or hide finished items",
     "show_finished(False)": "Show or hide finished items",
     "app.close_question": ("Close the highlighted question or decision, or dismiss a done task or subagent, or a doc "
@@ -5265,7 +5327,6 @@ class WheelhouseApp(App):
                     with ConversationScroll(id="detail-scroll"):
                         yield Transcript(NOTHING_SELECTED, id="detail")
                         yield Vertical(id="detail-more")   # a module's part, scrolling with the thread (detail_parts)
-                    yield CompactorDock(id="compactor-dock")   # a running compaction's art, pinned (#287)
                     yield Vertical(id="detail-bar")   # a module's part, under it: its buttons (detail_parts)
                     yield hidden(Splitter("editor", "#detail-editor", "#detail-scroll", "y", label="editing"))
                     yield DocEditor("#detail", "#detail-pane", self.detail_doc_sends_now, self.paint_detail,
@@ -5280,6 +5341,7 @@ class WheelhouseApp(App):
                     yield RunButtons()
                     yield Compose(id="answer")
                     yield Hint(classes="answer-hint")
+                    yield CompactorOverlay(id="compactor-overlay")   # a compaction's art, over the conversation (#324)
         yield SendBar()
         yield Footer()
 
@@ -5291,7 +5353,8 @@ class WheelhouseApp(App):
         self.items_table = self.query_one("#items", ItemList)
         self.detail = self.query_one("#detail", Transcript)
         self.detail_scroll = self.query_one("#detail-scroll", VerticalScroll)
-        self.compactor_dock = self.query_one("#compactor-dock", CompactorDock)
+        self.compactor_overlay = self.query_one("#compactor-overlay", CompactorOverlay)
+        self.compactor_overlay.under, self.detail_scroll.overlay = self.detail_scroll, self.compactor_overlay
         # held: a query walks every doc block
         self.answer_splitter = next(s for s in self.query("#detail-pane > Splitter") if s.key == "answer")
         self.detail_editor = self.query_one("#detail-editor", DocEditor)
@@ -5511,6 +5574,9 @@ class WheelhouseApp(App):
         if event.key == "escape" and self.screen_stack and (titles := [s for s in self.screen_stack[0].query(Slot) if s.dragging]):
             titles[0].end_drag(drop=False)   # a pane's drag by its title, likewise
             return
+        if event.key == "escape" and self.screen is self.main_screen \
+                and (overlay := getattr(self, "compactor_overlay", None)) is not None and overlay.dismiss():
+            return   # the compaction's overlay hidden for the rest of its cycle, and Esc does nothing else (#324)
         if event.key == "escape" and self.esc_ends_tour():
             return
         if self.type_to_thread(event):
@@ -6197,7 +6263,7 @@ class WheelhouseApp(App):
             cells = ("", names.get(conv, "")[:14] if self.filter_sid else "", Text("💬"),
                      Text("queued", style="bold #05d9e8") if general else "",
                      Text("Conversation" if self.filter_sid else names.get(conv, ""), style="bold"))
-            # compacting (dimmed, still selectable: the walls and the crew are there, #277) or its
+            # compacting (dimmed, still selectable: its overlay and stage lines are there, #324) or its
             # session dead, not parked (#252)
             if conv in compacting or conv in dead:
                 cells = faded(cells)
@@ -6932,11 +6998,11 @@ class WheelhouseApp(App):
             blocks[0] = ("head", blocks[0][1] + " · *Hidden from the inbox*")   # picked by search, or a module (#273)
         if editor is not None:
             blocks = editor.shown_in(blocks, self.detail.doc_path, gone, self.detail.doc_mtime)
-        # a running compaction's art pinned under the conversation, not in it (#287)
+        # a compaction's art over the conversation, not in it (#287, #324)
         docked = next((md for who, md in blocks if who == "dock"), None) if self.viewing and not shown else None
         blocks = [b for b in blocks if b[0] != "dock"]
-        if (dock := getattr(self, "compactor_dock", None)) is not None:
-            dock.dock(docked)
+        if (overlay := getattr(self, "compactor_overlay", None)) is not None:
+            overlay.show(docked)
         for part in self.detail_boxes():   # a pane's parts go with an item, or a note: not a doc's
             part.display = not (shown or self.viewing or doc)
         if not agent and not isinstance(self.screen, ThreadView):   # which may follow one itself
@@ -7465,7 +7531,7 @@ class WheelhouseApp(App):
     def focus_compactions(self) -> None:
         """A compaction cycle that has started since the last refresh, whoever asked (Compact
         here, the session's request_compact, a /compact in its tab): its conversation shown
-        (follow) and the inbox focused on its row, so the walls and the crew are in view (#277).
+        (follow) and the inbox focused on its row, so its overlay and stage lines are in view (#324).
         Not on the app's first refresh with the sessions loaded (a cycle already under way isn't news), never focus
         taken from a text box with something typed in it (the row selected all the same, but for
         the answer box: selecting would swap its text under the person, retarget), nor from a

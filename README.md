@@ -899,9 +899,9 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
   cycle fails. Each compaction is also a task in the inbox, "Compact demo: 220k context", that
   moves with it (running, then done with the tokens before and after, blocked with why it
   failed, or dropped) and holds the 2-minute question under it; the session never sees it.
-  While it runs, the detention-level trash compactor is pinned under the conversation, above
-  the answer box, in blue with amber sparks and a green dianoga: 60 cells wide where the pane
-  has room (the smaller 28-cell art below that), the riveted walls grinding in while Han, Leia,
+  While it runs, the detention-level trash compactor shows over the middle of the conversation,
+  in blue with amber sparks and a green dianoga: 60 cells wide where the pane
+  has room (the smaller 28-cell still below that), the riveted walls grinding in while Han, Leia,
   Luke and Chewie brace and dodge, the hatch light blinking, garbage bobbing in the sludge and
   the dianoga's eye surfacing now and then, its tentacle grabbing Luke. Each stage looks
   different: the walls still while the notes are written, grinding while it compacts, met with
@@ -931,11 +931,14 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
   crusher's lever as Mr Solo's Lincoln, the gold in its boot, is squeezed towards a cube and its
   LINCOLN length falls, Solo shouting from the sidelines and the cube riding off on Oddjob's pickup
   (the crusher jamming if it stalled). With the animation off (`ANIMATION_FPS=0`)
-  each stage is a still. When the cycle ends the dock closes and its last frame stays in the conversation where
-  the art was first drawn, with who asked or what came of it under it. The session's notes turn
+  each stage is a still. Under the art, the latest panicked exchange between the crew and the
+  droids, a new one every 20 to 30 seconds. The conversation under it scrolls and follows as
+  ever, and keeps one plain line per stage: "Compaction: preparing (notes turn)", "Compaction:
+  compacting", then "Compaction: completed in 1 m 42 s · 220k → 40k", or failed or cancelled with
+  why. `Esc`, or a click on the art, hides it until the next compaction (that `Esc` does nothing
+  else). When the cycle ends its last frame stays 8 seconds, then goes. The session's notes turn
   shows as one dim line ("writing its notes for after compaction · 12 lines"), never the notes
-  themselves, and stays folded afterwards. While it runs, the odd panicked exchange between the
-  crew and the droids appears in the conversation.
+  themselves, and stays folded afterwards.
   A session in a terminal tab gets the same, from the plugin's PreCompact hook, whether
   `/compact` was typed there or Claude Code compacted by itself; there the wheelhouse can hold
   only what it sends, never what's typed in the tab. The session can also ask for a compaction itself, with
