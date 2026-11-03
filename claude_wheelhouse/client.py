@@ -23,7 +23,7 @@ import time
 import uuid
 from typing import Callable, NamedTuple
 
-from . import adopt, api, auth, docroots, features, fork, plan_usage, served, transcript_usage, tutorial
+from . import adopt, api, auth, docroots, features, fingerprint, fork, plan_usage, served, transcript_usage, tutorial
 from .hub import RUNNING, Done, Event, Hub, host_context, requested
 from .store import NOTES_SEEN, TOUR_AT, SessionGone
 
@@ -276,6 +276,7 @@ class RemoteClient:
         self.stream_socket = None   # the stream's connection, while it's open
         self.refusal: str | None = None   # why the daemon refuses this client, said once
         self.daemon_code: str | None = None   # the code of the daemon first joined, from its /hello
+        self.own_code = fingerprint.code()   # this app's code, as loaded
         self.replaced: str | None = None   # why the app must be restarted, once its daemon was replaced (#335)
         self.in_flight = False   # the fetching thread is fetching what it took from dirty
 
@@ -1023,6 +1024,8 @@ class RemoteClient:
 
     def found(self) -> None:
         self.refusal = None
+        if self.replaced == REPLACED_TOKEN:   # the token put right (the file read again): not replaced after all
+            self.replaced = None
         if not self.connected:
             self.connected = True
             self.post(lambda: self.emit(Event("link", "reconnected to the daemon")))
@@ -1109,7 +1112,7 @@ class RemoteClient:
             return
         if self.daemon_code is None:
             self.daemon_code = code
-        elif code != self.daemon_code and self.replaced is None:
+        elif code not in (self.daemon_code, self.own_code) and self.replaced is None:   # never one on the app's own
             self.replaced = REPLACED
             self.post(lambda: self.emit(Event("notice", REPLACED, "error")))
 

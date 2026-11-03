@@ -547,6 +547,7 @@ def test_a_seen_marks_failed_fetch_is_left_to_the_fetching_thread(store, sid, se
 @pytest.mark.parametrize("other_code, replaced, desc", [
     (False, None, "the same code started again (a restart): reconnected, nothing more said"),
     (True, client_mod.REPLACED, "other code started under the app (an update): said as replaced, restart the app"),
+    ("own", None, "first joined on other code, then one on the app's own: nothing to restart for"),
 ])
 def test_a_daemon_replaced_under_the_app_is_said(store, sid, served, heard, no_launch, monkeypatch,
                                                   other_code, replaced, desc):
@@ -557,14 +558,29 @@ def test_a_daemon_replaced_under_the_app_is_said(store, sid, served, heard, no_l
     c = heard(d.client())
     try:
         until(lambda: c.daemon_code is not None, desc="the first daemon's code kept")
+        if other_code == "own":
+            c.daemon_code = "another package's"
         port = d.port
         d.stop()
         until(lambda: not c.connected, desc="the stream ends")
-        if other_code:
+        if other_code is True:
             monkeypatch.setattr(fingerprint, "code", lambda: "newer")
         served(store.path, port)
         until(lambda: c.connected, desc="reconnected")
         assert c.replaced == replaced, desc
-        assert (("notice", client_mod.REPLACED) in heard.said) == other_code, desc
+        assert (("notice", client_mod.REPLACED) in heard.said) == (other_code is True), desc
+    finally:
+        c.disconnect()
+
+
+def test_a_refused_token_put_right_is_no_longer_replaced(store, served):
+    """#335: a refusal said as replaced clears once the stream is back on a good token."""
+    d = served(store.path)
+    c = d.client()
+    try:
+        c.refused("its token isn't this daemon's")
+        assert c.replaced == client_mod.REPLACED_TOKEN
+        c.found()
+        assert c.replaced is None
     finally:
         c.disconnect()
