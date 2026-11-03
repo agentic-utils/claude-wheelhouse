@@ -1035,7 +1035,6 @@ class RemoteClient:
         once, until it's taken again."""
         if self.refusal is None:
             self.refusal = error
-            self.replaced = self.replaced or REPLACED_TOKEN
             self.post(lambda: self.emit(Event("notice", f"the daemon refused this client: {error}", "error")))
 
     def refusal_of(self, e: Refused) -> str:
@@ -1094,6 +1093,7 @@ class RemoteClient:
                         old, self.http = self.http, self.make_http(TIMEOUT)
                         old.close()
                 if refused and self.token == refused_token:   # not one about to be put right by the file
+                    self.replaced = self.replaced or REPLACED_TOKEN   # the stream's 401 alone, never a fetch's error
                     self.refused(self.why_refused() if self.why_refused else REFUSED)
                 with self.lock:
                     self.lock.wait(BACKOFF[min(tries, len(BACKOFF) - 1)])
@@ -1112,7 +1112,7 @@ class RemoteClient:
             return
         if self.daemon_code is None:
             self.daemon_code = code
-        elif code not in (self.daemon_code, self.own_code) and self.replaced is None:   # never one on the app's own
+        elif code not in (self.daemon_code, self.own_code) and self.replaced in (None, REPLACED_TOKEN):   # never one on the app's own
             self.replaced = REPLACED
             self.post(lambda: self.emit(Event("notice", REPLACED, "error")))
 

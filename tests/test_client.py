@@ -574,13 +574,15 @@ def test_a_daemon_replaced_under_the_app_is_said(store, sid, served, heard, no_l
 
 
 def test_a_refused_token_put_right_is_no_longer_replaced(store, served):
-    """#335: a refusal said as replaced clears once the stream is back on a good token."""
+    """#335: only the stream's 401 says replaced, never a fetch's error, and it clears once the
+    stream is back on a good token."""
     d = served(store.path)
     c = d.client()
     try:
-        c.refused("its token isn't this daemon's")
-        assert c.replaced == client_mod.REPLACED_TOKEN
+        c.refused("a route failed (500)")
+        assert c.replaced is None, "a fetch's error is no replaced daemon"
+        c.replaced = client_mod.REPLACED_TOKEN   # as the stream's 401 sets it
         c.found()
-        assert c.replaced is None
+        assert c.replaced is None, "the token put right"
     finally:
         c.disconnect()
