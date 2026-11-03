@@ -74,10 +74,10 @@ EXCERPTS: tuple[tuple[str, ...], ...] = (
     ("Willie: Who puts the off switch in a hole full of bugs?", "Indy: Whoever built the compactor. They don't like visitors."),
     ("Indy: My whip's no use against a ceiling. I checked.",),
     ("Short Round: What that grinding, Dr. Jones?", "Indy: A thousand years of context, coming down."),
-    ("Indy: She screams in A flat. Nightclub training.",),
+    ("Indy: You can compact a lot of things. Not Willie's top A.",),
     ("Indy: Willie, you can scream or you can pull. Not both.", "Willie: Watch me."),
     ("Bugs: (thousands of them. The summary says \"some bugs\".)",),
-    ("Willie: I'll never complain about a small dressing room again.",),
+    ("Willie: Compact him all you like. Just keep the bit where I was right.",),
     ("Short Round: Fortune cookie say \"You will be compacted\". Very good cookie.",),
 )
 
@@ -159,7 +159,7 @@ def fallen(state: str, f: int) -> float:
 
 
 def tip(state: str, f: int) -> float:
-    """The spikes' row, fractional while they move: down while compacting, jammed one row down
+    """The spikes' row, fractional while they move: down while compacting, jammed two rows down
     if it failed, rising back to TIP once called off."""
     if state == "failed":
         return TIP + 2.0   # where a compaction leaves it, Indy ducked
