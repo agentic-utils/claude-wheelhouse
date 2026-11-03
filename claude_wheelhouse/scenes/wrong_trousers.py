@@ -50,7 +50,6 @@ EXCERPTS: tuple[tuple[str, ...], ...] = (
     ("Wallace: It's the wrong summary, Gromit! And it's gone wrong!",),
     ("Wallace: You've got the knack of this, lad. Who taught you?", "Gromit: (holds up \"Compaction for Dogs\", well thumbed)"),
     ("Wallace: Let's see this summary, then. \"Wallace: oblivious.\" Well, charming.",),
-    ("Wallace: Funny how the house gets smaller every time we go round, lad.",),
     ("Wallace: Shall I read the summary out, lad? It's quicker than living it.",),
     ("Gromit: (sniffs the summary, keeps it, and buries the rest in the garden)",),
     ("Gromit: (fetches the old context back. Wallace throws it again.)",),

@@ -897,9 +897,6 @@
 "Wallace: Let's see this summary, then. \"Wallace: oblivious.\" Well, charming."
 ],
 [
-"Wallace: Funny how the house gets smaller every time we go round, lad."
-],
-[
 "Wallace: Shall I read the summary out, lad? It's quicker than living it."
 ],
 [
@@ -1019,13 +1016,15 @@
 [
 0,
 [
-"Gromit: (gives the summary a pat. Good summary.)"
+"Wallace: I've left us a note for after, lad: \"Buy cheese. Watch penguin.\"",
+"Gromit: (underlines \"Watch penguin\" three times)"
 ]
 ],
 [
 22.647538602976795,
 [
-"Wallace: Steady on, lad, you're summarising faster than I can talk!"
+"Wallace: The compaction's taken my train of thought, Gromit!",
+"Gromit: (points at the one he's laying track for)"
 ]
 ],
 [
@@ -1056,8 +1055,7 @@
 [
 154.60880149457603,
 [
-"Wallace: I'll just pop the kettle on while you compact, lad.",
-"Gromit: (lays track to the kettle as well)"
+"Wallace: Ooh, I say, Gromit. I've gone all concise."
 ]
 ],
 [
@@ -1076,20 +1074,20 @@
 [
 231.90071357311805,
 [
-"Wallace: Cheerio, old messages! Lovely knowing you!"
+"Techno-Trousers: (take two strides and reach the end of the conversation)"
 ]
 ],
 [
 255.11967429733215,
 [
-"Wallace: Next stop, After Compaction! All change!"
+"Wallace: Fetch the big box of track, lad.",
+"Gromit: (holds up the big box. It's quite small.)"
 ]
 ],
 [
 276.61144314435137,
 [
-"Wallace: Did you get all that, Gromit?",
-"Gromit: (got about a third of it, and the third that mattered)"
+"Wallace: Steady on, lad, you're summarising faster than I can talk!"
 ]
 ],
 [
