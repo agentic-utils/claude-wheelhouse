@@ -5284,6 +5284,9 @@ class WheelhouseApp(App):
         self.undo_waits: set[int] = set()   # the numbers of the Ctrl+Zs waiting for a Delete to land (action_undo)
         self.acting: int | None = None   # the number of the act landing or let through now (as_typed)
         self.ranks: dict[str, tuple] = {}   # each item's rank as last shown
+        self.preparing: int | None = None   # the inbox version a worker is sorting (prepare_items)
+        self.arranged: tuple | None = None   # arrangement's last answer, and its stamp
+        self.true_ranks: tuple[dict, dict] = ({}, {})   # ... and as it sorts, unpinned, with its group (arrow_only)
         self.sort_keys: dict[tuple, tuple] = {}   # each item's sort key as it stands (sort_key)
         self.compacting_drawn: bool | None = None   # whether Detail is drawn dimmed (paint_compacting)
         self.detail_parts_found: list = []   # detail_boxes, once found
@@ -5891,7 +5894,10 @@ class WheelhouseApp(App):
             self.clear_filter()   # the followed session went (ended elsewhere): as Esc, no ghost row
         self.client.background()   # in process, the hub's reading: the daemon's hub does its own
         self.paint_sessions()
-        self.paint_items()
+        if self.prepare_items():   # the inbox moved: sorted on a worker, painted as it lands
+            self.paint_detail()
+        else:
+            self.paint_items()
         self.focus_compactions()
         self.paint_away()
         self.paint_compacting()
@@ -6294,8 +6300,9 @@ class WheelhouseApp(App):
         quick = None if version is None else (
             version, self.items_state(), tuple(self.conversation_sids()), frozenset(self.compacting()),
             frozenset(self.lifeless_sids()), tuple(self.session_names().items()), tuple(sorted(self.cutoffs().items())), self.autocleanse and int(datetime.now(timezone.utc).timestamp() // AUTOCLEANSE_POLL))   # listable's clock
-        if quick is not None and self.items_painted is not None and self.items_painted[3] == quick \
-                and not self.repin and self.item_sink.move is None:
+        if quick is not None and self.items_painted is not None and not self.repin and self.item_sink.move is None \
+                and (self.items_painted[3] == quick or self.arrow_only(quick)):
+            self.items_painted = (*self.items_painted[:3], (*quick[:1], self.items_state(), *quick[2:]))
             self.paint_detail()
             return
         names_of = ("pin", "ref", "status", "title") if self.filter_sid else ("pin", "session", "ref", "status", "title")
@@ -6458,6 +6465,36 @@ class WheelhouseApp(App):
         self.cells_kept[key] = (on, cells)
         return cells
 
+    SELECTION_STATE = (4, 5, 15, 16)   # items_state's selected, pin, cursor_key and items_cursor
+
+    def arrow_only(self, quick: tuple) -> bool:
+        """Whether all that moved since the last paint_items is the selection, to a row shown,
+        the cursor on it, and the inbox would look the same: the item it left already at the rank it sorts to, its
+        pin let go changing nothing, and autocleanse not hiding it now it's left. Then nothing is
+        sorted or compared again, the new selection pinned at its rank as shown: at 4,000 items
+        an arrow's re-sort took 300 ms (#327)."""
+        kept = self.items_painted[3]
+        if kept is None or quick[:1] + quick[2:] != kept[:1] + kept[2:]:
+            return False
+        mask = lambda state: tuple(v for i, v in enumerate(state) if i not in self.SELECTION_STATE)
+        if mask(quick[1]) != mask(kept[1]):
+            return False
+        new = self.selected and f"{self.selected[0]}|{self.selected[1] or ''}"
+        if not new or self.items_table.cursor_key() != new:   # the cursor on it, as an arrow leaves it
+            return False
+        if self.pin is not None and self.pin[0] != new and self.pin[0] in self.ranks:
+            ranks, tokens = self.true_ranks
+            if (ranks.get(self.pin[0]), tokens.get(self.pin[0])) != (self.pin[1], self.pin[2]):
+                return False   # it sorts elsewhere now it's let go: painted where it goes
+            sid, ref = self.pin[0].split("|")
+            it = self.client.item(sid, ref) if self.autocleanse and not self.show_finished else None
+            sets = getattr(self.client, "sets", None) or self.client.inbox(self.filter_sid)
+            if it is not None and self.completed_hidden(it, sets.queued | sets.awaiting, datetime.now(timezone.utc)):
+                return False   # autocleanse hides it now the selection has moved on
+        key = self.selected[1] and new
+        self.pin = (key, self.ranks[key], self.rank_tokens[key]) if key in self.ranks else None
+        return True
+
     def items_state(self) -> tuple:
         """The app's own state paint_items reads, or leaves behind it (the rows, the cursor):
         with what it read from the hub, what tells a paint that would change nothing (#268)."""
@@ -6509,15 +6546,7 @@ class WheelhouseApp(App):
         key = self.selected and self.selected[1] and f"{self.selected[0]}|{self.selected[1]}"
         if self.pin is None or self.pin[0] != key:
             self.pin = (key, self.ranks[key], self.rank_tokens[key]) if key in self.ranks else None
-        keyed = [(item_key(it), it) for it in items]   # (row key, item): each key made once
-        found = {key: self.sort_key(it, processing, busy, names) for key, it in keyed}
-        everything = found
-        if self.item_sort == ordering.ITEMS_DEFAULT:   # ranks from the whole list's placed rows (arrange)
-            everything = {item_key(it): self.sort_key(it, processing, busy, names)
-                          for it in (self.client.all_items() if every is None else every)} | found
-        if len(self.sort_keys) > 2 * len(everything) + 100:   # the items gone, or their old states
-            self.sort_keys = {}
-        arranged = ordering.arrange(self.item_sort, everything)
+        keyed, found, arranged = self.arrangement(items, processing, busy, names, every)
         ranks = {key: arranged[key] for key in found}
         tokens = {key: token for key, (_, token) in found.items()}
         if self.pin and self.pin[0] in ranks:
@@ -6528,7 +6557,73 @@ class WheelhouseApp(App):
                 ranks[key], tokens[key] = self.pin[1], self.pin[2]
         self.repin = set()
         self.ranks, self.rank_tokens = ranks, tokens
+        self.true_ranks = ({key: arranged[key] for key in found}, {key: token for key, (_, token) in found.items()})   # unpinned (arrow_only)
         return sorted(keyed, key=lambda pair: ranks[pair[0]])
+
+    def arrangement(self, items, processing, busy, names, every=None, stamp=None):
+        """The items' inbox order before any pin (ranked_keyed): each (row key, item), its sort
+        key, and its rank. Pure but for its caches, so a worker can make it (prepare_items):
+        kept for the inbox's version (RemoteClient.inbox_version) and all else it reads, the
+        sort made once for each version, not at each arrow or tick (#327)."""
+        stamp = stamp or self.arrangement_stamp(processing, busy, names)
+        if stamp is not None:   # the very rows asked for: autocleanse and a Delete under way leave some out (listable)
+            stamp = (*stamp, tuple(map(id, items)))
+        kept = self.arranged
+        if stamp is not None and kept is not None and kept[0] == stamp:
+            return kept[1]
+        keyed = [(item_key(it), it) for it in items]   # (row key, item): each key made once
+        found = {key: self.sort_key(it, processing, busy, names) for key, it in keyed}
+        everything = found
+        if self.item_sort == ordering.ITEMS_DEFAULT:   # ranks from the whole list's placed rows (arrange)
+            everything = {item_key(it): self.sort_key(it, processing, busy, names)
+                          for it in (self.client.all_items() if every is None else every)} | found
+        if len(self.sort_keys) > 2 * len(everything) + 100:   # the items gone, or their old states
+            self.sort_keys = {}
+        out = (keyed, found, ordering.arrange(self.item_sort, everything))
+        if stamp is not None:
+            self.arranged = (stamp, out)
+        return out
+
+    def prepare_items(self) -> bool:
+        """The tick, the daemon's inbox moved since it was last sorted: its rows read, filtered
+        and sorted (arrangement) on a worker, off the UI thread, then painted on it as the
+        result lands (items_prepared), the sort kept for that version. Whether a worker has it;
+        False in process or synchronous (a test's client), where the tick paints at once. Input
+        never waits on it: a key's paint (settle) sorts on the loop as it always has (#312)."""
+        if not self.client.remote or getattr(self.client, "synchronous", True):
+            return False
+        version = self.client.inbox_version
+        if self.arranged is not None and self.arranged[0][0] == version:
+            return False   # sorted for this version already: the paint is the loop's, and short
+        if self.preparing == version:
+            return True
+        self.preparing = version
+
+        def work() -> None:
+            try:
+                found, processing, queued, awaiting = self.client.inbox(self.filter_sid)
+                busy = queued | awaiting
+                every = self.client.all_items() if self.item_sort == ordering.ITEMS_DEFAULT else None
+                self.arrangement(self.listable(found, busy), processing, busy, self.session_names(), every)
+            finally:   # landed or failed, the paint follows (and sorts on the loop if it must)
+                self.post(functools.partial(self.items_prepared, version))
+        self.spawn(work, "prepare")
+        return True
+
+    def items_prepared(self, version: int) -> None:
+        """prepare_items' sort landed: the inbox painted, unless the version has moved on since
+        (the next tick sorts that one) or a key is landing (whose own paint has done it)."""
+        if self.preparing == version:
+            self.preparing = None
+        if version == self.client.inbox_version and self.screen_stack and not self.landing:
+            self.paint_items()
+
+    def arrangement_stamp(self, processing, busy, names) -> tuple | None:
+        """What arrangement's answer is kept for: None in process, where the store has no version."""
+        version = getattr(self.client, "inbox_version", None)
+        return None if version is None else (version, self.filter_sid, self.item_sort, self.show_finished,
+                                              self.autocleanse, frozenset(self.going), frozenset(processing),
+                                              frozenset(busy), tuple(sorted((names or {}).items())))
 
     def sort_key(self, it, processing, busy, names) -> tuple[tuple, str]:
         """ordering.item_key under the sort in force, made once for an item as it stands: kept

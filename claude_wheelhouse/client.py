@@ -60,6 +60,7 @@ class LocalClient(Hub):
     elsewhere = False   # the sessions are on this machine
     connected = True
     replaced = None   # no daemon to be replaced under it
+    inbox_version = None   # the store has no stamp: the app reads and compares (RemoteClient.inbox_version)
 
     def land(self) -> None:
         pass   # in process, every read is the store's own: nothing waits to be shown

@@ -145,3 +145,47 @@ async def test_frame_rates(store, sid, monkeypatch, asked, app_fps, overlay_fps,
         got = None if app.animation is None else round(1 / app.animation._interval, 2)
         assert got == app_fps, desc
         assert min(tui.DOCK_FPS, asked) == overlay_fps, desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("moved, sorts, desc", [
+    (False, False, "an arrow over items that keep their ranks: nothing sorted again"),
+    (True, True, "the inbox moved meanwhile: sorted again"),
+])
+async def test_an_arrow_moves_the_cursor_without_sorting_the_inbox_again(store, sid, monkeypatch, moved, sorts, desc):
+    for i in range(6):
+        store.post_item(sid, "task", f"task {i}")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        app.client.inbox_version = 1   # as RemoteClient stamps it
+        app.items_table.focus()
+        app.items_table.move_cursor(row=1)
+        await pilot.pause()
+        app.paint_items()
+        await pilot.pause()
+        sorted_ = []
+        real = app.ranked_keyed
+        monkeypatch.setattr(app, "ranked_keyed", lambda *a, **kw: (sorted_.append(1), real(*a, **kw))[1])
+        app.client.inbox_version += moved
+        await pilot.press("down")
+        await pilot.pause()
+        assert bool(sorted_) == sorts, desc
+        assert app.selected and app.items_table.cursor_key() == f"{app.selected[0]}|{app.selected[1] or ''}", desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("moved, painted, desc", [
+    (False, True, "the inbox where the worker sorted it: painted as the sort lands"),
+    (True, False, "the inbox moved on while it sorted: the stale sort dropped, the next tick's lands"),
+])
+async def test_a_tick_sort_from_a_worker_lands_only_for_its_version(store, sid, monkeypatch, moved, painted, desc):
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.client.inbox_version = 3
+        app.preparing = 3
+        paints = []
+        monkeypatch.setattr(app, "paint_items", lambda: paints.append(1))
+        app.client.inbox_version += moved
+        app.items_prepared(3)
+        assert (bool(paints), app.preparing) == (painted, None), desc
