@@ -159,7 +159,7 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   `base.py` the `Scene` interface (excerpts, captions, small stills, the big animated frame) and
   the canvas, frame sizes (60 by 12 big, in every frame), tick rate and colour roles they
   share; `star_wars.py` the detention-level trash compactor (art B), `star_trek.py` the
-  engine room (scene A), `red_dwarf.py` Holly's senility (scene B), `men_in_black.py` the neuralyzer (scene C), `hitchhikers.py` the whale and the petunias (scene D). A new scene records its own golden file, `tests/golden/<name>.json`. Never imports Textual.
+  engine room (scene A), `red_dwarf.py` Holly's senility (scene B), `men_in_black.py` the neuralyzer (scene C), `hitchhikers.py` the whale and the petunias (scene D), `temple_of_doom.py` the spiked room (scene E). A new scene records its own golden file, `tests/golden/<name>.json`. Never imports Textual.
 - `splitter.py`, `knurl.py`, `emoji.py`, `unsent.py`: TUI pieces (dividers, scrollbars,
   emoji shortcodes, unsent text).
 - `protocol.md`, `protocol_sdk.md`, `protocol_tab.md`, `protocol_decisions.md`: what a

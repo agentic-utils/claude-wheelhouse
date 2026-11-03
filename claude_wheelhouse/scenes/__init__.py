@@ -3,7 +3,8 @@ compactor picks one per cycle (compactor.scene_for). Never imports Textual."""
 
 from __future__ import annotations
 
-from . import hitchhikers, men_in_black, red_dwarf, star_trek, star_wars
+from . import hitchhikers, men_in_black, red_dwarf, star_trek, star_wars, temple_of_doom
 from .base import Scene
 
-SCENES: dict[str, Scene] = {s.name: s for s in (star_wars.SCENE, star_trek.SCENE, red_dwarf.SCENE, men_in_black.SCENE, hitchhikers.SCENE)}
+SCENES: dict[str, Scene] = {s.name: s for s in (star_wars.SCENE, star_trek.SCENE, red_dwarf.SCENE, men_in_black.SCENE, hitchhikers.SCENE,
+                           temple_of_doom.SCENE)}
