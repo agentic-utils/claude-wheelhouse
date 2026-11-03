@@ -75,9 +75,6 @@
 "Doctor: Don't call her that. She's very sensitive about it."
 ],
 [
-"Dalek: DALEKS DO NOT COMPACT. DALEKS ARE ALREADY COMPACT."
-],
-[
 "Clara: You're very quiet in there.",
 "Doctor: I've been summarised to \"Hmm.\""
 ],
@@ -156,7 +153,7 @@
 "Doctor: A Time Lord never forgets, Clara. He keeps a very short summary."
 ],
 [
-"Rigsy: (sprays \"THE DOCTOR WAS HERE\", then a smaller one under it)"
+"Rigsy: (films the whole compaction on his phone, and runs out of storage)"
 ],
 [
 "Clara: The TARDIS has gone into siege mode.",
@@ -188,8 +185,12 @@
 "Doctor: Again?"
 ],
 [
-"Clara: The Boneless are copying your shape.",
-"Doctor: Flat, grey and furious. They've nailed it."
+"Doctor: The TARDIS has offered to summarise me.",
+"Clara: Let her. She knows you best."
+],
+[
+"Clara: How do you feel?",
+"Doctor: Lighter. About a hundred thousand tokens lighter."
 ],
 [
 "Doctor: Clara, I've worked out the compaction. Then it compacted that."
@@ -979,7 +980,7 @@
 [
 20.223653622976208,
 [
-"Doctor: Small talk? I'm four inches tall, Clara. All my talk is small talk."
+"Boneless: (try to flatten the summary, and find it's already flat)"
 ]
 ],
 [
@@ -991,15 +992,14 @@
 [
 53.741567999596846,
 [
-"Clara: I'm late for school.",
-"Doctor: Take me in. I'll be show and tell."
+"Doctor: Clara, did you know a TARDIS fits in a handbag?",
+"Clara: Every woman knows that."
 ]
 ],
 [
 77.23621652537405,
 [
-"Clara: You're very quiet in there.",
-"Doctor: I've been summarised to \"Hmm.\""
+"Doctor: Small talk? I'm four inches tall, Clara. All my talk is small talk."
 ]
 ]
 ],
@@ -1019,14 +1019,14 @@
 [
 49.73123313334577,
 [
-"Rigsy: (photographs the TARDIS next to his trainer, for scale)"
+"Clara: The summary just says \"the Doctor\".",
+"Rigsy: Doctor who?"
 ]
 ],
 [
 76.65953206400873,
 [
-"Clara: Pocket-sized Doctor. I could get used to this.",
-"Doctor: Don't."
+"Doctor: The summary calls me \"a Scottish man in a box\". Accurate. Rude."
 ]
 ],
 [
@@ -1039,14 +1039,15 @@
 [
 129.41311150770053,
 [
-"Dalek: DALEKS DO NOT COMPACT. DALEKS ARE ALREADY COMPACT."
+"Clara: You're very quiet in there.",
+"Doctor: I've been summarised to \"Hmm.\""
 ]
 ],
 [
 154.60880149457603,
 [
-"Doctor: Did the summary keep my good coat?",
-"Clara: It kept your bad mood. That'll keep you warm."
+"Doctor: How long was I in there?",
+"Clara: A whole compaction. You missed nothing. Literally, it's gone."
 ]
 ],
 [
@@ -1066,14 +1067,14 @@
 [
 231.90071357311805,
 [
-"Rigsy: (sprays \"THE DOCTOR WAS HERE\", then a smaller one under it)"
+"Clara: The TARDIS has gone into siege mode.",
+"Doctor: That's not siege mode. She's sulking about the summary."
 ]
 ],
 [
 255.11967429733215,
 [
-"Doctor: Has anyone ever told you you're bossy, Clara?",
-"Clara: The summary. Twice."
+"Doctor: (knocks four times from inside the handbag)"
 ]
 ],
 [
@@ -1086,7 +1087,8 @@
 [
 296.7520052594303,
 [
-"Boneless: (roll the old messages up the wall like a carpet)"
+"Doctor: Clara, stop swinging the bag!",
+"Clara: Stop being in the bag, then."
 ]
 ]
 ],
