@@ -42,15 +42,17 @@ STATUSES = {
     "doc": {"new", "updated", "read"},
     # GitHub's, never the session's or the person's (set_pr_states, from the PRs pane's fetch)
     "pr": {"draft", "open", "merged", "closed"},
-    # the person's: open until run (as an open question: the person's move, #335), run once a
-    # run ended well, failed when its last run ended with an error (Run kept), closed if dismissed
-    "command": {"open", "run", "failed", "closed"},
+    # the person's: open until run (as an open question: the person's move, #335), running from
+    # the run's start till its tab says how it ended (Run disabled, #339), run once a run ended
+    # well, failed when its last run ended with an error or never said (Run kept), closed if dismissed
+    "command": {"open", "running", "run", "failed", "closed"},
 }
 INITIAL_STATUS = {"task": "todo", "question": "open", "agent": "running", "decision": "unseen",
                   "permission": "open", "doc": "new", "pr": "open", "command": "open"}
 CLOSED = {"done", "dropped", "closed", "failed", "allowed", "denied", "split"}
 # statuses in CLOSED that are still the person's move for a kind: a command whose run failed (#335)
 STILL_OPEN = {"command": {"failed"}}
+RUNNABLE = ("open", "failed")   # a command's statuses that Run starts from (#339): not running, run or closed
 
 
 def is_closed(item) -> bool:
@@ -498,7 +500,10 @@ ADDED_COLUMNS = [("sessions", "end_requested_at", "TEXT"), ("sessions", "park_re
                  ("sessions", "op_origin", "TEXT"), ("sessions", "op_at", "TEXT"), ("sessions", "op_deadline", "TEXT"),
                  # when its host last ended a turn (set_activity, UTC): a call from the turn an op was told in, after
                  # that op was called off, is late (refuse_late)
-                 ("sessions", "idle_at", "TEXT")]
+                 ("sessions", "idle_at", "TEXT"),
+                 # a command item's run under way (#339): when it was started (UTC), and its tab's process
+                 # as JSON [pid, start time, boot id] (liveness.is_alive) once the tab has taken it up
+                 ("items", "run_at", "TEXT"), ("items", "run_tab", "TEXT")]
 # older databases may also carry sessions.transcript_title and sessions.renamed_at,
 # from a /rename pickup since dropped, and items.seq (RETIRED_TRIGGER): unused, and left in place
 DECISIONS_CLOSE = "migrated_decisions_close"   # settings: the one-off migration above has run
@@ -1652,8 +1657,8 @@ class Store:
     def post_command(self, sid: str, command: str, why: str, want_output: bool = False) -> tuple[str, bool]:
         """A command the session asks the person to run (#257): why its title, the command its
         body, both checked (quickshell.check_command, check_why). The same command posted
-        again by the same session is the same item, back to new with this why. (ref, whether
-        it was new.) want_output: the session asks for what it prints (items.want_output)."""
+        again by the same session is the same item, back to open with this why (a running one
+        kept running, #339). (ref, whether it was new.) want_output: the session asks for what it prints (items.want_output)."""
         from .quickshell import check_command, check_why
         check_command(command)
         check_why(why)
@@ -1666,8 +1671,10 @@ class Store:
                 ref, new = self._insert_item(db, sid, "command", why, command, INITIAL_STATUS["command"]), True
             else:
                 ref, new = row["ref"], False
-            db.execute("UPDATE items SET title = ?, status = 'open', dismissed = NULL, want_output = ?, updated_at = ?, "
-                       "session_at = ? WHERE session_id = ? AND ref = ?", (why, int(want_output), now(), now(), sid, ref))
+            # one running keeps running: its run's end decides (#339)
+            db.execute("UPDATE items SET title = ?, status = CASE WHEN status = 'running' THEN status ELSE 'open' END, "
+                       "dismissed = NULL, want_output = ?, updated_at = ?, session_at = ? WHERE session_id = ? AND ref = ?",
+                       (why, int(want_output), now(), now(), sid, ref))
             return ref, new
 
     def close_command(self, sid: str, ref: str, closed: bool = True, status: str | None = None) -> None:
@@ -1679,6 +1686,53 @@ class Store:
             if not db.execute("UPDATE items SET status = ?, updated_at = ? WHERE session_id = ? AND ref = ? "
                               "AND kind = 'command'", (status, now(), sid, ref)).rowcount:
                 raise KeyError(f"no command {ref} in this session")
+
+    def start_run(self, sid: str, ref: str) -> str:
+        """A command item's run accepted (#339): running, from open or failed, with when, and no
+        tab yet, so Run is disabled wherever it shows. Written before the tab opens, which may
+        record the outcome at once. The status it had; ValueError (why) unless it could be run.
+        KeyError if it isn't a command of the session's, SessionGone if the session has gone."""
+        with self.tx() as db:
+            self._require(db, sid)
+            row = db.execute("SELECT status FROM items WHERE session_id = ? AND ref = ? AND kind = 'command'",
+                             (sid, ref)).fetchone()
+            if row is None:
+                raise KeyError(f"no command {ref} in this session")
+            if row["status"] not in RUNNABLE:
+                raise ValueError(f"{ref} is {'running already' if row['status'] == 'running' else row['status']}: nothing run")
+            db.execute("UPDATE items SET status = 'running', run_at = ?, run_tab = NULL, updated_at = ? "
+                       "WHERE session_id = ? AND ref = ?", (now(), now(), sid, ref))
+            return row["status"]
+
+    def unstart_run(self, sid: str, ref: str, status: str) -> None:
+        """A run whose tab never opened (#339): back to the status it had, if still running."""
+        with self.tx() as db:
+            db.execute("UPDATE items SET status = ?, updated_at = ? WHERE session_id = ? AND ref = ? "
+                       "AND kind = 'command' AND status = 'running'", (status, now(), sid, ref))
+
+    def run_taken(self, sid: str, ref: str, pid: int, start: int | None, boot: str) -> None:
+        """A running command's tab has taken its run up (#339): its process, kept so a tab that
+        closes before saying how the run ended is noticed (lose_run)."""
+        with self.tx() as db:
+            db.execute("UPDATE items SET run_tab = ? WHERE session_id = ? AND ref = ? AND kind = 'command' "
+                       "AND status = 'running'", (json.dumps([pid, start, boot]), sid, ref))
+
+    def running_commands(self) -> list[sqlite3.Row]:
+        """Every command item whose run is under way (#339), with when it started and its tab."""
+        return self._all("SELECT session_id, ref, run_at, run_tab FROM items WHERE kind = 'command' "
+                         "AND status = 'running'")
+
+    def lose_run(self, sid: str, ref: str, tab: str | None, why: str) -> bool:
+        """A running command whose run will never say how it ended (#339): failed, Run enabled
+        again, with why as a note the session is never sent. Only if it is still running with the
+        tab seen (an outcome that landed meanwhile wins). Whether it was."""
+        with self.tx() as db:
+            if not db.execute("UPDATE items SET status = 'failed', updated_at = ? WHERE session_id = ? AND ref = ? "
+                              "AND kind = 'command' AND status = 'running' AND run_tab IS ?",
+                              (now(), sid, ref, tab)).rowcount:
+                return False
+            self._run_note(db, sid, ref, why)
+            return True
 
     def ran(self, sid: str, ref: str, note: str | None = None) -> None:
         """The person started a command item's run (#257): its status waits for the run's end
