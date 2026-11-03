@@ -17,7 +17,7 @@ EXCERPTS: tuple[tuple[str, ...], ...] = (
     ("Agrajag: A bowl of petunias, Dent! You compacted me into a bowl of petunias!",),
     ("Whale: I've existed for about a minute, and already they're summarising me.",),
     ("Marvin: Brain the size of a planet, and they ask me to summarise a chat.",),
-    ("Marvin: Compact me too. Leave out the pain in the diodes down my left side.",),
+    ("Marvin: Compact me. Leave out the pain in all the diodes down my left side.",),
     ("Marvin: I talked to the compactor for a bit. It's lost the will to live.",),
     ("Ford: Time is an illusion. Context doubly so.",),
     ("Arthur: This must be Thursday. I never could get the hang of compactions.",),
@@ -72,7 +72,7 @@ EXCERPTS: tuple[tuple[str, ...], ...] = (
     ("Wonko: The compactor came with instructions. Then I knew the world was mad.",),
     ("Guide: Disaster Area's summary is best heard from thirty-seven miles away.",),
     ("Guide: Compactors: bad-tempered, bureaucratic, officious and callous.",),
-    ("Guide: Also forgotten in the compaction: a sperm whale, several miles up.",),
+    ("Ford: Do you enjoy compacting?", "Vogon guard: It's a job. Shouting, throwing things out of airlocks."),
     ("Arthur: Prak told us the whole truth.", "Ford: Took hours. Summary's mostly frogs."),
     ("Guide: Past the Context Event Horizon, every message is a summary.",),
     ("Arthur: Infinite monkeys outside. They've worked out a summary.",),
@@ -136,6 +136,7 @@ STARS = ((2, 30), (3, 3), (3, 55), (4, 25), (5, 38), (6, 12), (6, 52), (7, 30), 
 MORPH = 2 * TICKS   # frames of improbability before the missiles are a whale and some petunias
 RISE = 4   # rows the ground climbs to meet them; a long /compact gets close, never there
 HEIGHT = 30000   # feet above Magrathea when the drive cuts out
+CLOSEST = 0.9   # the most of the way the ground gets while compacting: 3,000 ft short
 STILL = {"preparing": 4.0, "compacting": (MORPH + 4 * TICKS) / TICKS, "completed": 0.0,
          "failed": 0.0, "cancelled": 3.0}   # compacting: the ground half way up
 THOUGHTS = ("What's happening?", "Er, excuse me, who am I?", "Hello?", "Why am I here?",
@@ -150,7 +151,7 @@ def fallen(state: str, f: int) -> float:
         return 1.0
     if state != "compacting" or f < MORPH:
         return 0.0
-    return 1 - 0.75 ** ((f - MORPH) / (2 * TICKS))
+    return CLOSEST * (1 - 0.75 ** ((f - MORPH) / (2 * TICKS)))
 
 
 def sunk(f: int) -> int:

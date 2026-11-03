@@ -223,7 +223,7 @@
 "^^.^^^.^^^^..^^^.^^^^.^^^..^^^.^^^.^^^^..^^^.^^^^.^^^..^^^.^",
 "░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░",
 "░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░",
-"  ALTITUDE [█████·····] 12,700 ft                           ",
+"  ALTITUDE [█████·····] 14,400 ft                           ",
 "                    improbability rising                    "
 ],
 [
@@ -253,7 +253,7 @@
 "░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░",
 "░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░",
 "░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░",
-"  ALTITUDE [█████████·] 100 ft                              ",
+"  ALTITUDE [████████··] 3,100 ft                            ",
 "                    improbability rising                    "
 ],
 [
@@ -267,7 +267,7 @@
 "ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss",
 "ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss",
 "ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss",
-"  hhhhhhhh cccccccccccc cccccc                              ",
+"  hhhhhhhh cccccccccccc cccccccc                            ",
 "                                                            "
 ]
 ],
@@ -283,7 +283,7 @@
 "   .                    .     ·              .              ",
 "^^.^^^.^^^^..^^^.^^^^.^^^..^^^.^^^.^^^^..^^^.^^^^.^^^..^^^.^",
 "░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░",
-"  ALTITUDE [████······] 16,900 ft                           ",
+"  ALTITUDE [███·······] 18,200 ft                           ",
 "                    improbability rising                    "
 ],
 [
@@ -301,7 +301,7 @@
 "                                                            "
 ]
 ],
-"still compacting": "                   D O N ' T   P A N I C                    \n        \"Why am I here?\"                                    \n       ____________  '        *           *@*               \n      /  o         \\_____/|               \\|/          ·    \n      \\____________/-----\\|               \\_/               \n              '                       ·                     \n            ·                                               \n   .                    .     ·              .              \n^^.^^^.^^^^..^^^.^^^^.^^^..^^^.^^^.^^^^..^^^.^^^^.^^^..^^^.^\n░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░\n  ALTITUDE [████······] 16,900 ft                           \n                    improbability rising                    ",
+"still compacting": "                   D O N ' T   P A N I C                    \n        \"Why am I here?\"                                    \n       ____________  '        *           *@*               \n      /  o         \\_____/|               \\|/          ·    \n      \\____________/-----\\|               \\_/               \n              '                       ·                     \n            ·                                               \n   .                    .     ·              .              \n^^.^^^.^^^^..^^^.^^^^.^^^..^^^.^^^.^^^^..^^^.^^^^.^^^..^^^.^\n░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░\n  ALTITUDE [███·······] 18,200 ft                           \n                    improbability rising                    ",
 "caption compacting": "improbability rising",
 "frame completed t=0.0": [
 [
@@ -788,7 +788,7 @@
 "Marvin: Brain the size of a planet, and they ask me to summarise a chat."
 ],
 [
-"Marvin: Compact me too. Leave out the pain in the diodes down my left side."
+"Marvin: Compact me. Leave out the pain in all the diodes down my left side."
 ],
 [
 "Marvin: I talked to the compactor for a bit. It's lost the will to live."
@@ -954,7 +954,8 @@
 "Guide: Compactors: bad-tempered, bureaucratic, officious and callous."
 ],
 [
-"Guide: Also forgotten in the compaction: a sperm whale, several miles up."
+"Ford: Do you enjoy compacting?",
+"Vogon guard: It's a job. Shouting, throwing things out of airlocks."
 ],
 [
 "Arthur: Prak told us the whole truth.",
