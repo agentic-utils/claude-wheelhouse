@@ -5896,9 +5896,7 @@ class WheelhouseApp(App):
             self.clear_filter()   # the followed session went (ended elsewhere): as Esc, no ghost row
         self.client.background()   # in process, the hub's reading: the daemon's hub does its own
         self.paint_sessions()
-        if self.prepare_items():   # the inbox moved: sorted on a worker, painted as it lands
-            self.paint_detail()
-        else:
+        if not self.prepare_items():   # the inbox moved: sorted on a worker, painted (Detail with it) as it lands
             self.paint_items()
         self.focus_compactions()
         self.paint_away()
