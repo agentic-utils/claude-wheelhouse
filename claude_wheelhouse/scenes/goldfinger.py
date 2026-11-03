@@ -30,14 +30,15 @@ EXCERPTS: tuple[tuple[str, ...], ...] = (
     ("Goldfinger: You are worth more to me compacted, Mr Bond. Cheaper to feed.",),
     ("Goldfinger: Grand Slam has my undivided attention. Oddjob crushes the rest.",),
     ("Pussy Galore: Shall I summarise the Dom Pérignon '53 as \"fizz\"?", "Bond: My dear girl, there are some things that just aren't done."),
-    ("Solo: Hey! That car's got suicide doors!", "Oddjob: (leans on the lever. The four doors are now one door.)"),
+    ("M: Goldfinger's crushing cars, 007?", "Bond: Only the ones that talk too much, sir."),
     ("Oddjob: (stands to attention by the crusher, as at a very short funeral)",),
     ("Oddjob: (throws the bowler; it slices off the oldest messages, neatly)",),
     ("Bond: Mr Solo, where's your car?", "Solo: (points at a very small cube)"),
-    ("Solo: You can't crush a man's whole history like that!", "Goldfinger: I'm keeping the gold, Mr Solo. The history was padding."),
+    ("Solo: You can't crush a man's whole history like that!", "Goldfinger: I've read your history, Mr Solo. The crusher is being kind."),
     ("Goldfinger: I've compacted all my life, Mr Bond. Mostly other people's cars.",),
     ("Mr Ling: My principals ask how big the summary will be.", "Goldfinger: About the size of a Lincoln. Afterwards."),
     ("Kisch: Boss, the summary won't fit on the truck.", "Goldfinger: Then compact the truck."),
+    ("Mr Ling: My principals ask for the minutes of the meeting.", "Goldfinger: Minute. Singular."),
     ("Felix Leiter: Got the homer, James. The signal's getting... smaller.",),
     ("Bond: (slips a note into Solo's pocket: a handoff, for after the compaction)",),
     ("M: 007, your report runs to three hundred pages.", "Bond: It's been through a crusher since, sir. It's a cube."),
@@ -58,18 +59,17 @@ EXCERPTS: tuple[tuple[str, ...], ...] = (
     ("Solo: There were phone numbers in that glovebox!", "Oddjob: (holds up one phone number. The important one.)"),
     ("Bond: Not the Aston, Oddjob.", "Oddjob: (looks at the Aston, then the crusher, and measures with his thumb)"),
     ("Solo: Where's Oddjob taking my car?", "Goldfinger: Somewhere smaller."),
-    ("Oddjob: (carries the cube to the pickup under one arm, like a hatbox)",),
-    ("Solo: That Lincoln did nought to sixty in ten seconds!", "Goldfinger: And eighteen feet to four in a minute."),
+    ("Oddjob: (stacks the cube on the heap with the others, and labels it SOLO)",),
+    ("Bond: Ford spent years making the Lincoln longer.", "Goldfinger: Oddjob takes a minute to make it shorter."),
     ("Bond: How exactly does one summarise a Lincoln?", "Goldfinger: Front to back, Mr Bond, at forty tons."),
     ("Oddjob: (reads out the cube's serial number. Silently.)",),
-    ("Solo: That car had sentimental value!", "Goldfinger: The sentiment is in the summary. The value is in my vault."),
-    ("Goldfinger: The crusher is my favourite editor. It never wants more pages.",),
+    ("Goldfinger: Every Lincoln has a cube inside it, Mr Bond, waiting to get out.",),
     ("Bond: (straightens his tie in the cube's chrome. Still a full-length Bond.)",),
     ("Oddjob: (presents the cube to Goldfinger on a silver tray, with a napkin)",),
     ("Solo: My mother's photo was on the dashboard!", "Oddjob: (hands it back. It is now a passport photo.)"),
     ("Bond: No speech before the crusher, Goldfinger? Villains usually give one.", "Goldfinger: I gave it at lunch, Mr Bond. This is the summary."),
-    ("Solo: Hey, stop! I left the engine running!", "Oddjob: (presses on. The engine stops.)"),
-    ("Pussy Galore: Shall I fly it out for you?", "Goldfinger: It fits on a pickup now, Miss Galore."),
+    ("Goldfinger: Do you know the crusher's capacity, Mr Bond?", "Bond: Judging by Solo's face, one Lincoln and a temper."),
+    ("Pussy Galore: My Flying Circus could gas the yard. Save you the crusher.", "Goldfinger: Gas leaves a car the same size, Miss Galore."),
     ("Kisch: Boss, Solo's still shouting.", "Goldfinger: Let him. He's the only one who remembers the whole conversation."),
     ("Oddjob: (folds the aerial into the cube last, like a cherry on top)",),
     ("Solo: I'll be back for that car!", "Goldfinger: It'll be easy to carry."),
@@ -188,8 +188,12 @@ def oddjob(c: Canvas, pose: str, f: int = 0) -> None:
     c.put(5, x, "(-)", "c")
     c.put(6, x, {"still": "/█\\", "down": "/█──"}.get(pose, "/█─"), "c")
     c.put(7, x, "/ \\", "c")
-    if pose == "tap":
-        c.put(4 + f % 2, x + 3, "▄█▄", "f")
+    if pose == "tap":   # the bowler raised, then brought down on the box's lid
+        if f % 2:
+            c.put(4, x + 3, "▄█▄", "f")
+            c.put(5, x + 3, "/", "c")
+        else:
+            c.put(5, x + 3, "▄█▄", "f")
 
 
 def solo(c: Canvas, x: int, shouting: bool, hop: bool) -> None:
