@@ -363,14 +363,13 @@ def scene(state: str, t: float, animate: bool = True) -> Frame:
         petunias(c, f)
         say(c, WHALE_AT[1] + 10, RUSHING if fall > 0.6 else THOUGHTS[beat % len(THOUGHTS)])
     elif state == "completed" and f < FALLING:   # the last of the fall: the petunias have a thought
-        top = FLOOR - RISE + 1
+        top = FLOOR - RISE + 1   # a row of air under them: they touch the ground only as the whale bursts
         sky(c, top, f)
         ground(c, top, f, dust=True)
-        whale(c, f, falling=True, row=top - len(WHALE))
-        petunias(c, f, row=top - len(PETUNIAS))
+        whale(c, f, falling=True)
+        petunias(c, f)
         c.put(THINK_AT[0], THINK_AT[1], f"( {THOUGHT} )", "s")
         c.put(THINK_AT[0], THINK_AT[1] + 2, THOUGHT, "f")
-        c.put(THINK_AT[0] + 1, PETUNIAS_AT[1] + 1, "o", "s")
     elif state == "completed":
         top = FLOOR - RISE
         sky(c, top, f)
