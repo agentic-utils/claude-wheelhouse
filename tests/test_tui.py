@@ -4465,7 +4465,7 @@ async def test_the_stats_shimmer_and_eyes_rest_while_typing(store, sid, monkeypa
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("fps, interval, desc", [
-    (None, 0.1, "the default: 10 a second"),
+    (None, 0.2, "the default 10 a second, drawn at tui.EYES_FPS, 5 (#327)"),
     ("2.5", 0.4, "a fraction"),
     ("0", None, "0: no animation at all"),
 ])
