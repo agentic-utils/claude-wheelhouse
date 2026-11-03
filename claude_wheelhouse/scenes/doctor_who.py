@@ -26,7 +26,6 @@ EXCERPTS: tuple[tuple[str, ...], ...] = (
     ("Doctor: (walks the tiny TARDIS off the railway line on two fingers)", "Clara: Good boy, Thing."),
     ("Clara: The last Doctor would've put fish fingers and custard in the summary.",),
     ("Doctor: An exceptional summary, Clara. Goodness had nothing to do with it.",),
-    ("Dalek: YOU ARE A GOOD SUMMARY.",),
     ("Rigsy: Who are you, anyway?", "Clara: I'm the Doctor. He's in my bag."),
     ("Doctor: The Boneless are eating our dimensions. A compaction, only rude.",),
     ("Clara: How small does it go?", "Doctor: Ask me again in a sentence. A short one."),
@@ -35,7 +34,6 @@ EXCERPTS: tuple[tuple[str, ...], ...] = (
     ("Doctor: Every regeneration I lose a face. Every compaction I lose a Tuesday.",),
     ("Doctor: Clara, the walls are closing in!", "Clara: Wrong film, Doctor. Ours is the box getting smaller."),
     ("Rigsy: Your box is the size of a toaster now, mate.", "Doctor: Don't call her that. She's very sensitive about it."),
-    ("Dalek: (glides in, sees the TARDIS in a handbag, quietly glides out again)",),
     ("Dalek: DALEKS DO NOT COMPACT. DALEKS ARE ALREADY COMPACT.",),
     ("Clara: You're very quiet in there.", "Doctor: I've been summarised to \"Hmm.\""),
     ("Doctor: Small talk? I'm four inches tall, Clara. All my talk is small talk.",),
@@ -60,7 +58,7 @@ EXCERPTS: tuple[tuple[str, ...], ...] = (
     ("Doctor: Did the summary keep my good coat?", "Clara: It kept your bad mood. That'll keep you warm."),
     ("Doctor: How long was I in there?", "Clara: A whole compaction. You missed nothing. Literally, it's gone."),
     ("Doctor: A Time Lord never forgets, Clara. He keeps a very short summary.",),
-    ("Dalek: COMPACT THE DOCTOR!", "Clara: He's four inches tall, love. Get in the queue."),
+    ("Rigsy: Is he always this grumpy?", "Clara: That's the summary. In full he's worse."),
     ("Clara: The TARDIS has gone into siege mode.", "Doctor: That's not siege mode. She's sulking about the summary."),
     ("Doctor: Never be cruel, never be cowardly, and never, ever skip the summary.",),
     ("Doctor: Has anyone ever told you you're bossy, Clara?", "Clara: The summary. Twice."),
@@ -69,7 +67,8 @@ EXCERPTS: tuple[tuple[str, ...], ...] = (
     ("Clara: It says \"Clara Oswald: impossible girl, carries the plot\".", "Doctor: Who let you write the summary?"),
     ("Clara: (zips the handbag shut so the Doctor can't edit the summary)",),
     ("Clara: Rigsy wants to know if he's in the summary.", "Doctor: Who's Rigsy?"),
-    ("Clara: You can't fit the Time War in a summary.", "Doctor: Watch me. \"Bad.\""),
+    ("Clara: The summary's lost Gallifrey.", "Doctor: Again?"),
+    ("Clara: (holds the handbag to her ear) Are you summarising in there?", "Doctor: Brooding. Much the same."),
     ("Doctor: Clara. Do you happen to know how to summarise this thing?",),
     ("Clara: (checks her bag) Phone, keys, purse, TARDIS.",),
     ("Clara: The bag's getting heavier, Doctor.", "Doctor: That's the summary. It's very dense."),
@@ -106,7 +105,7 @@ FULL, FLOOR, BAG = 108, 6, 4   # inches tall: a police box, the least it shrinks
 HALF = 30.0   # seconds a compaction takes to halve the height left above FLOOR
 STUCK = 30   # inches tall when it stalled, and where a called-off one starts growing back from
 GROW = 3   # seconds a called-off one takes to grow back to FULL
-STILL = {"preparing": 2.0, "compacting": 40.0, "completed": 1.0, "failed": 13.0, "cancelled": 1.0}
+STILL = {"preparing": 2.0, "compacting": 40.0, "completed": 1.0, "failed": 10.5, "cancelled": 1.0}
 
 # the police box a size at a time (rows top to bottom, its foot on FOOT): the tallest it can be
 # drawn at each height, its lamp on the top row, and where the Doctor's scowl goes (row, column)
@@ -250,7 +249,7 @@ def readout(c: Canvas, inches: int, status: str, role: str = "c") -> None:
 TALK = CLARA + 1   # over Clara's head
 PREPARING = (("Routine compaction. Nothing changes size.", TC), ("You always say that.", TALK),
              ("(shakes the spray can)", RIGSY + 1))
-TALL = (("Doctor? Your door's gone a bit small.", TALK), ("The outside's compacting. Inside's fine!", TC),
+TALL = (("Doctor? Your door's gone a bit small.", TALK), ("Dimensional leak. Hold the door!", TC),
         ("Is that meant to happen?", RIGSY + 1), ("Nothing he does is meant to happen.", TALK))
 SHORT = (("Clara! Pick me up before someone posts me!", TC), ("Right. Handbag.", TALK),
          ("(a hand waves out of the door)", TC), ("Mind the door, Clara. It's my only one.", TC))
@@ -298,9 +297,11 @@ def scene(state: str, t: float, animate: bool = True) -> Frame:
         tardis(c, inches, "r" if f % 2 == 0 else "w", wave=f)
         clara(c)
         rigsy(c, f, spraying=False)
-        x = (f // 2) % (BIG_WIDTH + 16) - 8
+        x = (f // 2) % (BIG_WIDTH + 16)   # gliding in from the left edge, out at the right, and round again
         dalek(c, x, f)
         text, mid = FAILED[beat % len(FAILED)]
+        if mid is None and x > BIG_WIDTH - len(DALEK[0]):   # the chant only while the Dalek is all in frame
+            text, mid = FAILED[1]
         say(c, text, x + 4 if mid is None else mid, "r" if mid is None else " ")
         role = "r" if f % 2 == 0 else "c"
     else:

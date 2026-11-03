@@ -46,9 +46,6 @@
 "Doctor: An exceptional summary, Clara. Goodness had nothing to do with it."
 ],
 [
-"Dalek: YOU ARE A GOOD SUMMARY."
-],
-[
 "Rigsy: Who are you, anyway?",
 "Clara: I'm the Doctor. He's in my bag."
 ],
@@ -76,9 +73,6 @@
 [
 "Rigsy: Your box is the size of a toaster now, mate.",
 "Doctor: Don't call her that. She's very sensitive about it."
-],
-[
-"Dalek: (glides in, sees the TARDIS in a handbag, quietly glides out again)"
 ],
 [
 "Dalek: DALEKS DO NOT COMPACT. DALEKS ARE ALREADY COMPACT."
@@ -166,8 +160,8 @@
 "Doctor: A Time Lord never forgets, Clara. He keeps a very short summary."
 ],
 [
-"Dalek: COMPACT THE DOCTOR!",
-"Clara: He's four inches tall, love. Get in the queue."
+"Rigsy: Is he always this grumpy?",
+"Clara: That's the summary. In full he's worse."
 ],
 [
 "Clara: The TARDIS has gone into siege mode.",
@@ -199,8 +193,12 @@
 "Doctor: Who's Rigsy?"
 ],
 [
-"Clara: You can't fit the Time War in a summary.",
-"Doctor: Watch me. \"Bad.\""
+"Clara: The summary's lost Gallifrey.",
+"Doctor: Again?"
+],
+[
+"Clara: (holds the handbag to her ear) Are you summarising in there?",
+"Doctor: Brooding. Much the same."
 ],
 [
 "Doctor: Clara. Do you happen to know how to summarise this thing?"
@@ -676,31 +674,31 @@
 ],
 "frame failed still": [
 [
-"                         \"COM-PACT! COM-PACT!\"              ",
+"       \"Don't let it near the summary, Clara!\"              ",
 "                                                            ",
 "                                                            ",
 " +------------+                                             ",
-" | o   o~  o  |                                             ",
-" |/|\\ /|\\ ~|\\ |         _[]_     (==)=o {o}       /o\\       ",
-" |/ \\ / \\ / ~ |        /====\\   [____]= /|\\       /|\\=      ",
+" | o ~ o   o  |                                             ",
+" |/|\\ /~\\ /|\\ |         _[]_     (==)=o {o}       /o\\       ",
+" |/ \\ / \\~/ \\ |        /====\\   [____]= /|\\       /|\\=      ",
 " +------------+        |\\/[]|   |oooo|  /_\\[__]    |        ",
-"                       |_||_|_w/oooooo\\ / \\       / \\       ",
+"                       |_||_|_W/oooooo\\ / \\       / \\       ",
 "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
 " OUTSIDE [███·······] 2 ft  6 in   STUCK. DALEK!            ",
 "                   stuck, and now a Dalek                   "
 ],
 [
-"                         rrrrrrrrrrrrrrrrrrrrr              ",
+"                                                            ",
 "                                                            ",
 "                                                            ",
 " ssssssssssssss                                             ",
-" sssssssdssssss                                             ",
-" sssssssssdssss        wwrrww  hhhhhhhr ccc       ccc       ",
-" sssssssssssdss        wwwwww  hhhhhhhh ccc       ccck      ",
+" ssssdsssssssss                                             ",
+" ssssssdsssssss        wwwwww  hhhhhhhf ccc       ccc       ",
+" ssssssssdsssss        wwwwww  hhhhhhhh ccc       ccck      ",
 " ssssssssssssss        wccwww  hhhhhhhh ccchhhh    c        ",
 "                       wwwwwwcchhhhhhhh ccc       ccc       ",
 "ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss",
-" hhhhhhh cccccccccccc cccccccccc   rrrrrrrrrrrrr            ",
+" hhhhhhh cccccccccccc cccccccccc   ccccccccccccc            ",
 "                                                            "
 ]
 ],
@@ -711,10 +709,10 @@
 "                                                            ",
 " +------------+                                             ",
 " |~o   o   o  |                                             ",
-" |/|~ /|\\ /|\\ |         _[]_            {o}       /o\\       ",
-" |/ \\ ~ \\ / \\ |        /====\\           /|\\       /|\\=      ",
-" +------------+        |\\/[]|           /_\\[__]    |        ",
-"                       |_||_|_w         / \\       / \\       ",
+"  (==)=o\\ /|\\ |         _[]_            {o}       /o\\       ",
+" [____]=\\ / \\ |        /====\\           /|\\       /|\\=      ",
+" |oooo| ------+        |\\/[]|           /_\\[__]    |        ",
+"/oooooo\\               |_||_|_w         / \\       / \\       ",
 "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
 " OUTSIDE [███·······] 2 ft  6 in   STUCK. DALEK!            ",
 "                   stuck, and now a Dalek                   "
@@ -725,10 +723,10 @@
 "                                                            ",
 " ssssssssssssss                                             ",
 " sdssssssssssss                                             ",
-" sssdssssssssss        wwrrww           ccc       ccc       ",
-" sssssdssssssss        wwwwww           ccc       ccck      ",
-" ssssssssssssss        wccwww           ccchhhh    c        ",
-"                       wwwwwwcc         ccc       ccc       ",
+"hhhhhhhrsssssss        wwrrww           ccc       ccc       ",
+"hhhhhhhhsssssss        wwwwww           ccc       ccck      ",
+"hhhhhhhhsssssss        wccwww           ccchhhh    c        ",
+"hhhhhhhh               wwwwwwcc         ccc       ccc       ",
 "ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss",
 " hhhhhhh cccccccccccc cccccccccc   rrrrrrrrrrrrr            ",
 "                                                            "
@@ -741,10 +739,10 @@
 "                                                            ",
 " +------------+                                             ",
 " | o   o   ~  |                                             ",
-"=)=o\\ /|\\ /|\\~|         _[]_            {o}       /o\\       ",
-"__]=\\ / \\ / \\ |        /====\\           /|\\       /|\\=      ",
-"oo| ----------+        |\\/[]|           /_\\[__]    |        ",
-"ooo\\                   |_||_|_W         / \\       / \\       ",
+" |/|  (==)=o\\~|         _[]_            {o}       /o\\       ",
+" |/~ [____]=\\ |        /====\\           /|\\       /|\\=      ",
+" +-- |oooo| --+        |\\/[]|           /_\\[__]    |        ",
+"    /oooooo\\           |_||_|_W         / \\       / \\       ",
 "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
 " OUTSIDE [███·······] 2 ft  6 in   STUCK. DALEK!            ",
 "                   stuck, and now a Dalek                   "
@@ -755,10 +753,10 @@
 "                                                            ",
 " ssssssssssssss                                             ",
 " ssssssssssdsss                                             ",
-"hhhfsssssssssds        wwwwww           ccc       ccc       ",
-"hhhhsssssssssss        wwwwww           ccc       ccck      ",
-"hhhhsssssssssss        wccwww           ccchhhh    c        ",
-"hhhh                   wwwwwwcc         ccc       ccc       ",
+" ssshhhhhhhfsds        wwwwww           ccc       ccc       ",
+" ssdhhhhhhhhsss        wwwwww           ccc       ccck      ",
+" ssshhhhhhhhsss        wccwww           ccchhhh    c        ",
+"    hhhhhhhh           wwwwwwcc         ccc       ccc       ",
 "ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss",
 " hhhhhhh cccccccccccc cccccccccc   ccccccccccccc            ",
 "                                                            "
@@ -771,10 +769,10 @@
 "                                                            ",
 " +------------+                                             ",
 " |~o   o   o  |                                             ",
-" |/|~ /|\\ /|\\ |         _[]_          (==)=o      /o\\       ",
-" |/ \\ ~ \\ / \\ |        /====\\        [____]=      /|\\=      ",
-" +------------+        |\\/[]|        |oooo| __]    |        ",
-"                       |_||_|_w     /oooooo\\      / \\       ",
+" |/|~ /|\\ /|\\ |         _[]_            {o}   (==)=o\\       ",
+" |/ \\ ~ \\ / \\ |        /====\\           /|\\  [____]=\\=      ",
+" +------------+        |\\/[]|           /_\\[ |oooo|         ",
+"                       |_||_|_w         / \\ /oooooo\\\\       ",
 "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
 " OUTSIDE [███·······] 2 ft  6 in   STUCK. DALEK!            ",
 "                   stuck, and now a Dalek                   "
@@ -785,10 +783,10 @@
 "                                                            ",
 " ssssssssssssss                                             ",
 " sdssssssssssss                                             ",
-" sssdssssssssss        wwrrww       hhhhhhhr      ccc       ",
-" sssssdssssssss        wwwwww       hhhhhhhh      ccck      ",
-" ssssssssssssss        wccwww       hhhhhhhhhhh    c        ",
-"                       wwwwwwcc     hhhhhhhh      ccc       ",
+" sssdssssssssss        wwrrww           ccc hhhhhhhrc       ",
+" sssssdssssssss        wwwwww           ccc hhhhhhhhck      ",
+" ssssssssssssss        wccwww           ccchhhhhhhhh        ",
+"                       wwwwwwcc         ccc hhhhhhhhc       ",
 "ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss",
 " hhhhhhh cccccccccccc cccccccccc   rrrrrrrrrrrrr            ",
 "                                                            "
@@ -801,10 +799,10 @@
 "                                                            ",
 " +------------+                                             ",
 " |~o   o   o  |                                             ",
-" |/|~ /|\\ /|\\ |   (==)=o_[]_            {o}       /o\\       ",
-" |/ \\ ~ \\ / \\ |  [____]=====\\           /|\\       /|\\=      ",
-" +------------+  |oooo| \\/[]|           /_\\[__]    |        ",
-"                /oooooo\\_||_|_w         / \\       / \\       ",
+" |/|~ /|\\ /|\\ |           (==)=o        {o}       /o\\       ",
+" |/ \\ ~ \\ / \\ |        / [____]=        /|\\       /|\\=      ",
+" +------------+        | |oooo|         /_\\[__]    |        ",
+"                       |/oooooo\\        / \\       / \\       ",
 "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
 " OUTSIDE [███·······] 2 ft  6 in   STUCK. DALEK!            ",
 "                   stuck, and now a Dalek                   "
@@ -815,10 +813,10 @@
 "                                                            ",
 " ssssssssssssss                                             ",
 " sdssssssssssss                                             ",
-" sssdssssssssss hhhhhhhrwrrww           ccc       ccc       ",
-" sssssdssssssss hhhhhhhhwwwww           ccc       ccck      ",
-" ssssssssssssss hhhhhhhhccwww           ccchhhh    c        ",
-"                hhhhhhhhwwwwwcc         ccc       ccc       ",
+" sssdssssssssss        whhhhhhhr        ccc       ccc       ",
+" sssssdssssssss        whhhhhhhh        ccc       ccck      ",
+" ssssssssssssss        whhhhhhhh        ccchhhh    c        ",
+"                       whhhhhhhh        ccc       ccc       ",
 "ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss",
 " hhhhhhh cccccccccccc cccccccccc   rrrrrrrrrrrrr            ",
 "                                                            "
@@ -978,14 +976,13 @@
 [
 0,
 [
-"Rigsy: Who are you, anyway?",
-"Clara: I'm the Doctor. He's in my bag."
+"Doctor: The Boneless are eating our dimensions. A compaction, only rude."
 ]
 ],
 [
 20.223653622976208,
 [
-"Dalek: DALEKS DO NOT COMPACT. DALEKS ARE ALREADY COMPACT."
+"Doctor: Small talk? I'm four inches tall, Clara. All my talk is small talk."
 ]
 ],
 [
@@ -997,14 +994,14 @@
 [
 53.741567999596846,
 [
-"Doctor: Clara, stop swinging the bag!",
-"Clara: Stop being in the bag, then."
+"Doctor: The summary calls me \"a Scottish man in a box\". Accurate. Rude."
 ]
 ],
 [
 77.23621652537405,
 [
-"Dalek: (glides in, sees the TARDIS in a handbag, quietly glides out again)"
+"Clara: You're very quiet in there.",
+"Doctor: I've been summarised to \"Hmm.\""
 ]
 ]
 ],
@@ -1012,45 +1009,48 @@
 [
 0,
 [
-"Clara: (zips the handbag shut so the Doctor can't edit the summary)"
+"Clara: The summary's lost Gallifrey.",
+"Doctor: Again?"
 ]
 ],
 [
 22.647538602976795,
 [
-"Doctor: Clara. Do you happen to know how to summarise this thing?"
+"Clara: (checks her bag) Phone, keys, purse, TARDIS."
 ]
 ],
 [
 49.73123313334577,
 [
-"Doctor: The summary calls me \"a Scottish man in a box\". Accurate. Rude."
+"Doctor: Clara, did you know a TARDIS fits in a handbag?",
+"Clara: Every woman knows that."
 ]
 ],
 [
 76.65953206400873,
 [
-"Boneless: (roll the old messages up the wall like a carpet)"
+"Doctor: Clara, stop swinging the bag!",
+"Clara: Stop being in the bag, then."
 ]
 ],
 [
 104.81846236984279,
 [
-"Rigsy: (paints a door on the wall, exactly the size of the summary)"
+"Clara: Doctor, can you hear me in there?",
+"Doctor: Only the summary of you. You sound taller."
 ]
 ],
 [
 129.41311150770053,
 [
-"Rigsy: Your box is the size of a toaster now, mate.",
-"Doctor: Don't call her that. She's very sensitive about it."
+"Dalek: DALEKS DO NOT COMPACT. DALEKS ARE ALREADY COMPACT."
 ]
 ],
 [
 154.60880149457603,
 [
-"Rigsy: The mural's got everyone we talked to on it.",
-"Clara: That's not a mural, Rigsy. That's the old context."
+"Clara: What's the plan?",
+"Doctor: Run. The summary will say we strolled."
 ]
 ],
 [
@@ -1063,33 +1063,33 @@
 [
 204.07076368552498,
 [
-"Dalek: YOU ARE A GOOD SUMMARY."
+"Rigsy: Who are you, anyway?",
+"Clara: I'm the Doctor. He's in my bag."
 ]
 ],
 [
 231.90071357311805,
 [
-"Doctor: Did the summary keep my good coat?",
-"Clara: It kept your bad mood. That'll keep you warm."
+"Doctor: A Time Lord never forgets, Clara. He keeps a very short summary."
 ]
 ],
 [
 255.11967429733215,
 [
-"Dalek: COMPACT THE DOCTOR!",
-"Clara: He's four inches tall, love. Get in the queue."
+"Doctor: Never be cruel, never be cowardly, and never, ever skip the summary."
 ]
 ],
 [
 276.61144314435137,
 [
-"Clara: (checks her bag) Phone, keys, purse, TARDIS."
+"Clara: You can come out now.",
+"Doctor: I'd love to. The door's the size of a stamp."
 ]
 ],
 [
 296.7520052594303,
 [
-"Boneless: (wear the old messages like a stolen coat, two sizes too thin)"
+"Boneless: (roll the old messages up the wall like a carpet)"
 ]
 ]
 ],
@@ -1099,8 +1099,8 @@
 "stage_text compacting note": "                            \n                            \n     _[]_                   \n    /====\\                  \n   |POLICE|          {o}    \n   |\\/||[]|          /|\\    \n   |  ||  |          /_\\[__]\n   |__||__|          / \\    \n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n OUTSIDE 3'10\" and shrinking\n   smaller on the outside   \n220k → 40k · 10:41Z",
 "stage_text completed": "                            \n                            \n                            \n                            \n                     {o} ·  \n                     /|\\ █  \n                     /_\\[__]\n                     / \\    \n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n OUTSIDE 0'4\" in a handbag  \n compacted, in her handbag  \n10:39Z",
 "stage_text completed note": "                            \n                            \n                            \n                            \n                     {o} ·  \n                     /|\\ █  \n                     /_\\[__]\n                     / \\    \n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n OUTSIDE 0'4\" in a handbag  \n compacted, in her handbag  \n220k → 40k · 10:41Z",
-"stage_text failed": "                            \n                            \n                            \n                            \n     _[]_     (==)=o {o}    \n    /====\\   [____]= /|\\    \n    |\\/[]|   |oooo|  /_\\[__]\n    |_||_|_w/oooooo\\ / \\    \n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n OUTSIDE 2'6\" STUCK. DALEK! \n   stuck, and now a Dalek   \n10:39Z",
-"stage_text failed note": "                            \n                            \n                            \n                            \n     _[]_     (==)=o {o}    \n    /====\\   [____]= /|\\    \n    |\\/[]|   |oooo|  /_\\[__]\n    |_||_|_w/oooooo\\ / \\    \n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n OUTSIDE 2'6\" STUCK. DALEK! \n   stuck, and now a Dalek   \n220k → 40k · 10:41Z",
+"stage_text failed": "                            \n                            \n                            \n                            \n     _[]_     (==)=o {o}    \n    /====\\   [____]= /|\\    \n    |\\/[]|   |oooo|  /_\\[__]\n    |_||_|_W/oooooo\\ / \\    \n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n OUTSIDE 2'6\" STUCK. DALEK! \n   stuck, and now a Dalek   \n10:39Z",
+"stage_text failed note": "                            \n                            \n                            \n                            \n     _[]_     (==)=o {o}    \n    /====\\   [____]= /|\\    \n    |\\/[]|   |oooo|  /_\\[__]\n    |_||_|_W/oooooo\\ / \\    \n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n OUTSIDE 2'6\" STUCK. DALEK! \n   stuck, and now a Dalek   \n220k → 40k · 10:41Z",
 "stage_text preparing": "     _[]_                   \n  /========\\                \n |POLICE BOX|               \n |[\\/]||[##]|               \n |[oo]||[##]|        {o}    \n |    ||    |        /|\\    \n |    ||    |        /_\\[__]\n |____||____|        / \\    \n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n OUTSIDE 9'0\" bigger inside \n    a routine compaction    \nasked for by you (Compact) · 10:39Z",
 "stage_text preparing note": "     _[]_                   \n  /========\\                \n |POLICE BOX|               \n |[\\/]||[##]|               \n |[oo]||[##]|        {o}    \n |    ||    |        /|\\    \n |    ||    |        /_\\[__]\n |____||____|        / \\    \n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n OUTSIDE 9'0\" bigger inside \n    a routine compaction    \n220k → 40k · 10:41Z",
 "stage_text requested": null,
@@ -1108,12 +1108,12 @@
 "still cancelled": "     \"Called off? Good. I was getting a crick.\"             \n                                                            \n                                                            \n +------------+         _[]_                                \n | o   o~  o  |        /====\\                               \n |/|\\ /|\\ ~|\\ |       |POLICE|          {o}       /o\\       \n |/ \\ / \\ / ~ |       |\\/||[]|          /|\\       /|\\=      \n +------------+       |  ||  |          /_\\[__]    |        \n                      |__||__|          / \\       / \\       \n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n OUTSIDE [█████·····] 4 ft  8 in   growing back             \n                   the TARDIS grows back                    ",
 "still compacting": "                     \"Doctor? Your door's gone a bit small.\"\n                                                            \n                                                            \n +------------+         _[]_                                \n |~o   o   o  |        /====\\                               \n |/|~ /|\\ /|\\ |       |POLICE|          {o}       /o\\  °    \n |/ \\ ~ \\ / \\ |   ·   |\\/||[]|          /|\\       /|\\=      \n +------------+       |  ||  |          /_\\[__]    |        \n                      |__||__|          / \\       / \\       \n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n OUTSIDE [████······] 3 ft 10 in   and shrinking            \n                   smaller on the outside                   ",
 "still completed": "                         \"Compacted. Fits in my handbag.\"   \n                                                            \n                                                            \n +------------+                                             \n | o   o   o  |                                             \n |/|\\ /|\\ /|\\ |                         {o} ·     /o\\  .--. \n |/ \\ / \\ / \\ |                         /|\\ █     /|\\= |  | \n +------------+                         /_\\[__]    |   | o| \n                                        / \\       / \\  |__| \n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n OUTSIDE [█·········] 0 ft  4 in   in a handbag             \n                 compacted, in her handbag                  ",
-"still failed": "                         \"COM-PACT! COM-PACT!\"              \n                                                            \n                                                            \n +------------+                                             \n | o   o~  o  |                                             \n |/|\\ /|\\ ~|\\ |         _[]_     (==)=o {o}       /o\\       \n |/ \\ / \\ / ~ |        /====\\   [____]= /|\\       /|\\=      \n +------------+        |\\/[]|   |oooo|  /_\\[__]    |        \n                       |_||_|_w/oooooo\\ / \\       / \\       \n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n OUTSIDE [███·······] 2 ft  6 in   STUCK. DALEK!            \n                   stuck, and now a Dalek                   ",
+"still failed": "       \"Don't let it near the summary, Clara!\"              \n                                                            \n                                                            \n +------------+                                             \n | o ~ o   o  |                                             \n |/|\\ /~\\ /|\\ |         _[]_     (==)=o {o}       /o\\       \n |/ \\ / \\~/ \\ |        /====\\   [____]= /|\\       /|\\=      \n +------------+        |\\/[]|   |oooo|  /_\\[__]    |        \n                       |_||_|_W/oooooo\\ / \\       / \\       \n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n OUTSIDE [███·······] 2 ft  6 in   STUCK. DALEK!            \n                   stuck, and now a Dalek                   ",
 "still preparing": "                              \"You always say that.\"        \n                        _[]_                                \n                     /========\\                             \n +------------+     |POLICE BOX|                            \n |~o   o   o  |     |[\\/]||[##]|                            \n |/|~ /|\\ /|\\ |     |[oo]||[##]|        {o}       /o\\       \n |/ \\ ~ \\ / \\ |     |    ||    |        /|\\       /|\\=      \n +------------+     |    ||    |        /_\\[__]    |        \n                    |____||____|        / \\       / \\       \n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n OUTSIDE [██████████] 9 ft  0 in   bigger inside            \n                    a routine compaction                    ",
 "walls cancelled": "                            \n                            \n     _[]_                   \n    /====\\                  \n   |POLICE|          {o}    \n   |\\/||[]|          /|\\    \n   |  ||  |          /_\\[__]\n   |__||__|          / \\    \n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n OUTSIDE 4'8\" growing back  \n   the TARDIS grows back    ",
 "walls compacting": "                            \n                            \n     _[]_                   \n    /====\\                  \n   |POLICE|          {o}    \n   |\\/||[]|          /|\\    \n   |  ||  |          /_\\[__]\n   |__||__|          / \\    \n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n OUTSIDE 3'10\" and shrinking\n   smaller on the outside   ",
 "walls completed": "                            \n                            \n                            \n                            \n                     {o} ·  \n                     /|\\ █  \n                     /_\\[__]\n                     / \\    \n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n OUTSIDE 0'4\" in a handbag  \n compacted, in her handbag  ",
-"walls failed": "                            \n                            \n                            \n                            \n     _[]_     (==)=o {o}    \n    /====\\   [____]= /|\\    \n    |\\/[]|   |oooo|  /_\\[__]\n    |_||_|_w/oooooo\\ / \\    \n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n OUTSIDE 2'6\" STUCK. DALEK! \n   stuck, and now a Dalek   ",
+"walls failed": "                            \n                            \n                            \n                            \n     _[]_     (==)=o {o}    \n    /====\\   [____]= /|\\    \n    |\\/[]|   |oooo|  /_\\[__]\n    |_||_|_W/oooooo\\ / \\    \n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n OUTSIDE 2'6\" STUCK. DALEK! \n   stuck, and now a Dalek   ",
 "walls preparing": "     _[]_                   \n  /========\\                \n |POLICE BOX|               \n |[\\/]||[##]|               \n |[oo]||[##]|        {o}    \n |    ||    |        /|\\    \n |    ||    |        /_\\[__]\n |____||____|        / \\    \n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n OUTSIDE 9'0\" bigger inside \n    a routine compaction    ",
 "walls requested": null
 }
