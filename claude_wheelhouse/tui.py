@@ -19,7 +19,7 @@ import subprocess
 import threading
 import time
 import weakref
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Callable, NamedTuple, Self
 
 from rich.console import Group, RenderableType
@@ -77,7 +77,7 @@ from .knurl import KnurlRender
 from .splitter import SlotSplitter, Splitter, fit
 from textual.css.scalar import Unit
 from .tour import LIT as tour_lit, NOTES, PAUSED, ROWS as tour_rows, SHUN as tour_shun, TOPUP, TOUR, Tour, offered, opening
-from .store import (DEFAULT_THEN, DELETED, HOST_QUESTION, DISMISSABLE, FINISHED_RANK, PARENTS, SETTLED, SETTLED_RANK, SessionGone, Store, db_path, default_runner,
+from .store import (DEFAULT_THEN, DELETED, HOST_QUESTION, DISMISSABLE, FINISHED_RANK, PARENTS, RUNNABLE, SETTLED, SETTLED_RANK, SessionGone, Store, db_path, default_runner,
                     family, inbox_rank, mcp_servers, mode, pinned, runner, spared, stamp, standing)
 from .unsent import Unsent
 
@@ -117,12 +117,18 @@ VOICE = {"you": MATRIX, "claude": "#e8e8e8", "pr": "#e8e8e8", "head": "#05d9e8",
 ART_STYLE = {"wall": "#2f8cff", "seam": "#1f5daa", "crew": "bold #9cc8ff", "sludge": "#1f5daa",
              "spark": "bold #ffb000", "hatch": "bold #ffb000", "dianoga": "bold #6fcf3f",
              "alert": "bold #ff4b3e", "flash": "bold #ffffff", "text": "#2f8cff"}
-DOCK_FPS = 6   # the compaction overlay's frames a second (#287), no more than the app's own rate (features.animation_fps)
+DOCK_FPS = 4   # the compaction overlay's frames a second (#287, #327), no more than the app's own rate (features.animation_fps)
+EYES_FPS = 5   # the most frames a second the title's shimmer and the eyes are drawn at, whatever ANIMATION_FPS asks (#327)
 # a doc block (doc_blocks) longer than this is rendered on a thread (Transcript._layout): a
 # 42 KB one takes Rich a second or two, which the loop would otherwise stall for
 RENDER_OFF_LOOP = 2000
+TOUR_OFFER_KEPT = 10   # seconds tour_offer's answer is kept while nothing it reads has moved
+DETAIL_SETTLE = 0.06   # seconds a selection rests before a conversation not yet rendered renders (show_detail)
+DETAIL_INLINE = 8   # ... and the most blocks not rendered yet that render on the loop at once
 CALLS_WAIT = 10   # seconds the app's close waits for a Delete's calls under way (delete_off_thread)
 RENDERING = ("note", "_rendering…_")
+CONVERSATION_RETRY = 2   # seconds before a conversation fetch that brought nothing (unreachable, busy) is tried again
+READING = "_reading…_"   # a conversation while it's fetched off the loop (WheelhouseApp.conversation)
 CLOSABLE = {"question": "answered", "decision": "seen", "command": "open"}   # what Delete closes, and what Ctrl+R reopening makes it
 
 
@@ -683,23 +689,70 @@ def fill(table: DataTable, rows: list[tuple[str, tuple]], rebuild: bool = False)
     without posting RowHighlighted: clear() puts the cursor on row 0 and the first new row
     highlights it, which made every refresh look like the person picking row 0 and back.
     Returns whether it rebuilt; the caller then puts the cursor back. A str cell shows as
-    itself, never as markup (plain): a session's text reaches these tables."""
-    rows = [(key, tuple(plain(c) for c in cells)) for key, cells in rows]
-    if not rebuild and [r.key.value for r in table.ordered_rows] == [k for k, _ in rows]:
+    itself, never as markup (plain): a session's text reaches these tables. A row given the
+    very cells it was given last (the caller's kept tuple, as paint_items' item_cells keeps
+    them) is left as it is, uncompared: at 4,000 rows the compare was most of an arrow's
+    cost (#327)."""
+    filled = getattr(table, "filled", None)
+    if not rebuild and filled is not None and [r.key.value for r in table.ordered_rows] == [k for k, _ in rows]:
         columns = list(table.columns)
-        for key, cells in rows:
-            for col, new, old in zip(columns, cells, table.get_row(key)):
+        for key, raw in rows:
+            if filled.get(key) is raw:
+                continue
+            filled[key] = raw
+            for col, new, old in zip(columns, (plain(c) for c in raw), table.get_row(key)):
                 if not same(new, old):
                     table.update_cell(key, col, new)
         return False
     with table.prevent(DataTable.RowHighlighted):
         table.clear()
-        for key, cells in rows:
-            table.add_row(*cells, key=key)
+        for key, raw in rows:
+            table.add_row(*(plain(c) for c in raw), key=key)
+    table.filled = dict(rows)
     return True
 
 
-@functools.lru_cache(maxsize=2048)
+class Kept:
+    """A function's answers, the newest `size` kept (functools.lru_cache), and asked without
+    calling it (`in`): whether a block is rendered already, so a conversation whose blocks
+    are not is rendered on a thread (WheelhouseApp.show_detail, #327). Its own lock: blocks
+    are rendered on threads as on the loop."""
+
+    def __init__(self, fn: Callable, size: int):
+        self.fn, self.size, self.kept, self.lock = fn, size, collections.OrderedDict(), threading.Lock()
+        self.misses = 0
+        functools.update_wrapper(self, fn)
+
+    def __contains__(self, args: tuple) -> bool:
+        with self.lock:
+            return args in self.kept
+
+    def __call__(self, *args):
+        with self.lock:
+            if args in self.kept:
+                self.kept.move_to_end(args)
+                return self.kept[args]
+        out = self.fn(*args)
+        with self.lock:
+            self.misses += 1
+            self.kept[args] = out
+            while len(self.kept) > self.size:
+                self.kept.popitem(last=False)
+        return out
+
+    def cache_info(self):
+        return functools._CacheInfo(0, self.misses, self.size, len(self.kept))
+
+    def cache_clear(self) -> None:
+        with self.lock:
+            self.kept.clear()
+
+
+# room for every live session's latest turns (a conversation shows up to 80 blocks): 2,048
+# held about ten, so arrowing through forty sessions rendered every one again (#327)
+BLOCKS_KEPT = 8192
+
+
 def _block_strips(who: str, md: str, width: int, console) -> tuple[tuple[Strip, ...], tuple[str, ...], "docblocks.DocMap | None"]:
     """A block's lines as strips and as plain text (for selection), plus the gap after it,
     and for a doc its map: a doc is rendered block by block (docblocks), as Rich renders it
@@ -713,6 +766,7 @@ def _block_strips(who: str, md: str, width: int, console) -> tuple[tuple[Strip, 
             tuple("".join(seg.text for seg in line).rstrip() for line in lines), doc_map)
 
 
+_block_strips = Kept(_block_strips, BLOCKS_KEPT)
 LINKED = ("claude", "you", "note", "doc")   # the blocks whose ids link (WheelhouseApp.link_ids, #274)
 
 
@@ -1193,7 +1247,7 @@ class SinkList(RowTips, KeepColours, DataTable):
         return [r.key.value for r in self.ordered_rows]
 
     def cursor_key(self) -> str | None:
-        return self.keys()[self.cursor_row] if self.row_count else None
+        return self._row_locations.get_key(self.cursor_row).value if 0 <= self.cursor_row < self.row_count else None
 
     def final(self) -> list[str | None]:
         """The rows as they stand once any move has ended, a key or None for a blank: the
@@ -1258,7 +1312,10 @@ class SinkList(RowTips, KeepColours, DataTable):
         return super().cell_styles(is_header_cell, is_row_label_cell, is_fixed_style_cell, hover, cursor, *rest)
 
     def blank(self, row: int) -> bool:
-        return 0 <= row < self.row_count and self.ordered_rows[row].key.value.startswith(BLANK)
+        """Whether a row is a blank (Sink), by its key straight from the row's place: asked at
+        every add_row (validate_cursor_coordinate), where ordered_rows, rebuilt after each add,
+        made a table's fill take time in the square of its rows (#327)."""
+        return 0 <= row < self.row_count and self._row_locations.get_key(row).value.startswith(BLANK)
 
     def _render_line(self, y: int, x1: int, x2: int, base_style: Style) -> Strip:
         """The line, and under a drag the line marking where it would drop (drop_line)."""
@@ -1385,11 +1442,15 @@ class SessionList(SinkList):
         blinked = dot_dimmed(frame)
         if swept == self.swept and blinked == self.blinked:
             return
-        moved, self.swept, self.blinked = swept != self.swept, swept, blinked
+        moved, flashed, self.swept, self.blinked = swept != self.swept, blinked != self.blinked, swept, blinked
+        eye = len(self.columns) - 1   # the eye's cell, the last (_render_line): its cells alone drawn again (#327)
         for sid in self.eyes:
             if sid in self.rows:
                 row = self.get_row_index(sid)
-                self.refresh_row(row) if moved else self.refresh_coordinate(Coordinate(row, 0))
+                if moved:
+                    self.refresh_coordinate(Coordinate(row, eye))
+                if flashed:
+                    self.refresh_coordinate(Coordinate(row, 0))
 
     def _render_line(self, y: int, x1: int, x2: int, base_style: Style) -> Strip:
         """The line as DataTable draws it, with a busy row's eye over its blank cell, and its
@@ -2362,8 +2423,8 @@ class CompactButtons(Horizontal):
 
 
 class RunButtons(Horizontal):
-    """Over the answer box while the item in context is a command item not closed (#257): Run,
-    which opens the command in RunCommand. A real button, never a segment of the item's text,
+    """Over the answer box while the item in context is a command item still to run (#257), or
+    running, Run disabled till its run fails (#339): Run, which opens the command in RunCommand. A real button, never a segment of the item's text,
     so no session text reaches markup."""
     DEFAULT_CSS = """
     RunButtons { height: 1; display: none; background: #12122a; }
@@ -4773,7 +4834,8 @@ BUTTONS = {
     "shell": ("Shell (Alt+H, from anywhere): a quick shell in a new terminal tab, in the session in context's "
               "directory (where it works now), or home with none; exit or Ctrl+D closes it"),
     "run-command": ("Run (on a command a session suggested): opens it in a box you can edit, with whether its output "
-                    "goes back to the session; Run there runs it in a new terminal tab in the session's directory"),
+                    "goes back to the session; Run there runs it in a new terminal tab in the session's directory. "
+                    "Disabled while it runs; back if the run fails"),
     "handover": ("Handover to Claude Code in a shell (in the session list's right-click menu only, no key): open a "
                  "session run in the wheelhouse in a real Claude Code tab; it comes back when you /exit"),
     "model": "Model (Alt+M): change the model a session run in the wheelhouse runs on, live; its prompt cache goes with the old one",
@@ -5180,6 +5242,11 @@ class WheelhouseApp(App):
         # bumped whenever that changes, and its one-shot timer, running only while they rest
         self.dwelling: tuple | None = None
         self.dwell_gen = 0
+        self.conversations_tried: dict[str, float] = {}   # ... and when a fetch that brought nothing landed
+        self.conversations_asked: set[str] = set()   # conversations being fetched on a thread (conversation)
+        self.detail_gen = 0   # Detail's shows, numbered: one overtaken is dropped (show_detail)
+        self.detail_waiting = False   # a show from the top under way (show_detail)
+        self.detail_timer = None   # a show waiting for the selection to rest (show_detail)
         self.dwell_timer = None
         self.picked: tuple | None = None   # the selection the person last made, not the app (saw)
         # a session launched or forked here, selected once its row shows (paint_sessions), and
@@ -5219,10 +5286,15 @@ class WheelhouseApp(App):
         self.undo_waits: set[int] = set()   # the numbers of the Ctrl+Zs waiting for a Delete to land (action_undo)
         self.acting: int | None = None   # the number of the act landing or let through now (as_typed)
         self.ranks: dict[str, tuple] = {}   # each item's rank as last shown
+        self.cleanse_due: datetime | None = None   # when autocleanse next hides a row shown (listable)
+        self.preparing: int | None = None   # the inbox version a worker is sorting (prepare_items)
+        self.arranged: tuple | None = None   # arrangement's last answer, and its stamp
+        self.true_ranks: tuple[dict, dict] = ({}, {})   # ... and as it sorts, unpinned, with its group (arrow_only)
         self.sort_keys: dict[tuple, tuple] = {}   # each item's sort key as it stands (sort_key)
         self.compacting_drawn: bool | None = None   # whether Detail is drawn dimmed (paint_compacting)
         self.detail_parts_found: list = []   # detail_boxes, once found
         self.cells_kept: dict[tuple, tuple] = {}   # each inbox row's cells as last made (item_cells)
+        self.tour_offered: tuple | None = None   # tour_offer's last answer, and what it was for
         self.items_painted: tuple | None = None   # what the last paint_items read and left (items_state), its rows' values
         self.show_finished = False   # finished items (store.standing), after the rest
         # minutes a completed (settled) item stays in sight before it's hidden as the finished are
@@ -5394,7 +5466,7 @@ class WheelhouseApp(App):
         self.client.start(self.post)   # the daemon's stream, now there's an app to tell
         self.started = self.now()
         if fps := features.animation_fps():   # 0: no animation, the title and eyes drawn still
-            self.animation = self.set_interval(1 / fps, self.animate)
+            self.animation = self.set_interval(1 / min(fps, EYES_FPS), self.animate)
         self.paint_title()
         self.set_interval(1.0, self.tick)
         # a screen over the inbox, or a thread opened, is a break in looking: the dwell restarts
@@ -5825,7 +5897,8 @@ class WheelhouseApp(App):
             self.clear_filter()   # the followed session went (ended elsewhere): as Esc, no ghost row
         self.client.background()   # in process, the hub's reading: the daemon's hub does its own
         self.paint_sessions()
-        self.paint_items()
+        if not self.prepare_items():   # the inbox moved: sorted on a worker, painted (Detail with it) as it lands
+            self.paint_items()
         self.focus_compactions()
         self.paint_away()
         self.paint_compacting()
@@ -6221,6 +6294,18 @@ class WheelhouseApp(App):
         they settle (Sink) once they aren't selected (ranked), then with F the finished. The
         session column shows only where the inbox has every session's items (D31)."""
         table = self.items_table
+        # the daemon's version of the sessions and the inbox (RemoteClient.version) where it was,
+        # and the app's own state with it: nothing to read, compare or paint (#327). In process
+        # (no version) the rows are read and compared, as the store has no stamp
+        version = getattr(self.client, "inbox_version", None)   # the sessions' part it reads is in the key itself
+        quick = None if version is None else (
+            version, self.items_state(), tuple(self.conversation_sids()), frozenset(self.compacting()),
+            frozenset(self.lifeless_sids()), tuple(self.session_names().items()), tuple(sorted(self.cutoffs().items())), self.cleanse_due is not None and datetime.now(timezone.utc) >= self.cleanse_due)   # listable's clock
+        if quick is not None and self.items_painted is not None and not self.repin and self.item_sink.move is None \
+                and (self.items_painted[3] == quick or self.arrow_only(quick)):
+            self.items_painted = (*self.items_painted[:3], (*quick[:1], self.items_state(), *quick[2:]))
+            self.paint_detail()
+            return
         names_of = ("pin", "ref", "status", "title") if self.filter_sid else ("pin", "session", "ref", "status", "title")
         # the column in force carries its marker (D97): a sort changed rebuilds the columns
         columns = tuple("" if c == "pin" else f"{c} {m}" if (m := ordering.marker(self.item_sort, c)) else c
@@ -6245,9 +6330,10 @@ class WheelhouseApp(App):
         # all it reads (#268): the same as at the last paint, and nothing moving, shows the same
         read = (every is None, frozenset(processing), frozenset(queued), frozenset(awaiting), frozenset(compacting),
                 frozenset(dead), tuple(sorted(cuts.items())), tuple(names.items()), tuple(self.conversation_sids()))
-        if self.items_painted is not None and (read, self.items_state()) == self.items_painted[0] \
+        if quick is None and self.items_painted is not None and (read, self.items_state()) == self.items_painted[0] \
                 and same_rows(found, self.items_painted[1]) and (every is None or same_rows(every, self.items_painted[2])) \
                 and not self.repin and self.item_sink.move is None:
+            self.items_painted = (*self.items_painted[:3], quick)   # read and found the same: stamped as such
             self.paint_detail()
             return
         keyed = self.ranked_keyed(found, processing, busy, names, every)
@@ -6328,8 +6414,10 @@ class WheelhouseApp(App):
             self.selected = None   # session) went and none is left: nothing selected
         if self.selected is None and self.box_target is not None:   # nor the box aimed at what went
             self.retarget(move_list=False)
-        self.items_painted = ((read, self.items_state()), [row_values(r) for r in found],
-                              None if every is None else [row_values(r) for r in every])
+        # stamped (quick): the version says when to read again, no copy of the rows kept to compare
+        self.items_painted = ((read, self.items_state()), quick is None and [row_values(r) for r in found],
+                              None if every is None or quick is not None else [row_values(r) for r in every],
+                              quick and (*quick[:1], self.items_state(), *quick[2:]))
         self.paint_detail()
 
     def item_cells(self, it, nested, names, queued, processing, awaiting, busy, locked: bool, dead: bool) -> tuple:
@@ -6378,6 +6466,36 @@ class WheelhouseApp(App):
         self.cells_kept[key] = (on, cells)
         return cells
 
+    SELECTION_STATE = (4, 5, 15, 16)   # items_state's selected, pin, cursor_key and items_cursor
+
+    def arrow_only(self, quick: tuple) -> bool:
+        """Whether all that moved since the last paint_items is the selection, to a row shown,
+        the cursor on it, and the inbox would look the same: the item it left already at the rank it sorts to, its
+        pin let go changing nothing, and autocleanse not hiding it now it's left. Then nothing is
+        sorted or compared again, the new selection pinned at its rank as shown: at 4,000 items
+        an arrow's re-sort took 300 ms (#327)."""
+        kept = self.items_painted[3]
+        if kept is None or quick[:1] + quick[2:] != kept[:1] + kept[2:]:
+            return False
+        mask = lambda state: tuple(v for i, v in enumerate(state) if i not in self.SELECTION_STATE)
+        if mask(quick[1]) != mask(kept[1]):
+            return False
+        new = self.selected and f"{self.selected[0]}|{self.selected[1] or ''}"
+        if not new or self.items_table.cursor_key() != new:   # the cursor on it, as an arrow leaves it
+            return False
+        if self.pin is not None and self.pin[0] != new and self.pin[0] in self.ranks:
+            ranks, tokens = self.true_ranks
+            if (ranks.get(self.pin[0]), tokens.get(self.pin[0])) != (self.pin[1], self.pin[2]):
+                return False   # it sorts elsewhere now it's let go: painted where it goes
+            sid, ref = self.pin[0].split("|")
+            it = self.client.item(sid, ref) if self.autocleanse and not self.show_finished else None
+            sets = getattr(self.client, "sets", None) or self.client.inbox(self.filter_sid)
+            if it is not None and self.completed_hidden(it, sets.queued | sets.awaiting, datetime.now(timezone.utc)):
+                return False   # autocleanse hides it now the selection has moved on
+        key = self.selected[1] and new
+        self.pin = (key, self.ranks[key], self.rank_tokens[key]) if key in self.ranks else None
+        return True
+
     def items_state(self) -> tuple:
         """The app's own state paint_items reads, or leaves behind it (the rows, the cursor):
         with what it read from the hub, what tells a paint that would change nothing (#268)."""
@@ -6409,8 +6527,16 @@ class WheelhouseApp(App):
         if self.selected and self.selected[1] and (item["session_id"], item["ref"]) == tuple(self.selected[:2]) \
                 and item_key(item) != self.peeked:   # one search showed hidden stays hidden (#273)
             return False
+        return at >= self.hides_at(item, busy, checked=True)
+
+    def hides_at(self, item, busy, checked: bool = False) -> datetime | None:
+        """When autocleanse hides a completed, settled item: self.autocleanse minutes after its
+        updated_at, or its bringing back. None for one it never hides (unfinished, or finished
+        and shown with F). checked: completed_hidden has made those checks already."""
+        if not checked and (not completed(item, busy) or standing(item, busy) != "settled"):
+            return None
         since = max(datetime.fromisoformat(item["updated_at"]), self.brought_back.get(item_key(item), datetime.min.replace(tzinfo=timezone.utc)))
-        return (at - since).total_seconds() >= self.autocleanse * 60
+        return since + timedelta(minutes=self.autocleanse)
 
     def ranked(self, items, processing, busy=frozenset()) -> list:
         """Items in inbox order (ranked_keyed)."""
@@ -6429,15 +6555,7 @@ class WheelhouseApp(App):
         key = self.selected and self.selected[1] and f"{self.selected[0]}|{self.selected[1]}"
         if self.pin is None or self.pin[0] != key:
             self.pin = (key, self.ranks[key], self.rank_tokens[key]) if key in self.ranks else None
-        keyed = [(item_key(it), it) for it in items]   # (row key, item): each key made once
-        found = {key: self.sort_key(it, processing, busy, names) for key, it in keyed}
-        everything = found
-        if self.item_sort == ordering.ITEMS_DEFAULT:   # ranks from the whole list's placed rows (arrange)
-            everything = {item_key(it): self.sort_key(it, processing, busy, names)
-                          for it in (self.client.all_items() if every is None else every)} | found
-        if len(self.sort_keys) > 2 * len(everything) + 100:   # the items gone, or their old states
-            self.sort_keys = {}
-        arranged = ordering.arrange(self.item_sort, everything)
+        keyed, found, arranged = self.arrangement(items, processing, busy, names, every)
         ranks = {key: arranged[key] for key in found}
         tokens = {key: token for key, (_, token) in found.items()}
         if self.pin and self.pin[0] in ranks:
@@ -6448,7 +6566,73 @@ class WheelhouseApp(App):
                 ranks[key], tokens[key] = self.pin[1], self.pin[2]
         self.repin = set()
         self.ranks, self.rank_tokens = ranks, tokens
+        self.true_ranks = ({key: arranged[key] for key in found}, {key: token for key, (_, token) in found.items()})   # unpinned (arrow_only)
         return sorted(keyed, key=lambda pair: ranks[pair[0]])
+
+    def arrangement(self, items, processing, busy, names, every=None, stamp=None):
+        """The items' inbox order before any pin (ranked_keyed): each (row key, item), its sort
+        key, and its rank. Pure but for its caches, so a worker can make it (prepare_items):
+        kept for the inbox's version (RemoteClient.inbox_version) and all else it reads, the
+        sort made once for each version, not at each arrow or tick (#327)."""
+        stamp = stamp or self.arrangement_stamp(processing, busy, names)
+        if stamp is not None:   # the very rows asked for: autocleanse and a Delete under way leave some out (listable)
+            stamp = (*stamp, tuple(map(id, items)))
+        kept = self.arranged
+        if stamp is not None and kept is not None and kept[0] == stamp:
+            return kept[1]
+        keyed = [(item_key(it), it) for it in items]   # (row key, item): each key made once
+        found = {key: self.sort_key(it, processing, busy, names) for key, it in keyed}
+        everything = found
+        if self.item_sort == ordering.ITEMS_DEFAULT:   # ranks from the whole list's placed rows (arrange)
+            everything = {item_key(it): self.sort_key(it, processing, busy, names)
+                          for it in (self.client.all_items() if every is None else every)} | found
+        if len(self.sort_keys) > 2 * len(everything) + 100:   # the items gone, or their old states
+            self.sort_keys = {}
+        out = (keyed, found, ordering.arrange(self.item_sort, everything))
+        if stamp is not None:
+            self.arranged = (stamp, out)
+        return out
+
+    def prepare_items(self) -> bool:
+        """The tick, the daemon's inbox moved since it was last sorted: its rows read, filtered
+        and sorted (arrangement) on a worker, off the UI thread, then painted on it as the
+        result lands (items_prepared), the sort kept for that version. Whether a worker has it;
+        False in process or synchronous (a test's client), where the tick paints at once. Input
+        never waits on it: a key's paint (settle) sorts on the loop as it always has (#312)."""
+        if not self.client.remote or getattr(self.client, "synchronous", True):
+            return False
+        version = self.client.inbox_version
+        if self.arranged is not None and self.arranged[0][0] == version:
+            return False   # sorted for this version already: the paint is the loop's, and short
+        if self.preparing == version:
+            return True
+        self.preparing = version
+
+        def work() -> None:
+            try:
+                found, processing, queued, awaiting = self.client.inbox(self.filter_sid)
+                busy = queued | awaiting
+                every = self.client.all_items() if self.item_sort == ordering.ITEMS_DEFAULT else None
+                self.arrangement(self.listable(found, busy), processing, busy, self.session_names(), every)
+            finally:   # landed or failed, the paint follows (and sorts on the loop if it must)
+                self.post(functools.partial(self.items_prepared, version))
+        self.spawn(work, "prepare")
+        return True
+
+    def items_prepared(self, version: int) -> None:
+        """prepare_items' sort landed: the inbox painted, unless the version has moved on since
+        (the next tick sorts that one) or a key is landing (whose own paint has done it)."""
+        if self.preparing == version:
+            self.preparing = None
+        if version == self.client.inbox_version and self.screen_stack and not self.landing:
+            self.paint_items()
+
+    def arrangement_stamp(self, processing, busy, names) -> tuple | None:
+        """What arrangement's answer is kept for: None in process, where the store has no version."""
+        version = getattr(self.client, "inbox_version", None)
+        return None if version is None else (version, self.filter_sid, self.item_sort, self.show_finished,
+                                              self.autocleanse, frozenset(self.going), frozenset(processing),
+                                              frozenset(busy), tuple(sorted((names or {}).items())))
 
     def sort_key(self, it, processing, busy, names) -> tuple[tuple, str]:
         """ordering.item_key under the sort in force, made once for an item as it stands: kept
@@ -6709,9 +6893,14 @@ class WheelhouseApp(App):
         off, those autocleanse hides (#235)."""
         if self.going:
             found = [it for it in found if item_key(it) not in self.going]
+        self.cleanse_due = None
         if self.autocleanse and not self.show_finished:
             at, held = datetime.now(timezone.utc), under_way_parents(found, busy)
             found = [it for it in found if item_key(it) in held or not self.completed_hidden(it, busy, at)]
+            # when the next one shown goes: the stamped paint (paint_items) reads again then, not before (#327)
+            # those still to come: a row past its time but kept (the one selected) waits for the selection to move
+            self.cleanse_due = min((due for it in found if item_key(it) not in held
+                                    and (due := self.hides_at(it, busy)) is not None and due > at), default=None)
         return found
 
     def searched(self, picked: tuple[str, str] | None) -> None:
@@ -7024,7 +7213,10 @@ class WheelhouseApp(App):
         # a turn of Claude's arriving in the conversation shown, the person's own pick: the
         # tour's conversation dialog, if it's the demo's (saw). Their own words don't count
         turns = {md for who, md in blocks if who in ("claude", "tool")} if self.viewing else set()
-        (was, before), self._shown_turns = getattr(self, "_shown_turns", (None, set())), (self.viewing, turns)
+        # while it's fetched (conversation) nothing of it is shown yet: as it lands, its turns aren't new ones
+        reading = self.viewing and blocks == [("note", READING)]
+        (was, before), self._shown_turns = getattr(self, "_shown_turns", (None, set())), \
+            ((None, set()) if reading else (self.viewing, turns))
         if self.viewing and was == self.viewing and turns - before and self.selected == self.picked:
             self.saw(self.viewing, None, "follow")
         # an item's thread follows too once it's painted (#147): a new answer or reply shows at
@@ -7041,11 +7233,60 @@ class WheelhouseApp(App):
             following = ((self.detail_follows or same)
                          and self.detail_scroll.scroll_y >= self.detail_scroll.max_scroll_y - 1)
             self._detail_text, self._detail_linked = text, blocks
-            self.detail.update(render(blocks), top=fresh)   # a doc posted again: where it was scrolled to stays
-            if following:   # stay at the newest turn or reply, unless the person has scrolled up to read
-                self.call_after_refresh(self.detail_scroll.scroll_end, animate=False)
+            self.show_detail(blocks, fresh, following)
         if hasattr(self, "detail_panes"):
             self.paint_doc_thread(doc if not shown and not self.viewing else None)
+
+    def show_detail(self, blocks: list[tuple[str, str]], top: bool, following: bool) -> None:
+        """Detail shows blocks: at once if they're rendered already, or few are new (an item's
+        thread, a turn streaming in). With more than DETAIL_INLINE blocks not rendered yet (a
+        conversation picked, or landing once fetched: conversation), they're shown once the selection rests for
+        DETAIL_SETTLE, its blocks rendered on a thread meanwhile, the loop left to the keys: a
+        burst of arrows over the inbox renders only where it stops. Each show is numbered
+        (detail_gen), and one overtaken by a later show is dropped, wherever it had got to (#327)."""
+        self.detail_gen += 1
+        top = top or self.detail_waiting   # a show overtaken before it landed: what it was to show from the top
+        if self.detail_timer is not None:
+            self.detail_timer.stop()
+            self.detail_timer = None
+        width = self.detail.size.width
+        cold = [(who, md) for who, md in blocks if who != "doc" and (who, md, width, self.console) not in _block_strips]
+        if not width or len(cold) <= DETAIL_INLINE:
+            self.detail_shown(self.detail_gen, blocks, top, following)
+            return
+        gen, console, self.detail_waiting = self.detail_gen, self.console, True
+
+        def work() -> None:
+            for who, md in cold:
+                if gen != self.detail_gen:   # overtaken: what it rendered stays kept, unshown
+                    return
+                _block_strips(who, md, width, console)
+            self.call_from_thread(self.detail_shown, gen, blocks, top, following)
+
+        def start() -> None:
+            self.detail_timer = None
+            if gen == self.detail_gen:
+                self.run_worker(work, thread=True, group="detail", exit_on_error=False)
+        self.detail_timer = self.set_timer(DETAIL_SETTLE, start)
+
+    def detail_shown(self, gen: int, blocks: list[tuple[str, str]], top: bool, following: bool) -> None:
+        """show_detail's blocks into Detail, on the loop, unless a later show has overtaken it."""
+        if gen != self.detail_gen or not self.screen_stack:
+            return
+        self.detail_waiting = False
+        self.detail.update(render(blocks), top=top)   # a doc posted again: where it was scrolled to stays
+        if following:   # stay at the newest turn or reply, unless the person has scrolled up to read
+            self.call_after_refresh(self.detail_scroll.scroll_end, animate=False)
+
+    def conversation_landed(self, sid: str) -> None:
+        """A conversation fetched on a thread (conversation): shown, if it's still the one."""
+        self.conversations_asked.discard(sid)
+        if not self.client.has_conversation(sid):   # unreachable or busy: the tick asks again in a while
+            self.conversations_tried[sid] = self.now()
+            return
+        self.conversations_tried.pop(sid, None)   # fetched: let go later and asked again, it's fetched at once
+        if self.viewing == sid and self.screen_stack:
+            self.paint_detail()
 
     def link_ids(self, blocks: list[tuple[str, str]], sid: str | None) -> list[tuple[str, str]]:
         """Blocks with the ids of sid's items in them clickable (search.linked, #274): its
@@ -7129,6 +7370,21 @@ class WheelhouseApp(App):
         return True
 
     def conversation(self, sid: str) -> list[tuple[str, str]]:
+        """A session's conversation. One the daemon has yet to send is fetched on a thread,
+        "reading …" shown meanwhile, and Detail painted again once it's here, if it's still
+        the one shown: the loop never waits on the daemon for it (#327)."""
+        if self.client.remote and not self.client.has_conversation(sid):
+            tried = self.conversations_tried.get(sid)
+            if sid not in self.conversations_asked and (tried is None or self.now() - tried >= CONVERSATION_RETRY):
+                self.conversations_asked.add(sid)
+
+                def work() -> None:
+                    try:
+                        self.client.conversation(sid)
+                    finally:   # fetched, refused or failed: the landing is said, and asked again no sooner than CONVERSATION_RETRY
+                        self.post(functools.partial(self.conversation_landed, sid))
+                self.spawn(work, "conversation")
+            return [("note", READING)]
         blocks = self.client.conversation(sid)
         if blocks is None:   # the session went
             self.selected = None
@@ -7739,11 +7995,13 @@ class WheelhouseApp(App):
                     self.refit()   # a row more or less over the answer box
         if doc_gone and not self.focus_answer():
             self.screen.set_focus(self.items_table)
-        command = self.command_item(item)
+        command = self.command_item(item, also=("running",))   # shown while running, disabled (#339)
         for row in run_rows:
             if row.display != (command is not None):
                 row.display = command is not None
                 self.refit()
+            if command is not None:
+                show_button(row, "run-command", "Run", command["status"] == "running")
         compacting = s is not None and "compact-now" in self.busy_buttons(s)
         for row in compact_rows:
             show_button(row, "compact-now", "Compact", compacting, not waiting)
@@ -7797,10 +8055,18 @@ class WheelhouseApp(App):
         if "seen" not in st:   # not known (a daemon that doesn't say): nothing to offer, not everything
             return None, []
         main = self.screen_stack[0] if self.screen_stack else None
+        # kept while the tour's state, the mode and the screen are as they were (#327): a pane's
+        # search (callout.find) for every unseen feature cost 20 ms a tick. A pane mounted or
+        # moved since shows within TOUR_OFFER_KEPT seconds
+        key = (stored, repr(st), self.client.sdk, id(main), main and main.size, int(self.now() // TOUR_OFFER_KEPT))
+        if self.tour_offered is not None and self.tour_offered[0] == key:
+            return self.tour_offered[1]
         pending = whatsnew.pending(st.get("seen", ()), self.client.sdk)
         at = None if stored else st.get("at")
-        return opening(bool(st.get("offer")), at, pending,
-                       lambda pane: main is not None and callout.find(main, pane) is not None)
+        offer = opening(bool(st.get("offer")), at, pending,
+                        lambda pane: main is not None and callout.find(main, pane) is not None)
+        self.tour_offered = (key, offer)
+        return offer
 
     def paint_badge(self) -> None:
         """The title row's badge (BADGES), and with it L in the footer."""
@@ -9271,11 +9537,12 @@ class WheelhouseApp(App):
                                  "and takes it back when you /exit the tab."),
                          lambda yes: yes and self.host_command(sid, "shell", press_as="handover"))
 
-    def command_item(self, target):
+    def command_item(self, target, also: tuple[str, ...] = ()):
         """The item in context if it's a command item still to run (#257): open, or failed and so
-        run again (#335); not one run well or closed. Else None."""
+        run again (#335); not one running (#339), run well or closed; or one of the also statuses.
+        Else None."""
         item = target and target[1] and self.client.item(*target)
-        return item if item and item["kind"] == "command" and item["status"] in ("open", "failed") else None
+        return item if item and item["kind"] == "command" and item["status"] in (*RUNNABLE, *also) else None
 
     @on(Button.Pressed, "#run-command")
     def run_pressed(self, event: Button.Pressed) -> None:

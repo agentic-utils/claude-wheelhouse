@@ -22,7 +22,14 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   Relaunch. Never imports Textual: it tells surfaces what happened as events.
 - `tui.py`: the Textual app. Reads and acts through `self.client` (`client.py`);
   `self.hub` is that same `LocalClient` with `--local`, and None when the app goes
-  through a daemon (`client.remote`).
+  through a daemon (`client.remote`). Threading (#327): Textual's event loop is the UI
+  thread, and widgets are touched only there. Work that isn't a widget touch goes to a
+  worker (`run_worker(thread=True)`) and comes back by `call_from_thread`: a conversation's
+  fetch (`WheelhouseApp.conversation`) and its blocks' render (`show_detail`, numbered by
+  `detail_gen` so an overtaken result is dropped). Input stays synchronous: `settle` repaints
+  the inbox as a key lands, so the keys behind it act on the same rows (#312). The tick skips
+  `paint_items` while `RemoteClient.version` (the sessions and inbox applied) and the app's
+  state are as last painted.
 - `daemon.py`: the hub served over HTTP and SSE (`.plan/remote.md`), once per user on
   `127.0.0.1:7428` (or `features.port()`). The app goes through it by default; `--local`
   runs a hub in process.
@@ -43,7 +50,8 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   usage mode, `usage_mode()` (`USAGE_MODE`), the daemon's port, `port()` (`PORT`), and how
   long a quiet session is kept warm, `keepalive_hours()` (`KEEPALIVE_HOURS`; 8 by default,
   0 for off), and the app's animation rate, `animation_fps()` (`ANIMATION_FPS`; 10 by
-  default, 0 for off; `WheelhouseApp.pace` rests it while unfocused with nothing busy), and the gap
+  default, 0 for off; `WheelhouseApp.pace` rests it while unfocused with nothing busy; the title
+  and eyes draw at most `tui.EYES_FPS`, the overlay `tui.DOCK_FPS`), and the gap
   after which the app says what happened meanwhile, `away_hours()` (`AWAY_HOURS`; 2 by default, 0 for off), and how long a
   completed inbox item stays in sight, `autocleanse_minutes()` (`AUTOCLEANSE_MINUTES`; 5 by default, 0 for off; tests run with
   it off, conftest, and set `app.autocleanse`). The README's Settings table lists them.

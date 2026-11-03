@@ -192,6 +192,19 @@ def ended(db: Path, sid: str, ref: str, code: int, output: str | None = None) ->
         print(f"claude-wheelhouse: {ref}'s outcome (exit {code}) wasn't recorded: {e}")
 
 
+def taken(db: Path, sid: str, ref: str) -> None:
+    """This tab's process recorded on the running item (Store.run_taken, #339): it becomes the
+    tab's bash (exec keeps the pid and start time), so its end without an outcome is a run that
+    will never report (Hub.sweep_runs). Said in the tab if it can't be."""
+    import sqlite3
+    from . import liveness
+    from .store import Store
+    try:
+        Store(db).run_taken(sid, ref, os.getpid(), liveness.start_time(os.getpid()), liveness.boot_id())
+    except (sqlite3.Error, OSError) as e:
+        print(f"claude-wheelhouse: {ref}'s tab wasn't recorded: {e}")
+
+
 def run(key: str, db: Path) -> None:
     """Inside the quick shell's tab: the run's file taken, the command run, and the person left
     at an ordinary shell. With the output wanted, it's captured and sent on the item first."""
@@ -199,6 +212,7 @@ def run(key: str, db: Path) -> None:
     from .launch import clean_env, now
     from .store import SessionGone, Store
     payload = take(db, key)
+    taken(db, payload["sid"], payload["ref"])
     env = {k: v for k, v in clean_env().items() if not k.startswith("WHEELHOUSE_")}
     cwd, text, name, ref = payload["cwd"], payload["text"], payload["name"], payload["ref"]
     try:

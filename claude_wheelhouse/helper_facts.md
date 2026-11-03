@@ -1,4 +1,4 @@
-<!-- fact sheet stamp: version 226, 2026-11-03T16:55:16Z, source 2f3c44707dc504c3 (make facts restamps it: AGENTS.md) -->
+<!-- fact sheet stamp: version 228, 2026-11-03T17:57:46Z, source 1bbef8d9920ee813 (make facts restamps it: AGENTS.md) -->
 # Wheelhouse fact sheet
 
 What the helper chat knows before any question. The guide below is written by hand; the
@@ -34,7 +34,7 @@ daemon running.
 
 ## Words the app uses
 
-- Item: anything a session posts. Kinds: task, question, decision, subagent (A), PR, doc, command (C: a shell command a session asks the person to run, with a Run button that opens it in an editable box with a "Send the output back" checkbox, then runs it in a quick shell's tab). A command is open (yellow, at the top, like an open question) until run; the tab then records how it ended, even when the command stopped the daemon: run (Run gone) on exit 0, else failed (red) with the exit code and, if the output was captured, its last 20 lines, Run kept.
+- Item: anything a session posts. Kinds: task, question, decision, subagent (A), PR, doc, command (C: a shell command a session asks the person to run, with a Run button that opens it in an editable box with a "Send the output back" checkbox, then runs it in a quick shell's tab). A command is open (yellow, at the top, like an open question) until run, then running (shown as running work, Run shown but disabled) until the run ends; the tab then records how it ended, even when the command stopped the daemon: run (Run gone) on exit 0, else failed (red) with the exit code and, if the output was captured, its last 20 lines, Run enabled again. A tab closed before the command ends, or none taking the run up within 90 seconds, makes it failed too, with a note saying so.
 - Daemon updated: an app whose daemon was replaced under it by other code (a make stop and make install) says "the daemon was updated: quit and restart the app" in its title, instead of "daemon unreachable: reconnecting".
 - Queued and Immediate: a session's send mode. Queued holds answers until Send (Ctrl+S).
 - Park: a session writes its handoff and stops, kept dimmed until Unpark.
@@ -61,9 +61,7 @@ daemon running.
   per stage in the conversation ("Compaction: compacting"), and the session's eye is blue
   meanwhile; what you send it waits until it's done. Its animated art shows over the middle of
   the conversation with the crew's latest line; Esc or a click hides it until the next compaction,
-  and its last frame stays 8 seconds after the end. `make scene NAME=<scene>` plays a scene in the
-  terminal without compacting (no NAME lists them); `WHEELHOUSE_SCENE=<scene>` set where the daemon
-  starts makes every compaction play that one.
+  and its last frame stays 8 seconds after the end.
 - Tour: the guided tour, resumed with Alt+T while the title bar shows its badge.
 - Doc editor: a click on a doc (an item's or a decision, in Detail or full screen) opens an
   editor below it. Ctrl+S saves to the file; the pane's title says `edited · Ctrl+S saves`
@@ -271,7 +269,7 @@ The buttons under the session list act on the session highlighted there, and onl
 
 - Shell (Alt+H, from anywhere): a quick shell in a new terminal tab, in the session in context's directory (where it works now), or home with none; exit or Ctrl+D closes it
 
-- Run (on a command a session suggested): opens it in a box you can edit, with whether its output goes back to the session; Run there runs it in a new terminal tab in the session's directory
+- Run (on a command a session suggested): opens it in a box you can edit, with whether its output goes back to the session; Run there runs it in a new terminal tab in the session's directory. Disabled while it runs; back if the run fails
 
 - Relaunch / Unpark (Alt+L in the session list): start the session again where it left off, stopping it first if it's running (asked only if it's mid-turn); on a parked one, Unpark (Alt+P too)
 
@@ -421,6 +419,7 @@ The app's command line args (make args). Give them to make run in ARGS, for exam
 - Shell (Alt+H, from anywhere) opens a quick shell in a new terminal tab, in the directory the session in context works in now, or home. Handing a session run in the wheelhouse to a Claude Code tab is now Handover to Claude Code in a shell, in its right-click menu.
 - A session can suggest a shell command for you to run: a C item with a Run button that opens it in an editable box and runs it in a new terminal tab, sending the output back if you tick it.
 - A command item waits like an open question, yellow and at the top, until you run it; then it shows how the run ended: run, with Run gone, or failed in red, with the exit code (and the output's last lines, when it was captured) and Run kept to try again.
+- Run on a command item is disabled from the moment you run it until the run ends, in every app attached: it shows as running, and Run comes back only if the run fails, or its tab closes before it ends.
 - An app whose daemon was replaced under it by an update says so in its title, to quit and restart it, rather than reconnecting for ever.
 - The Decisions pane follows the selected session, as the PRs pane does: its repo's decisions alone, or a line saying it has none; with no session selected, every repo's.
 - Search the inbox by id or title: click the 🔍 at its top right, or just type while it has focus. Show hidden takes in the items off the inbox too; Enter or a click goes to the item.

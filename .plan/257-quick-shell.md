@@ -196,3 +196,13 @@ stops: `run` on exit 0 (Run goes), else `failed` (red, Run kept) with a note of 
 Unticked, the rc records `$?` after its `eval` in the tab's own shell, so a `cd` or `export`
 still stays; ticked, the capture's last 20 lines go in the note too. The output reply follows
 `hub.goes_now`, the same rule as a typed answer.
+
+## 5. Run disabled while it runs (#339)
+
+The daemon sets the item `running` when it accepts a run (`Hub.run_command`, `Store.start_run`),
+before the tab opens, and refuses a second run of one already running, so every attached app and
+a restarted one agree. The send bar shows Run disabled while `running`; the dialog's Cancel sends
+nothing. The tab records its own process (pid, start time, boot id, `Store.run_taken`) once it
+has taken the run; `Hub.sweep_runs` fails a run whose tab process has gone without an outcome
+(closed, killed, rebooted: the rc writes the outcome before its shell can exit), or that no tab
+took up within 90 seconds, with a note saying which.

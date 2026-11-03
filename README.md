@@ -385,7 +385,11 @@ session.
   colours need 24-bit colour: Windows Terminal draws it but doesn't tell WSL, so the
   wheelhouse assumes it there (`TEXTUAL_COLOR_SYSTEM` overrides that).
   Transcripts are read off the UI thread, so a big one says "reading …" for a moment
-  rather than freezing the app. The inbox's session list shows each session's context
+  rather than freezing the app. The UI thread (Textual's event loop) handles keys, clicks
+  and drawing; a conversation is fetched from the daemon and rendered on worker threads, and
+  shown once the selection rests (about 60 ms), so arrowing through the inbox never waits on
+  one. The once-a-second refresh reads and repaints the inbox only when the daemon's version
+  of it has moved. The inbox's session list shows each session's context
   size the same way, as a one-cell bar in the same colours, filled in eighths on a
   linear scale: an eighth for each 125k begun, so the cell is full past 875k.
 - **The PRs pane.** Under the inbox, the open pull requests your sessions made (`PRs ·
@@ -514,9 +518,13 @@ session.
   to the first 4,000 and last 12,000 characters, goes to the session as your reply on the item,
   queued or sent as your answers are. It goes into the session's transcript: untick it if the
   output may show secrets. Unticked, the session gets nothing and the item notes the run.
-  When the command ends, the tab writes how it went on the item, even if the command stopped
-  the daemon: exit 0 makes it `run` and Run goes; anything else makes it `failed` (red) with
-  the exit code, and with the output ticked, its last 20 lines, and Run stays to try again.
+  From the moment you run it the item is `running`, shown as running work rather than yellow,
+  with Run shown but disabled, in every app attached. When the command ends, the tab writes how
+  it went on the item, even if the command stopped the daemon: exit 0 makes it `run` and Run
+  goes; anything else makes it `failed` (red) with the exit code, and with the output ticked,
+  its last 20 lines, and Run is enabled again to try again. If the tab closes (or the machine
+  restarts) before the command ends, or no tab takes the run up within 90 seconds, it's
+  `failed` too, with a note saying so. Cancel in the Run box runs nothing and leaves Run enabled.
   Delete closes a command you won't run. If an update replaces the daemon under a running app
   (a `make stop` and `make install` from a Run, say), the title says the daemon was updated:
   quit and restart the app. New session (directory, optional name, optional ticket, opening brief,
@@ -1013,7 +1021,8 @@ If it isn't a directory, the dialog uses the default, and a line on the terminal
 was started from says why.
 
 `ANIMATION_FPS` sets how many frames a second the title's shimmer, the session eyes, busy sessions' flashing dots and
-the stats bars move; fractions are allowed, up to 30. Every rate moves them at the same
+the stats bars move; fractions are allowed, up to 30. The title and the eyes draw at most 5 frames a second, and the
+compaction overlay at most 4, whatever the rate, leaving the UI thread to your keys. Every rate moves them at the same
 speed: a lower one draws fewer steps. While the terminal window is unfocused and no
 session is busy, the animation rests, and starts again when you come back or a session
 gets busy. The daemon reads only the settings it uses: `PORT`, `USAGE_MODE` and
