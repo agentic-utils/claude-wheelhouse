@@ -245,6 +245,10 @@ FEATURES: tuple[Feature, ...] = (
             note="Compaction has a fifth scene: The Hitchhiker's Guide to the Galaxy, with two missiles turned "
                  "into a sperm whale and a bowl of petunias and the ground rushing up as the ALTITUDE readout "
                  "falls, DON'T PANIC over it all, and the crew's lines between."),
+    Feature("compactor-temple-of-doom", UNRELEASED, ADVANCED,
+            note="Compaction has a sixth scene: Indiana Jones and the Temple of Doom, with a ceiling of spikes "
+                 "grinding down on Indy and Short Round as the HEADROOM readout falls, Willie screaming at the "
+                 "bugs as she feels for the lever, and the cast's lines between."),
     Feature("keepalive-50", UNRELEASED, ADVANCED,
             note="The keepalive comes every 50 minutes, ahead of Claude Code's idle compaction at about 54."),
     Feature("compact-at-keepalive-end", UNRELEASED, ADVANCED,
