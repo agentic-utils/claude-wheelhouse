@@ -97,10 +97,6 @@
 "Boneless: (roll the old messages up the wall like a carpet)"
 ],
 [
-"Rigsy: Do I get a sonic for this?",
-"Clara: You get a mention in the summary. Two words."
-],
-[
 "Doctor: Clara, stop swinging the bag!",
 "Clara: Stop being in the bag, then."
 ],
@@ -160,8 +156,7 @@
 "Doctor: A Time Lord never forgets, Clara. He keeps a very short summary."
 ],
 [
-"Rigsy: Is he always this grumpy?",
-"Clara: That's the summary. In full he's worse."
+"Rigsy: (sprays \"THE DOCTOR WAS HERE\", then a smaller one under it)"
 ],
 [
 "Clara: The TARDIS has gone into siege mode.",
@@ -182,10 +177,6 @@
 "Clara: It kept the bit where I was."
 ],
 [
-"Clara: It says \"Clara Oswald: impossible girl, carries the plot\".",
-"Doctor: Who let you write the summary?"
-],
-[
 "Clara: (zips the handbag shut so the Doctor can't edit the summary)"
 ],
 [
@@ -197,8 +188,14 @@
 "Doctor: Again?"
 ],
 [
-"Clara: (holds the handbag to her ear) Are you summarising in there?",
-"Doctor: Brooding. Much the same."
+"Clara: The Boneless are copying your shape.",
+"Doctor: Flat, grey and furious. They've nailed it."
+],
+[
+"Doctor: Clara, I've worked out the compaction. Then it compacted that."
+],
+[
+"Doctor: The TARDIS translates every language, Clara. Even \"the gist\"."
 ],
 [
 "Doctor: Clara. Do you happen to know how to summarise this thing?"
@@ -994,7 +991,8 @@
 [
 53.741567999596846,
 [
-"Doctor: The summary calls me \"a Scottish man in a box\". Accurate. Rude."
+"Clara: I'm late for school.",
+"Doctor: Take me in. I'll be show and tell."
 ]
 ],
 [
@@ -1009,8 +1007,7 @@
 [
 0,
 [
-"Clara: The summary's lost Gallifrey.",
-"Doctor: Again?"
+"Doctor: Clara, I've worked out the compaction. Then it compacted that."
 ]
 ],
 [
@@ -1022,15 +1019,14 @@
 [
 49.73123313334577,
 [
-"Doctor: Clara, did you know a TARDIS fits in a handbag?",
-"Clara: Every woman knows that."
+"Rigsy: (photographs the TARDIS next to his trainer, for scale)"
 ]
 ],
 [
 76.65953206400873,
 [
-"Doctor: Clara, stop swinging the bag!",
-"Clara: Stop being in the bag, then."
+"Clara: Pocket-sized Doctor. I could get used to this.",
+"Doctor: Don't."
 ]
 ],
 [
@@ -1049,8 +1045,8 @@
 [
 154.60880149457603,
 [
-"Clara: What's the plan?",
-"Doctor: Run. The summary will say we strolled."
+"Doctor: Did the summary keep my good coat?",
+"Clara: It kept your bad mood. That'll keep you warm."
 ]
 ],
 [
@@ -1070,13 +1066,14 @@
 [
 231.90071357311805,
 [
-"Doctor: A Time Lord never forgets, Clara. He keeps a very short summary."
+"Rigsy: (sprays \"THE DOCTOR WAS HERE\", then a smaller one under it)"
 ]
 ],
 [
 255.11967429733215,
 [
-"Doctor: Never be cruel, never be cowardly, and never, ever skip the summary."
+"Doctor: Has anyone ever told you you're bossy, Clara?",
+"Clara: The summary. Twice."
 ]
 ],
 [

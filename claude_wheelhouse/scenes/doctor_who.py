@@ -41,7 +41,6 @@ EXCERPTS: tuple[tuple[str, ...], ...] = (
     ("Boneless: (wear the old messages like a stolen coat, two sizes too thin)",),
     ("Boneless: (reach into the third dimension, find nothing worth keeping)",),
     ("Boneless: (roll the old messages up the wall like a carpet)",),
-    ("Rigsy: Do I get a sonic for this?", "Clara: You get a mention in the summary. Two words."),
     ("Doctor: Clara, stop swinging the bag!", "Clara: Stop being in the bag, then."),
     ("Clara: Pocket-sized Doctor. I could get used to this.", "Doctor: Don't."),
     ("Doctor: The summary calls me \"a Scottish man in a box\". Accurate. Rude.",),
@@ -58,17 +57,18 @@ EXCERPTS: tuple[tuple[str, ...], ...] = (
     ("Doctor: Did the summary keep my good coat?", "Clara: It kept your bad mood. That'll keep you warm."),
     ("Doctor: How long was I in there?", "Clara: A whole compaction. You missed nothing. Literally, it's gone."),
     ("Doctor: A Time Lord never forgets, Clara. He keeps a very short summary.",),
-    ("Rigsy: Is he always this grumpy?", "Clara: That's the summary. In full he's worse."),
+    ("Rigsy: (sprays \"THE DOCTOR WAS HERE\", then a smaller one under it)",),
     ("Clara: The TARDIS has gone into siege mode.", "Doctor: That's not siege mode. She's sulking about the summary."),
     ("Doctor: Never be cruel, never be cowardly, and never, ever skip the summary.",),
     ("Doctor: Has anyone ever told you you're bossy, Clara?", "Clara: The summary. Twice."),
     ("Doctor: (knocks four times from inside the handbag)",),
     ("Doctor: The summary dropped the bit where I was right.", "Clara: It kept the bit where I was."),
-    ("Clara: It says \"Clara Oswald: impossible girl, carries the plot\".", "Doctor: Who let you write the summary?"),
     ("Clara: (zips the handbag shut so the Doctor can't edit the summary)",),
     ("Clara: Rigsy wants to know if he's in the summary.", "Doctor: Who's Rigsy?"),
     ("Clara: The summary's lost Gallifrey.", "Doctor: Again?"),
-    ("Clara: (holds the handbag to her ear) Are you summarising in there?", "Doctor: Brooding. Much the same."),
+    ("Clara: The Boneless are copying your shape.", "Doctor: Flat, grey and furious. They've nailed it."),
+    ("Doctor: Clara, I've worked out the compaction. Then it compacted that.",),
+    ("Doctor: The TARDIS translates every language, Clara. Even \"the gist\".",),
     ("Doctor: Clara. Do you happen to know how to summarise this thing?",),
     ("Clara: (checks her bag) Phone, keys, purse, TARDIS.",),
     ("Clara: The bag's getting heavier, Doctor.", "Doctor: That's the summary. It's very dense."),
@@ -249,7 +249,7 @@ def readout(c: Canvas, inches: int, status: str, role: str = "c") -> None:
 TALK = CLARA + 1   # over Clara's head
 PREPARING = (("Routine compaction. Nothing changes size.", TC), ("You always say that.", TALK),
              ("(shakes the spray can)", RIGSY + 1))
-TALL = (("Doctor? Your door's gone a bit small.", TALK), ("Dimensional leak. Hold the door!", TC),
+TALL = (("Doctor? Your door's gone a bit small.", TALK), ("Not now, Clara. I'm being summarised!", TC),
         ("Is that meant to happen?", RIGSY + 1), ("Nothing he does is meant to happen.", TALK))
 SHORT = (("Clara! Pick me up before someone posts me!", TC), ("Right. Handbag.", TALK),
          ("(a hand waves out of the door)", TC), ("Mind the door, Clara. It's my only one.", TC))
