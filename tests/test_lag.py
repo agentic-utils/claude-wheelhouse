@@ -110,7 +110,7 @@ async def test_a_stale_render_never_overwrites_a_newer_one(store, sid, monkeypat
 @pytest.mark.anyio
 @pytest.mark.parametrize("moved, desc", [
     (False, "the daemon's version where it was: nothing read, compared or painted"),
-    (True, "the version moved: the inbox read and its rows compared again"),
+    (True, "the version moved: the inbox read and painted again"),
 ])
 async def test_the_idle_tick_paints_nothing_when_the_version_has_not_moved(store, sid, monkeypatch, moved, desc):
     for i in range(5):
@@ -121,12 +121,14 @@ async def test_the_idle_tick_paints_nothing_when_the_version_has_not_moved(store
         await pilot.pause()
         app.paint_items()
         await pilot.pause()
-        compared = []
-        real = tui.same_rows
-        monkeypatch.setattr(tui, "same_rows", lambda *a: (compared.append(1), real(*a))[1])
+        read = []
+        real = app.ranked_keyed
+        monkeypatch.setattr(app, "ranked_keyed", lambda *a, **kw: (read.append(1), real(*a, **kw))[1])
+        filled = []
+        monkeypatch.setattr(tui, "fill", lambda *a, **kw: (filled.append(1), fill(*a, **kw))[1])
         app.client.version += moved
         app.paint_items()
-        assert bool(compared) == moved, desc
+        assert (bool(read), bool(filled)) == (moved, moved), desc
 
 
 @pytest.mark.anyio

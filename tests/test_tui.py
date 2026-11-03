@@ -4588,11 +4588,11 @@ async def test_an_eye_frame_draws_the_busy_rows_alone(store, sid, tmp_path, monk
         await pilot.pause()
         t = app.session_list
         drawn = []
-        monkeypatch.setattr(t, "refresh_row", lambda row: drawn.append(row))
+        monkeypatch.setattr(t, "refresh_coordinate", lambda c: drawn.append(tuple(c)))
         count = t._update_count
         app.sweep_eyes()
         assert t._update_count == count, "the table's data is as it was: its caches stand"
-        assert drawn == [t.get_row_index(sid)], "the busy row alone is drawn again"
+        assert drawn == [(t.get_row_index(sid), len(t.columns) - 1)], "the busy row's eye cell alone is drawn again (#327)"
 
 
 @pytest.mark.anyio
@@ -4808,13 +4808,13 @@ async def test_a_busy_sessions_dot_flashes(store, sid, monkeypatch, clock, busy,
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("first, then, row, cell, desc", [
+@pytest.mark.parametrize("first, then, eye, dot, desc", [
     (6, 7, False, True, "the dot dims, the eye still: the dot's cell alone drawn again"),
-    (27, 28, True, False, "the dot back to its colour as the eye moves: the row drawn again, once"),
-    (0, 4, True, False, "the eye moved, the dot as it was: the row drawn again"),
+    (27, 28, True, True, "the dot back to its colour as the eye moves: the two cells drawn again, not the row (#327)"),
+    (0, 4, True, False, "the eye moved, the dot as it was: the eye's cell alone drawn again (#327)"),
     (0, 1, False, False, "neither changed: nothing drawn again"),
 ])
-async def test_a_dot_that_flashes_draws_its_cell_alone(store, sid, monkeypatch, first, then, row, cell, desc):
+async def test_a_dot_that_flashes_draws_its_cell_alone(store, sid, monkeypatch, first, then, eye, dot, desc):
     monkeypatch.setattr(WheelhouseApp, "busy", lambda self, s: s == sid)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
@@ -4825,7 +4825,8 @@ async def test_a_dot_that_flashes_draws_its_cell_alone(store, sid, monkeypatch, 
         monkeypatch.setattr(t, "refresh_row", lambda r: rows.append(r))
         monkeypatch.setattr(t, "refresh_coordinate", lambda c: cells_.append(c))
         t.sweep(then)
-        assert (bool(rows), cells_ == [(t.get_row_index(sid), 0)]) == (row, cell), desc
+        r = t.get_row_index(sid)
+        assert not rows and cells_ == [(r, len(t.columns) - 1)] * eye + [(r, 0)] * dot, desc
 
 
 def shown_buttons(app) -> set[str]:
@@ -7908,7 +7909,7 @@ async def test_the_titles_kept_lines_are_its_looks_as_drawn_afresh(store, monkey
 @pytest.mark.anyio
 @pytest.mark.parametrize("first, then, drawn, desc", [
     (0, 1, False, "the eye where it was: nothing drawn again"),
-    (0, 4, True, "the eye moved: its row drawn again"),
+    (0, 4, True, "the eye moved: its cell drawn again"),
 ])
 async def test_an_eye_that_stays_put_draws_nothing_again(store, sid, monkeypatch, first, then, drawn, desc):
     monkeypatch.setattr(WheelhouseApp, "busy", lambda self, s: s == sid)
@@ -7919,7 +7920,7 @@ async def test_an_eye_that_stays_put_draws_nothing_again(store, sid, monkeypatch
         assert (tui.eye_at(first) != tui.eye_at(then)) == drawn, desc
         t.sweep(first)
         rows = []
-        monkeypatch.setattr(t, "refresh_row", lambda row: rows.append(row))
+        monkeypatch.setattr(t, "refresh_coordinate", lambda c: rows.append(c) if c.column else None)
         t.sweep(then)
         assert bool(rows) == drawn, desc
         assert t.eye_frame == then, f"{desc}: the frame drawn from is the latest"

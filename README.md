@@ -385,7 +385,11 @@ session.
   colours need 24-bit colour: Windows Terminal draws it but doesn't tell WSL, so the
   wheelhouse assumes it there (`TEXTUAL_COLOR_SYSTEM` overrides that).
   Transcripts are read off the UI thread, so a big one says "reading …" for a moment
-  rather than freezing the app. The inbox's session list shows each session's context
+  rather than freezing the app. The UI thread (Textual's event loop) handles keys, clicks
+  and drawing; a conversation is fetched from the daemon and rendered on worker threads, and
+  shown once the selection rests (about 60 ms), so arrowing through the inbox never waits on
+  one. The once-a-second refresh reads and repaints the inbox only when the daemon's version
+  of it has moved. The inbox's session list shows each session's context
   size the same way, as a one-cell bar in the same colours, filled in eighths on a
   linear scale: an eighth for each 125k begun, so the cell is full past 875k.
 - **The PRs pane.** Under the inbox, the open pull requests your sessions made (`PRs ·
@@ -1004,7 +1008,8 @@ If it isn't a directory, the dialog uses the default, and a line on the terminal
 was started from says why.
 
 `ANIMATION_FPS` sets how many frames a second the title's shimmer, the session eyes, busy sessions' flashing dots and
-the stats bars move; fractions are allowed, up to 30. Every rate moves them at the same
+the stats bars move; fractions are allowed, up to 30. The title and the eyes draw at most 5 frames a second, and the
+compaction overlay at most 4, whatever the rate, leaving the UI thread to your keys. Every rate moves them at the same
 speed: a lower one draws fewer steps. While the terminal window is unfocused and no
 session is busy, the animation rests, and starts again when you come back or a session
 gets busy. The daemon reads only the settings it uses: `PORT`, `USAGE_MODE` and

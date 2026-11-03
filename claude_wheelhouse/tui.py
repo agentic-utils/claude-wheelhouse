@@ -689,19 +689,26 @@ def fill(table: DataTable, rows: list[tuple[str, tuple]], rebuild: bool = False)
     without posting RowHighlighted: clear() puts the cursor on row 0 and the first new row
     highlights it, which made every refresh look like the person picking row 0 and back.
     Returns whether it rebuilt; the caller then puts the cursor back. A str cell shows as
-    itself, never as markup (plain): a session's text reaches these tables."""
-    rows = [(key, tuple(plain(c) for c in cells)) for key, cells in rows]
-    if not rebuild and [r.key.value for r in table.ordered_rows] == [k for k, _ in rows]:
+    itself, never as markup (plain): a session's text reaches these tables. A row given the
+    very cells it was given last (the caller's kept tuple, as paint_items' item_cells keeps
+    them) is left as it is, uncompared: at 4,000 rows the compare was most of an arrow's
+    cost (#327)."""
+    filled = getattr(table, "filled", None)
+    if not rebuild and filled is not None and [r.key.value for r in table.ordered_rows] == [k for k, _ in rows]:
         columns = list(table.columns)
-        for key, cells in rows:
-            for col, new, old in zip(columns, cells, table.get_row(key)):
+        for key, raw in rows:
+            if filled.get(key) is raw:
+                continue
+            filled[key] = raw
+            for col, new, old in zip(columns, (plain(c) for c in raw), table.get_row(key)):
                 if not same(new, old):
                     table.update_cell(key, col, new)
         return False
     with table.prevent(DataTable.RowHighlighted):
         table.clear()
-        for key, cells in rows:
-            table.add_row(*cells, key=key)
+        for key, raw in rows:
+            table.add_row(*(plain(c) for c in raw), key=key)
+    table.filled = dict(rows)
     return True
 
 
@@ -1435,11 +1442,15 @@ class SessionList(SinkList):
         blinked = dot_dimmed(frame)
         if swept == self.swept and blinked == self.blinked:
             return
-        moved, self.swept, self.blinked = swept != self.swept, swept, blinked
+        moved, flashed, self.swept, self.blinked = swept != self.swept, blinked != self.blinked, swept, blinked
+        eye = len(self.columns) - 1   # the eye's cell, the last (_render_line): its cells alone drawn again (#327)
         for sid in self.eyes:
             if sid in self.rows:
                 row = self.get_row_index(sid)
-                self.refresh_row(row) if moved else self.refresh_coordinate(Coordinate(row, 0))
+                if moved:
+                    self.refresh_coordinate(Coordinate(row, eye))
+                if flashed:
+                    self.refresh_coordinate(Coordinate(row, 0))
 
     def _render_line(self, y: int, x1: int, x2: int, base_style: Style) -> Strip:
         """The line as DataTable draws it, with a busy row's eye over its blank cell, and its
@@ -6282,7 +6293,7 @@ class WheelhouseApp(App):
         version = getattr(self.client, "version", None)
         quick = None if version is None else (
             version, self.items_state(), tuple(self.conversation_sids()), frozenset(self.compacting()),
-            frozenset(self.lifeless_sids()), self.autocleanse and int(self.now() // AUTOCLEANSE_POLL))
+            frozenset(self.lifeless_sids()), self.autocleanse and int(datetime.now(timezone.utc).timestamp() // AUTOCLEANSE_POLL))   # listable's clock
         if quick is not None and self.items_painted is not None and self.items_painted[3] == quick \
                 and not self.repin and self.item_sink.move is None:
             self.paint_detail()
@@ -6311,7 +6322,7 @@ class WheelhouseApp(App):
         # all it reads (#268): the same as at the last paint, and nothing moving, shows the same
         read = (every is None, frozenset(processing), frozenset(queued), frozenset(awaiting), frozenset(compacting),
                 frozenset(dead), tuple(sorted(cuts.items())), tuple(names.items()), tuple(self.conversation_sids()))
-        if self.items_painted is not None and (read, self.items_state()) == self.items_painted[0] \
+        if quick is None and self.items_painted is not None and (read, self.items_state()) == self.items_painted[0] \
                 and same_rows(found, self.items_painted[1]) and (every is None or same_rows(every, self.items_painted[2])) \
                 and not self.repin and self.item_sink.move is None:
             self.items_painted = (*self.items_painted[:3], quick)   # read and found the same: stamped as such
@@ -6395,8 +6406,9 @@ class WheelhouseApp(App):
             self.selected = None   # session) went and none is left: nothing selected
         if self.selected is None and self.box_target is not None:   # nor the box aimed at what went
             self.retarget(move_list=False)
-        self.items_painted = ((read, self.items_state()), [row_values(r) for r in found],
-                              None if every is None else [row_values(r) for r in every],
+        # stamped (quick): the version says when to read again, no copy of the rows kept to compare
+        self.items_painted = ((read, self.items_state()), quick is None and [row_values(r) for r in found],
+                              None if every is None or quick is not None else [row_values(r) for r in every],
                               quick and (*quick[:1], self.items_state(), *quick[2:]))
         self.paint_detail()
 
@@ -7115,8 +7127,8 @@ class WheelhouseApp(App):
 
     def show_detail(self, blocks: list[tuple[str, str]], top: bool, following: bool) -> None:
         """Detail shows blocks: at once if they're rendered already, or few are new (an item's
-        thread, a turn streaming in). Something else shown (top) with more than DETAIL_INLINE
-        blocks not rendered yet, a conversation picked, is shown once the selection rests for
+        thread, a turn streaming in). With more than DETAIL_INLINE blocks not rendered yet (a
+        conversation picked, or landing once fetched: conversation), they're shown once the selection rests for
         DETAIL_SETTLE, its blocks rendered on a thread meanwhile, the loop left to the keys: a
         burst of arrows over the inbox renders only where it stops. Each show is numbered
         (detail_gen), and one overtaken by a later show is dropped, wherever it had got to (#327)."""
@@ -7127,7 +7139,7 @@ class WheelhouseApp(App):
             self.detail_timer = None
         width = self.detail.size.width
         cold = [(who, md) for who, md in blocks if who != "doc" and (who, md, width, self.console) not in _block_strips]
-        if not top or not width or len(cold) <= DETAIL_INLINE:
+        if not width or len(cold) <= DETAIL_INLINE:
             self.detail_shown(self.detail_gen, blocks, top, following)
             return
         gen, console, self.detail_waiting = self.detail_gen, self.console, True

@@ -285,6 +285,7 @@ class RemoteClient:
         # the sessions and the inbox as shown, stamped: moved by each answer of the daemon's
         # applied, so a paint that finds it where it left it has nothing new to read (#327)
         self.version = 0
+        self.stamped: dict[str, object] = {}   # the sessions and the inbox as the version stamps them
 
     def make_http(self, read: float):
         """A connection whose every request carries the token."""
@@ -519,7 +520,8 @@ class RemoteClient:
         """A fetch's answer, as shown from now: under the lock."""
         kind = key[0]
         self.shown_seq[key] = seq
-        if kind in ("sessions", "inbox"):
+        if kind in ("sessions", "inbox") and data != self.stamped.get(kind):   # the same again moves nothing
+            self.stamped[kind] = data
             self.version += 1
         if kind == "sessions":
             self.views = data
