@@ -774,12 +774,12 @@
 "walls failed": " ~~[==>  ?  *        ? ?    \n          '   *     *  '    \n^^.^^^.^^^^..^^^.^^^^.^^^..^\n IMPROBABILITY: STALLED     \nimprobability drive stalled ",
 "stage_text failed": " ~~[==>  ?  *        ? ?    \n          '   *     *  '    \n^^.^^^.^^^^..^^^.^^^^.^^^..^\n IMPROBABILITY: STALLED     \nimprobability drive stalled \n10:39Z",
 "stage_text failed note": " ~~[==>  ?  *        ? ?    \n          '   *     *  '    \n^^.^^^.^^^^..^^^.^^^^.^^^..^\n IMPROBABILITY: STALLED     \nimprobability drive stalled \n220k → 40k · 10:41Z",
-"walls cancelled": " /  o      \\___/|    @*@    \n \\_________/---\\|    \\_/    \n                            \n ALTITUDE 30,000 ft         \n         never mind         ",
-"stage_text cancelled": " /  o      \\___/|    @*@    \n \\_________/---\\|    \\_/    \n                            \n ALTITUDE 30,000 ft         \n         never mind         \n10:39Z",
-"stage_text cancelled note": " /  o      \\___/|    @*@    \n \\_________/---\\|    \\_/    \n                            \n ALTITUDE 30,000 ft         \n         never mind         \n220k → 40k · 10:41Z",
+"walls cancelled": " /  o      \\___/|    @*@    \n \\_________/---\\|    \\_/    \n^^.^^^.^^^^..^^^.^^^^.^^^..^\n ALTITUDE 30,000 ft         \n         never mind         ",
+"stage_text cancelled": " /  o      \\___/|    @*@    \n \\_________/---\\|    \\_/    \n^^.^^^.^^^^..^^^.^^^^.^^^..^\n ALTITUDE 30,000 ft         \n         never mind         \n10:39Z",
+"stage_text cancelled note": " /  o      \\___/|    @*@    \n \\_________/---\\|    \\_/    \n^^.^^^.^^^^..^^^.^^^^.^^^..^\n ALTITUDE 30,000 ft         \n         never mind         \n220k → 40k · 10:41Z",
 "excerpts": [
 [
-"Petunias: Oh no, not again."
+"Agrajag: A bowl of petunias, Dent! You compacted me into a bowl of petunias!"
 ],
 [
 "Whale: What's this big flat thing rushing up at me? I'll call it... summary!"
@@ -803,8 +803,7 @@
 "Arthur: This must be Thursday. I never could get the hang of compactions."
 ],
 [
-"Deep Thought: I have summarised the session. The summary is... forty-two.",
-"Arthur: Two hundred thousand tokens, and it's a number?"
+"Deep Thought: I have summarised the session. The summary is... forty-two."
 ],
 [
 "Fook: How long will the summary take?",
@@ -821,7 +820,7 @@
 "Slartibartfast: I'd far rather be happy than right any day."
 ],
 [
-"Arthur: The warning was in a locked filing cabinet. Beware of the Leopard."
+"Arthur: Compaction notice? Locked filing cabinet. Beware of the Leopard."
 ],
 [
 "Arthur: Can't we keep the old context?",
@@ -873,7 +872,7 @@
 "Guide: Compaction crosses vast contexts in a mere nothingth of a second."
 ],
 [
-"Zaphod: Summary's like having your brains smashed out by a slice of lemon."
+"Hactar: They asked me for the ultimate summary. I made it a dud on purpose."
 ],
 [
 "Zaphod: Where's Hotblack?",
@@ -884,7 +883,7 @@
 ],
 [
 "Benjy: We'll swap Arthur's brain for a summary.",
-"Frankie: It only has to say \"What?\" and \"I don't know\"."
+"Zaphod: It says \"What?\", \"I don't know\" and \"Where's the tea?\". Who'd know?"
 ],
 [
 "Frankie: The summary's lost the Question.",
@@ -898,7 +897,7 @@
 "Dish of the Day: Something lighter? May I urge you to consider the summary?"
 ],
 [
-"Max: Ladies and gentlemen, the end of the context! Do stay for the summary."
+"Max: Welcome to Milliways! Tonight, live on stage: your context, compacting!"
 ],
 [
 "Dolphin: So long, and thanks for all the tokens."
@@ -914,8 +913,7 @@
 "Ford: Six pints of bitter. And quickly please, the context's about to end."
 ],
 [
-"Arthur: Fifty thousand tokens in three lines?",
-"Ford: Send it to the Reader's Digest."
+"Arthur: Sandwich Maker now. Thin slices, nothing wasted. Like a summary."
 ],
 [
 "Arthur: First my house, then the Earth. Now my context."
@@ -973,7 +971,7 @@
 "Guide: Past the Context Event Horizon, every message is a summary."
 ],
 [
-"Ford: Infinite monkeys outside. They've worked out a summary."
+"Arthur: Infinite monkeys outside. They've worked out a summary."
 ],
 [
 "Guide: The lifts saw the compaction coming and went to sulk in the basement."
@@ -986,7 +984,7 @@
 [
 0,
 [
-"Arthur: The warning was in a locked filing cabinet. Beware of the Leopard."
+"Arthur: Compaction notice? Locked filing cabinet. Beware of the Leopard."
 ]
 ],
 [
@@ -1032,7 +1030,7 @@
 49.73123313334577,
 [
 "Benjy: We'll swap Arthur's brain for a summary.",
-"Frankie: It only has to say \"What?\" and \"I don't know\"."
+"Zaphod: It says \"What?\", \"I don't know\" and \"Where's the tea?\". Who'd know?"
 ]
 ],
 [
