@@ -36,7 +36,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import transcript, transcript_usage
+from . import transcript, transcript_usage, watchdog
 from .store import AGENT_MATCH_AFTER, AGENTS_SINCE
 
 # seconds after a subagent starts before its item is made: a session that posts its own A
@@ -153,6 +153,8 @@ class AgentWatcher:
         self.syncing = False   # a sync is in flight (set and cleared by the app)
         self.ready = False     # a first sync has finished
         self.error: str | None = None   # the last sync's failure
+        self.followers: dict[str, watchdog.Follower] = {}   # each running item's own transcript (watch)
+        self.children: dict[str, list[Path]] = {}   # agent id: its own subagents' transcripts
 
     def sync(self, store, now: float | None = None, alive: bool = True) -> bool:
         """Reads what's new and brings the session's A items up to date. True if it
@@ -179,6 +181,39 @@ class AgentWatcher:
         changed = self.apply(store, now, alive)
         if not alive:
             changed = self.died(store) or changed
+        else:
+            changed = self.watch(store, now) or changed
+        return changed
+
+    def watch(self, store, now: float) -> bool:
+        """The watchdog (watchdog.py): each running item's own transcript read on, its amber
+        cleared once it writes again, and one gone quiet flagged, once per spell (the store
+        acts only on an item not flagged already, so a restart or a second wheelhouse says
+        nothing twice). True if it changed any item."""
+        running = {aid for aid, status in self.links.items() if status == "running" and aid in self.agents
+                   and self.agents[aid].log is not None}
+        for aid in [aid for aid in self.followers if aid not in running]:
+            del self.followers[aid]
+        changed, quiet, asked = False, watchdog.limit(store, self.sid), None
+        for aid in running:
+            f = self.followers.setdefault(aid, watchdog.Follower(self.agents[aid].log))
+            new = f.read()
+            if f.last_at is None:
+                continue
+            # its own subagents' writes, while one runs, count as its own
+            last = max(f.last_at, (self.nested_at(aid) if f.nesting() else None) or 0)
+            if new or (f.told is not None and last > f.told):
+                changed = store.clear_quiet(self.sid, aid, watchdog.iso(last)) or changed
+            if f.calls and asked is None:
+                asked = store.open_permissions(self.sid)
+            approving = lambda call: any(call.asked() in body for body in asked or ())
+            due = f.deadline(quiet, approving, last)
+            if due is None or now < due or f.told == last:
+                continue
+            f.told = last   # this spell is flagged, by this wheelhouse or another
+            waits = any(approving(c) for c in f.calls.values())
+            changed = store.flag_quiet(self.sid, aid, watchdog.iso(last), lambda ref: watchdog.message(
+                ref, self.agents[aid].title, aid, f, now, waits, last)) or changed
         return changed
 
     def unfinished(self) -> bool:
@@ -194,6 +229,16 @@ class AgentWatcher:
             if aid in self.agents:
                 self.agents[aid].status, self.agents[aid].note = "failed", DIED
         return bool(gone)
+
+    def nested_at(self, aid: str) -> float | None:
+        """When a subagent's own subagents last wrote, by their transcripts' mtimes."""
+        times = []
+        for log in self.children.get(aid, ()):
+            try:
+                times.append(log.stat().st_mtime)
+            except OSError:
+                continue
+        return max(times, default=None)
 
     def list_agents(self) -> None:
         folder = self.main.parent / self.sid / "subagents"
@@ -226,6 +271,8 @@ class AgentWatcher:
             return
         if d.get("parentAgentId") or (d.get("spawnDepth") or 1) > 1:
             self.skipped.add(aid)
+            if d.get("parentAgentId"):   # its writes keep its parent from counting as quiet (watch)
+                self.children.setdefault(d["parentAgentId"], []).append(log)
             return
         started = first_stamp(log) or datetime.fromtimestamp(launched, timezone.utc)
         kind = d.get("agentType") or "subagent"

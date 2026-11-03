@@ -92,6 +92,7 @@ STATUS_STYLE = {"live": "bold #00ff41", "stalled": "bold #ffd300", "starting": "
 BLINK_FRAMES = 7   # a busy session's dot: 0.7 s at its colour, then 0.7 s dimmed (dot_dimmed), at FRAMES a second
 DIM = 0.4   # a busy session's dot, dimmed: this share of its colour (dimmed)
 LARGE_CONTEXT = "bold #ff9f1c"   # a live session's dot at or past the Compact question's size (NUDGE_TOKENS)
+QUIET_AGENT = "bold #ffb000"   # a running subagent the watchdog flagged quiet (#328, watchdog.py): its status, amber
 TITLE = " ▓▒░ CLAUDE·WHEELHOUSE ░▒▓ "
 FRAMES = 10   # frames a second that the shimmer, the eyes and the bars are counted in, whatever the rate drawn
 SHIMMER_PERIOD = 2 * len(SHIMMER)   # the title's frames before its colours come round again (shimmer)
@@ -6351,6 +6352,8 @@ class WheelhouseApp(App):
             # finished item keeps its status, with the hourglass
             shown = Text(status if status == "processing" else f"⏳ {status}", style="dim")
             title = titled(it, "dim")
+        elif it["kind"] == "agent" and status == "running" and ordering.field(it, "quiet_at"):
+            shown, title = Text("quiet", style=QUIET_AGENT), titled(it, "")
         else:
             shown, title = Text(status, style=style), titled(it, "dim" if where != "active" else "")
         if (fresh := ordering.field(it, "new_replies")) and status not in ("queued", "processing") \

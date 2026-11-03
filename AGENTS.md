@@ -69,6 +69,10 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   its process group after `KILL_AFTER`). Tests never signal a real process: stub `os.kill`
   (conftest stubs `os.getpgid` and `os.killpg`).
 - `subagents.py`: A items for subagents, from the files Claude Code writes.
+- `watchdog.py`: the subagent watchdog (#328): when a running subagent counts as quiet, read
+  from its own transcript (`Follower`), its `quiet` declarations included, and the notice its
+  session gets. `AgentWatcher.watch` runs it on the hub's clock; the store flags the item once
+  per spell (`Store.flag_quiet`, `items.quiet_at`). Never imports Textual.
 - `prs.py`: PR items (kind `pr`, ref `PR<number>`), found in the same transcripts
   (`PrWatcher`, run after the subagents' in `Hub.sync_agents`), and a pull request URL's
   parsing; GitHub's state comes from the PRs module through `Context.set_pr_states`.

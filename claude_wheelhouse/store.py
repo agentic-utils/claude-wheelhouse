@@ -113,7 +113,9 @@ DECISION_FIELDS = (("why", "Why"),)
 # an older session never posts one, and isn't told to.
 # 27: a protocol rule on where an ADR's status is read from (#283), so a session changing one
 # edits the place the Decisions pane reads: an older session isn't told.
-PROTOCOL_VERSION = 27
+# 28: the subagent watchdog (#328): the set_watchdog and quiet tools, and the protocol rule that a
+# brief tells a subagent that will be quiet on purpose to call quiet: an older MCP server has neither.
+PROTOCOL_VERSION = 28
 # the least time between two compactions a session asks for itself (request_compact), so a
 # confused one can't loop: seconds since its last accepted request
 MODEL_COMPACT_GAP = 30 * 60
@@ -468,6 +470,9 @@ ADDED_COLUMNS = [("sessions", "end_requested_at", "TEXT"), ("sessions", "park_re
                  # kind, scope and error), and what it is asked to do about them (JSON list, taken
                  # whole): a sign-in the session asked for (request_mcp_signin), .plan/mcp-on-demand.md
                  ("sessions", "mcp_status", "TEXT"), ("sessions", "mcp_asks", "TEXT"),
+                 # a running subagent's item the watchdog flagged quiet (#328, watchdog.py): its last record's
+                 # time, so a record after it clears it; NULL while it isn't
+                 ("items", "quiet_at", "TEXT"),
                  # its wheelhouse MCP server as it started (mark_mcp): its pid, the code it loaded
                  # (fingerprint.code) and when, so the session info shows one stale after a pull (#242)
                  ("sessions", "mcp_pid", "INTEGER"), ("sessions", "mcp_code", "TEXT"),
@@ -1953,6 +1958,35 @@ class Store:
                 self._agent_status(db, sid, ref, status, note)
             return db.execute("SELECT status FROM items WHERE session_id = ? AND ref = ?", (sid, ref)).fetchone()["status"]
 
+    def flag_quiet(self, sid: str, agent_id: str, since: str, told) -> bool:
+        """The watchdog (#328): a running subagent's item flagged quiet since `since`, and its
+        session told, `told(ref)` its notice's text, in one transaction; only when the item isn't
+        flagged already, so each quiet spell is told once. True if it flagged it."""
+        with self.tx() as db:
+            row = db.execute("SELECT item_ref FROM agent_items WHERE session_id = ? AND agent_id = ?",
+                             (sid, agent_id)).fetchone()
+            if not row or not db.execute("UPDATE items SET quiet_at = ? WHERE session_id = ? AND ref = ? "
+                                         "AND status = 'running' AND quiet_at IS NULL",
+                                         (since, sid, row["item_ref"])).rowcount:
+                return False
+            db.execute("INSERT INTO messages (session_id, author, body, created_at, kind) "
+                       "VALUES (?, 'person', ?, ?, 'notice')", (sid, told(row["item_ref"]), now()))
+            return True
+
+    def clear_quiet(self, sid: str, agent_id: str, last: str) -> bool:
+        """A flagged subagent has written since it was flagged (its last record's time is after
+        quiet_at): its item is no longer quiet. True if it was."""
+        with self.tx() as db:
+            return bool(db.execute("UPDATE items SET quiet_at = NULL WHERE session_id = ? AND quiet_at < ? AND ref = "
+                                   "(SELECT item_ref FROM agent_items WHERE session_id = ? AND agent_id = ?)",
+                                   (sid, last, sid, agent_id)).rowcount)
+
+    def open_permissions(self, sid: str) -> list[str]:
+        """The bodies of the session's open permission items: the tool calls its host waits on
+        the person to approve (host.permission_body)."""
+        return [r["body"] for r in self._all("SELECT body FROM items WHERE session_id = ? AND kind = 'permission' "
+                                             "AND status = 'open'", (sid,))]
+
     def agent_status(self, sid: str, agent_id: str, status: str, note: str = "") -> None:
         """A tracked subagent finished (done or failed), or was resumed (running)."""
         with self.tx() as db:
@@ -1964,7 +1998,8 @@ class Store:
     def _agent_status(self, db, sid, ref, status, note) -> None:
         """Only a change is written, so a transcript read again moves nothing."""
         self._check_status("agent", status)
-        if db.execute(f"UPDATE items SET status = ?, updated_at = ?, dismissed = {KEEP_DELETED} WHERE session_id = ? "
+        if db.execute(f"UPDATE items SET status = ?, updated_at = ?, dismissed = {KEEP_DELETED}, quiet_at = NULL "
+                      "WHERE session_id = ? "
                       "AND ref = ? AND status != ?", (status, now(), sid, ref, status)).rowcount and note:
             self._said(db, sid, ref, note, "note")
 

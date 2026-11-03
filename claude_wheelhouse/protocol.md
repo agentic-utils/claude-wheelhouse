@@ -15,6 +15,15 @@ anything here seems to conflict with them, follow yours.
   works on (for example `T3: review the store`) so it is filed under that item. Add a
   `note` to one with `update_item` if you have progress worth keeping (`list_items` gives
   its ref).
+- The wheelhouse watches your running subagents. One that goes 5 minutes with nothing new
+  in its transcript and no tool call in flight (a call in flight gets its own timeout plus a
+  minute; one waiting on the person's approval, the 5 minutes) is flagged: you get a
+  `[wheelhouse]` message naming its agent item, its agent id and its last action, once per
+  quiet spell, and its item turns amber for the person. Steer it with `SendMessage`, or stop
+  it and dispatch it again. Change the 5 minutes for your subagents with
+  `set_watchdog(minutes)`. When a subagent will be quiet on purpose (a long simulation, build
+  or test run), tell it in its brief to call the wheelhouse tool `quiet(minutes, why)` just
+  before, for the longest it expects: it isn't flagged until that period ends.
 - When you write a markdown document for the person to read (a design, plan, report or
   review), declare it with `post_item(kind="doc", title, path, parent)`: its absolute path,
   wherever it lives (`~/.claude` included), and as `parent` the ref of the task, question or

@@ -257,6 +257,28 @@ SDK and tab sessions, rather than relying on the session to post them
   the earliest subagent still running (`stats.window_start`), or at the end when none is.
   An idle sync is two `stat`s, about 25 us; a first sync of a 13 MB transcript with 141
   subagents takes 4 ms with nothing running.
+- **Watchdog** (#328, `watchdog.py`). The hub's clock, never the UI's: after each sync of a
+  live session, each running item's own transcript is read on from its offset
+  (`watchdog.Follower`: the newest record's time, the tool calls in flight, the last action,
+  a declared quiet period). It is quiet once the limit passes with no new record and no call
+  in flight: the session's `set_watchdog` minutes (setting `watchdog.<session id>`), else 5.
+  A call in flight gets its own timeout plus 60 s (its `timeout` input, Bash's 120 s without
+  one, at most 600 s; a tool with none, the limit), so a hung call is still caught; one
+  waiting on the person's approval gets the limit. Approval is known only in an SDK session,
+  whose host posts an open permission item holding the call's input as `json.dumps(indent=2)`;
+  a tab's prompt leaves no trace, so a call there is held to its timeout. A `quiet(minutes,
+  why)` call in the subagent's own transcript stretches the deadline to its end: the MCP
+  server can't tell which agent called (they share the session's connection, and a call
+  carries no agent id), so where the call is written is what attributes it; a call awaiting
+  approval is still due at the limit inside one, and a record after the period ends it. A turn
+  that has ended (an `end_turn` record, or its `SubagentHandback` answered) is never quiet: its
+  finish is the session's transcript's to report. While a subagent's own Agent call runs, its
+  children's transcripts' writes (by mtime) count as its own. Quiet, the item's
+  `quiet_at` is set to the newest record's time and the session gets a notice naming the item,
+  the agent id and its last action, in one transaction that acts only while `quiet_at` is
+  NULL: one alert per quiet spell, across restarts and a second wheelhouse. A record newer
+  than `quiet_at` clears it, as any finish does. The inbox shows a flagged running item's
+  status as `quiet`, in amber.
 
 ## MCP tools (server name `wheelhouse`)
 
@@ -267,6 +289,8 @@ SDK and tab sessions, rather than relying on the session to post them
 | `get_input(ref?)` | undelivered messages from the person, or the full thread for one ref (whose undelivered messages then count as delivered) |
 | `list_items(include_closed?)` | this session's items |
 | `park_session()` / `end_session()` | lifecycle; `park_session` also settles a pending park request |
+| `set_watchdog(minutes)` | how long the session's subagents may go quiet before the watchdog flags them (5 by default) |
+| `quiet(minutes, why)` | a subagent declares a quiet period; read from its own transcript |
 
 Delivery is claim, show, confirm. A claim is one transaction, so the monitor and
 `get_input` never take the same message. The monitor confirms a message only after

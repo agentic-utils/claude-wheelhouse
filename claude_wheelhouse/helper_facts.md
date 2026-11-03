@@ -1,4 +1,4 @@
-<!-- fact sheet stamp: version 211, 2026-11-03T09:14:37Z, source b8511f9f5d77b222 (make facts restamps it: AGENTS.md) -->
+<!-- fact sheet stamp: version 214, 2026-11-03T13:38:12Z, source 3b7e45999f7aa1fe (make facts restamps it: AGENTS.md) -->
 # Wheelhouse fact sheet
 
 What the helper chat knows before any question. The guide below is written by hand; the
@@ -47,6 +47,10 @@ daemon running.
 - Fork: a new session carrying on from another's conversation.
 - Shell (Alt+H): a quick shell, the person's login shell in a new terminal tab titled ⌁ <session>, in the session in context's live directory (home with none). Untracked; exit closes it. Not the old Shell: handing a session run in the wheelhouse to a Claude Code tab is Handover to Claude Code in a shell, in the session's right-click menu only, no key.
 - Pin: an item kept through Delete, Ctrl+A, Ctrl+Delete and autocleanse.
+- Quiet (amber, a subagent's status): a running subagent with nothing new for 5 minutes and no
+  tool call in flight (or past its call's own timeout plus a minute). Its session is told once
+  with its last action; it clears when the subagent writes again or ends. A session changes the
+  5 minutes with set_watchdog; a subagent declares a deliberate quiet spell with quiet.
 - Completed: an item done with (a task done or dropped, a subagent done or failed, a PR merged or closed, a question answered, a decision seen, a doc read). Ctrl+Delete deletes them all at once (Ctrl+Z undoes it); autocleanse hides each 5 minutes after it completed (AUTOCLEANSE_MINUTES, 0 off) until Alt+V shows it.
 - Session steps: what the wheelhouse tells a session at compaction, ending, resuming or a
   merged PR (command palette, Session steps).
@@ -415,3 +419,4 @@ The app's command line args (make args). Give them to make run in ARGS, for exam
 - Search the inbox by id or title: click the 🔍 at its top right, or just type while it has focus. Show hidden takes in the items off the inbox too; Enter or a click goes to the item.
 - An item's id in Detail (T3, Q25, PR276 in a doc, a conversation or a thread) is a link: a click goes to that item of the same session, as a search's pick does.
 - Ctrl+Q asks before quitting, on No, so a slip for Alt+Q quits nothing; Ctrl+Q again quits.
+- A running subagent quiet for 5 minutes (or past its tool call's own timeout) shows quiet, in amber, and its session is told once, naming it and its last action. A session can change the 5 minutes (set_watchdog); a subagent can declare a quiet spell of its own (quiet).
