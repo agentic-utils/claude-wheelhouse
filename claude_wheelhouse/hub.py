@@ -1316,13 +1316,15 @@ class Hub:
             was = self.store.start_run(sid, ref)
         except ValueError as e:   # running already (another app's Run), or run or closed meanwhile
             return Done(False).say(str(e), "warning")
-        key = quickshell.write(db, {"sid": sid, "ref": ref, "name": display_name(s), "cwd": cwd, "text": text,
-                                    "edited": edited, "want": bool(send)})
+        key = None
         try:
+            key = quickshell.write(db, {"sid": sid, "ref": ref, "name": display_name(s), "cwd": cwd, "text": text,
+                                        "edited": edited, "want": bool(send)})
             launch.open_shell(self.store, cwd, f"{ref} {display_name(s)}",
                               [sys.executable, "-m", "claude_wheelhouse", "shell", "--db", str(db), key], note=ref)
         except (OSError, ValueError) as e:
-            (quickshell.shell_dir(db) / key).unlink(missing_ok=True)
+            if key:
+                (quickshell.shell_dir(db) / key).unlink(missing_ok=True)
             self.store.unstart_run(sid, ref, was)
             return Done(False).say(f"couldn't open a shell: {e}", "error")
         note = None if send else f"started {time.strftime('%H:%M')}" + (", edited" if edited else "")

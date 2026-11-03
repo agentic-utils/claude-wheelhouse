@@ -1995,6 +1995,7 @@ def test_a_command_waiting_on_the_person_sorts_as_an_open_question(store, sid, s
 
 
 @pytest.mark.parametrize("before, opens, ok, after, desc", [
+    ("open", "write", False, "open", "the run's file couldn't be written: back to open, nothing opened"),
     ("open", True, True, "running", "accepted: running before the tab opens, Run disabled everywhere"),
     ("failed", True, True, "running", "a failed run tried again: running"),
     ("running", True, False, "running", "running already (another app's Run): refused, no second tab"),
@@ -2017,10 +2018,13 @@ def test_run_command_sets_running(store, projects, monkeypatch, before, opens, o
         if not opens:
             raise OSError("wt.exe not found")
     monkeypatch.setattr(launch, "open_shell", open_shell)
+    if opens == "write":
+        monkeypatch.setattr(quickshell, "write", lambda *a: (_ for _ in ()).throw(OSError("disk full")))
     done = Hub(store).run_command(sid, ref, "ls", False)
     assert done.ok == ok, desc
     assert store.item(sid, ref)["status"] == after, desc
-    assert seen == (["running"] if before in store_mod.RUNNABLE else []), f"{desc}: running as the tab opens"
+    assert seen == (["running"] if before in store_mod.RUNNABLE and opens != "write" else []), \
+        f"{desc}: running as the tab opens"
 
 
 TAB = [4242, 99, "boot"]
@@ -2092,3 +2096,14 @@ def test_a_running_command_suggested_again_keeps_running(store, sid):
     store.start_run(sid, ref)
     store.post_command(sid, "ls", "List again")
     assert store.item(sid, ref)["status"] == "running"
+
+
+def test_a_running_command_never_makes_its_session_busy(store, sid):
+    """#339: a running command is the person's shell, not the session's turn: no busy session,
+    no "mid-turn" warning on Relaunch."""
+    ref = store.post_command(sid, "make dev", "Serve it")[0]
+    store.start_run(sid, ref)
+    row = lambda: next(r for r in store.sessions() if r["id"] == sid)
+    assert row()["running"] == 0 and not hub_mod.working(row()), "a running command: not busy"
+    store.post_item(sid, "task", "work", status="running")
+    assert hub_mod.working(row()), "a running task still makes it busy"

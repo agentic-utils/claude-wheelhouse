@@ -1384,8 +1384,9 @@ class Store:
                  (SELECT value FROM settings WHERE key = '{COMPACT_CUTOFF}' || s.id) AS compact_cutoff,
                  (SELECT count(*) FROM items i WHERE i.session_id = s.id
                     AND i.kind = 'question' AND i.status = 'open' AND NOT {PROCESSING}) AS open_questions,
+                 -- a command running is the person's shell, never the session's work (#339)
                  (SELECT count(*) FROM items i WHERE i.session_id = s.id
-                    AND i.status = 'running') AS running,
+                    AND i.status = 'running' AND i.kind != 'command') AS running,
                  (SELECT count(*) FROM messages m WHERE m.session_id = s.id AND m.draft = 1) AS drafts,
                  (SELECT count(*) FROM items i WHERE i.session_id = s.id
                     AND i.kind = 'decision' AND i.status = 'unseen') AS unseen_decisions,
