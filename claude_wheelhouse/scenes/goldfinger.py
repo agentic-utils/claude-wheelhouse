@@ -38,7 +38,7 @@ EXCERPTS: tuple[tuple[str, ...], ...] = (
     ("Goldfinger: I've compacted all my life, Mr Bond. Mostly other people's cars.",),
     ("Mr Ling: My principals ask how big the summary will be.", "Goldfinger: About the size of a Lincoln. Afterwards."),
     ("Kisch: Boss, the summary won't fit on the truck.", "Goldfinger: Then compact the truck."),
-    ("Mr Ling: My principals ask for the minutes of the meeting.", "Goldfinger: Minute. Singular."),
+    ("Mr Ling: Shall I take the minutes of this meeting?", "Goldfinger: Minute. Singular."),
     ("Felix Leiter: Got the homer, James. The signal's getting... smaller.",),
     ("Bond: (slips a note into Solo's pocket: a handoff, for after the compaction)",),
     ("M: 007, your report runs to three hundred pages.", "Bond: It's been through a crusher since, sir. It's a cube."),
@@ -51,7 +51,7 @@ EXCERPTS: tuple[tuple[str, ...], ...] = (
     ("Bond: A martini. Shaken, not compacted.",),
     ("Solo: What's that noise?", "Goldfinger: Your car saying everything it has to say, very quickly."),
     ("Oddjob: (writes the summary on the back of his hand. It fits.)",),
-    ("Solo: My suits were in that boot!", "Goldfinger: Now pressed. You're welcome."),
+    ("Solo: My suits were in that boot!", "Goldfinger: Then at last they'll fit you, Mr Solo."),
     ("Bond: You'll never summarise MI6, Goldfinger.", "Goldfinger: I already have, Mr Bond: \"they send one man\"."),
     ("Bond: I'd rather keep the long version.", "Goldfinger: Everyone would, Mr Bond. That's why I keep Oddjob."),
     ("Felix Leiter: Did I miss the compaction, James?", "Bond: You always do, Felix. The CIA comes for the summary."),
@@ -60,7 +60,7 @@ EXCERPTS: tuple[tuple[str, ...], ...] = (
     ("Bond: Not the Aston, Oddjob.", "Oddjob: (looks at the Aston, then the crusher, and measures with his thumb)"),
     ("Solo: Where's Oddjob taking my car?", "Goldfinger: Somewhere smaller."),
     ("Oddjob: (stacks the cube on the heap with the others, and labels it SOLO)",),
-    ("Bond: Ford spent years making the Lincoln longer.", "Goldfinger: Oddjob takes a minute to make it shorter."),
+    ("Bond: Why not use your laser, Goldfinger?", "Goldfinger: It only cuts things in half, Mr Bond. Half isn't small enough."),
     ("Bond: How exactly does one summarise a Lincoln?", "Goldfinger: Front to back, Mr Bond, at forty tons."),
     ("Oddjob: (reads out the cube's serial number. Silently.)",),
     ("Goldfinger: Every Lincoln has a cube inside it, Mr Bond, waiting to get out.",),
@@ -240,7 +240,7 @@ SAY_SOLO, SAY_ODDJOB = SOLO + 1, ODDJOB + 4
 PREPARING = (("Hey! Put it DOWN!", SAY_SOLO), ("(cracks his knuckles at the lever)", SAY_ODDJOB),
              ("I only got out for a SMOKE!", SAY_SOLO))
 GOING = (("Not the whitewalls!", SAY_SOLO), ("(pulls the lever down a notch)", SAY_ODDJOB),
-         ("That car's PAID FOR!", SAY_SOLO), ("(does not blink)", SAY_ODDJOB))
+         ("Mind the PAINTWORK!", SAY_SOLO), ("(does not blink)", SAY_ODDJOB))
 LOW = (("Leave me the hood ornament!", SAY_SOLO), ("(eases off. Just a touch.)", SAY_ODDJOB))
 LOW_AT = 6   # the length in feet at which Solo starts to bargain
 STATUS = {"preparing": "on the hook", "compacting": "and pressing", "completed": "a neat cube",
