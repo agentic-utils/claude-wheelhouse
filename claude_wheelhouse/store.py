@@ -36,7 +36,8 @@ STATUSES = {
     "agent": {"running", "done", "failed"},
     # the person's state, never the session's: seen once viewed, closed when they close it
     "decision": {"unseen", "seen", "closed"},
-    "permission": {"open", "allowed", "denied"},
+    # split: the host asked the session to split a chained Bash command (#329), never the person
+    "permission": {"open", "allowed", "denied", "split"},
     # the person's too: new until viewed, read once viewed, updated when posted again after that
     "doc": {"new", "updated", "read"},
     # GitHub's, never the session's or the person's (set_pr_states, from the PRs pane's fetch)
@@ -46,16 +47,16 @@ STATUSES = {
 }
 INITIAL_STATUS = {"task": "todo", "question": "open", "agent": "running", "decision": "unseen",
                   "permission": "open", "doc": "new", "pr": "open", "command": "new"}
-CLOSED = {"done", "dropped", "closed", "failed", "allowed", "denied"}
+CLOSED = {"done", "dropped", "closed", "failed", "allowed", "denied", "split"}
 # Where an item stands in the inbox (standing), one table for every kind (T71). Active: ranked
 # as it has always been. Settled: done with, but kept in sight: dimmed, after the rest. Finished:
 # off the inbox until F shows it (closed, a permission answered, or dismissed by the person).
 SETTLED = {"task": {"done", "dropped"}, "question": {"answered"}, "decision": {"seen"},
-           "agent": {"done", "failed"}, "permission": set(), "doc": {"read"},
+           "agent": {"done", "failed"}, "permission": {"split"}, "doc": {"read"},
            "pr": {"merged", "closed"}, "command": {"run"}}
 # kinds whose settled items the person dismisses (Delete), recorded in items.dismissed; a
 # question or a decision is closed instead. A PR is dismissed whatever its state (never on GitHub)
-DISMISSABLE = ("task", "agent", "doc", "pr")
+DISMISSABLE = ("task", "agent", "doc", "pr", "permission")   # a permission only once split, the one settled
 # what a session may hand to a fork (Store.move_items): an item not under way and the
 # person's to answer, never an agent, decision or permission
 MOVABLE = {"task": ("todo", "blocked"), "question": ("open",)}

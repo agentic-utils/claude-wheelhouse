@@ -1,4 +1,4 @@
-<!-- fact sheet stamp: version 216, 2026-11-03T14:20:02Z, source cc733747b03e8ff9 (make facts restamps it: AGENTS.md) -->
+<!-- fact sheet stamp: version 217, 2026-11-03T14:41:52Z, source 081e52023ba6dc54 (make facts restamps it: AGENTS.md) -->
 # Wheelhouse fact sheet
 
 What the helper chat knows before any question. The guide below is written by hand; the
@@ -46,6 +46,7 @@ daemon running.
 - Dead: a session not running and not parked (an Available one), red in the session list; its rows dim in every pane (session list, inbox, PRs, Decisions) until it runs again.
 - Fork: a new session carrying on from another's conversation.
 - Shell (Alt+H): a quick shell, the person's login shell in a new terminal tab titled ⌁ <session>, in the session in context's live directory (home with none). Untracked; exit closes it. Not the old Shell: handing a session run in the wheelhouse to a Claude Code tab is Handover to Claude Code in a shell, in the session's right-click menu only, no key.
+- Asked to split a chained command: a dimmed permission row (SDK sessions only). A hosted session's Bash command chaining several commands with &&, ||, ; or a new line isn't put to the person at first: the wheelhouse asks the session to run them as separate calls, so each can match its own permission rule. The same command asked again is put to the person as usual; a pipe, a quoted or heredoc &&, or anything else isn't chained.
 - Pin: an item kept through Delete, Ctrl+A, Ctrl+Delete and autocleanse.
 - Quiet (amber, a subagent's status): a running subagent with nothing new for 5 minutes and no
   tool call in flight (or past its call's own timeout plus a minute). Its session is told once
