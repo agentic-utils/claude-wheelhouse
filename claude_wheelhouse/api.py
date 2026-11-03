@@ -16,8 +16,9 @@ methods on it:
 - `animate(frame)`: five times a second, except while the person types in an answer box,
   when animation rests.
 - `showing(sid, ref)`: the item Detail shows has changed, picked in the inbox or another pane
-  (ref None for a session's conversation, both None for nothing or a module's doc, #305): a pane listing it can
-  highlight it, and one that doesn't can hide its highlight (#148).
+  (ref None for a session's conversation, both None for nothing or a module's doc, #305, which
+  `Context.shown_doc` names, #309): a pane listing it can highlight it, and one that doesn't can hide
+  its highlight (#148).
 - `detail_parts()`: once, after the panes mount: widgets of the pane's own for the Detail pane,
   {"body": one scrolling under the thread shown, "bar": one fixed under that}, either left
   out. The pane shows and hides them (on `showing`, say); Detail hides both while it shows
@@ -162,6 +163,9 @@ class Context:
     call: Callable[[str, dict | None], object] | None = None
     # a doc under a doc root shown in the Detail pane's viewer: (absolute path, title). None daemon side
     show_doc: Callable[[str, str], None] | None = None
+    # the doc Detail shows that way (show_doc's path), else None: a pane listing it lights its row on
+    # showing(None, None), as for a pick (#309). None daemon side
+    shown_doc: Callable[[], str | None] | None = None
     # the same, opened full screen (DocView), as Enter opens an inbox doc. None daemon side
     open_doc: Callable[[str, str], None] | None = None
     # a pane's `compact` changed: its slot shrinks to its least rows, or takes its share again. None daemon side

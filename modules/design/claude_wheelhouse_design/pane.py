@@ -338,25 +338,23 @@ class Decisions(Vertical):
 
     def pick(self, path: str) -> None:
         """A decision picked by the person: shown in Detail, the other panes' highlights hidden
-        (#281, #305). show_doc's showing(None, None) reaches this pane too, so its own
-        highlight is lit after."""
-        if (r := self.row(path)) is None:
-            return
-        if self.ctx.show_doc is not None:
+        (#281, #305). show_doc's showing(None, None) reaches this pane too, and lights it."""
+        if (r := self.row(path)) is not None and self.ctx.show_doc is not None:
             self.ctx.show_doc(path, title_of(r))
-        table = self.query_one(DecisionTable)
-        with table.prevent(DataTable.RowHighlighted):
-            table.show_cursor = True
-        self.shown = path
 
     def showing(self, sid: str | None, ref: str | None) -> None:
-        """Detail shows an item or a conversation (api's showing hook): the highlight hidden,
-        not left on a decision Detail no longer shows, so a click on that decision is a fresh
-        pick (#281)."""
+        """Detail's shown thing changed (api's showing hook): the highlight on the decision it
+        shows (Context.shown_doc), picked here or gone back to by Keep editing (#309), else
+        hidden, not left on a decision Detail no longer shows, so a click on that decision is
+        a fresh pick (#281)."""
         table = self.query_one(DecisionTable)
+        path = self.ctx.shown_doc() if sid is None and self.ctx.shown_doc is not None else None
+        lit = path is not None and path in table.rows
         with table.prevent(DataTable.RowHighlighted):
-            table.show_cursor = False
-        self.shown = None
+            if lit:
+                table.move_cursor(row=table.get_row_index(path), animate=False)
+            table.show_cursor = lit
+        self.shown = path if lit else None
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         event.stop()

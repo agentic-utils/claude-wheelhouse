@@ -6592,7 +6592,8 @@ class WheelhouseApp(App):
         as a doc item shows, with no answer box."""
         self.shown_doc = (path, title)
         self.items_table.show_cursor = False   # picked elsewhere: a click on the inbox's row is a fresh pick (#281)
-        self.each_pane("showing", None, None)   # no item in Detail: the PRs pane's highlight hidden too (#305)
+        self.each_pane("showing", None, None)   # no item in Detail: the PRs pane's highlight hidden too (#305),
+        # the doc's own pane's lit on it (Context.shown_doc), a pick's or Keep editing's (#309)
         self.paint_sendbar()
         self.paint_detail()
 
@@ -6735,6 +6736,7 @@ class WheelhouseApp(App):
         """The context a module's pane is made with: the app's, with its own routes (call)."""
         return dataclasses.replace(self.ctx, call=functools.partial(self.client.call_module, mid),
                                    show_doc=self.show_doc, open_doc=self.open_doc, relayout=self.fit_compact,
+                                   shown_doc=lambda: self.shown_doc[0] if self.shown_doc else None,
                                    show_item=self.show_item, unselect=self.unselect, send=self.module_send, setting=self.client.setting,
                                    set_setting=self.client.set_setting,
                                    confirm=lambda prompt, then: self.push_screen(Confirm(prompt), then),
