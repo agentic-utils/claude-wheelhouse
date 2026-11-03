@@ -56,7 +56,6 @@ EXCERPTS: tuple[tuple[str, ...], ...] = (
     ("J: How do I get back to before the compaction?",
      "Jeffrey: Jump off the Chrysler Building. Time it right."),
     ("J: What did the summary leave out?", "K: Don't ask questions you don't want answers to."),
-    ("J: Gimme the flashy thing. I'll do this compaction.", "K: Last time you did, we lost Tuesday."),
     ("K: (deneuralyzed) Ah. Now I remember why I compacted it.",),
     ("J: Congratulations, ma'am! It's a... summary.",),
     ("Frank: Compaction? Pal, I'm a pug. My whole face is compacted.",),

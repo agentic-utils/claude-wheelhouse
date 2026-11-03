@@ -917,10 +917,6 @@
 "K: Don't ask questions you don't want answers to."
 ],
 [
-"J: Gimme the flashy thing. I'll do this compaction.",
-"K: Last time you did, we lost Tuesday."
-],
-[
 "K: (deneuralyzed) Ah. Now I remember why I compacted it."
 ],
 [
@@ -1029,14 +1025,15 @@
 [
 0,
 [
-"K: When I'm done, flash me, kid. I'd like to go home with a short summary."
+"J: Who decides what goes in the summary?",
+"K: Whoever's holding the neuralyzer."
 ]
 ],
 [
 22.647538602976795,
 [
-"K: Whole city saw the context overflow. Light up the Statue of Liberty.",
-"J: She's a neuralyzer?"
+"J: How long till the context's full?",
+"Zed: One galactic standard week. About an hour."
 ]
 ],
 [
@@ -1067,8 +1064,7 @@
 [
 154.60880149457603,
 [
-"J: Gimme the flashy thing. I'll do this compaction.",
-"K: Last time you did, we lost Tuesday."
+"K: (deneuralyzed) Ah. Now I remember why I compacted it."
 ]
 ],
 [
@@ -1088,20 +1084,21 @@
 [
 231.90071357311805,
 [
-"Frank: Compaction? Pal, I'm a pug. My whole face is compacted."
+"J: James Darrell Edwards the Third, sir.",
+"Zed: J. We compact names round here."
 ]
 ],
 [
 255.11967429733215,
 [
-"Warhol: I'm painting soup cans, J. Please, just compact me."
+"J: Had to flash T. He cried at the summary."
 ]
 ],
 [
 276.61144314435137,
 [
-"J: Sunglasses? Indoors? At night?",
-"K: You'll thank me in a second."
+"K: Whole city saw the context overflow. Light up the Statue of Liberty.",
+"J: She's a neuralyzer?"
 ]
 ],
 [
