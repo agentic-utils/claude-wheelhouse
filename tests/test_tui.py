@@ -6392,6 +6392,7 @@ async def test_a_sessions_dot_keeps_its_status_colour_under_the_mouse_or_cursor(
     ("task", "done", None, "a finished one, dim, keeps no colour of its own: the cursor's white"),
     ("command", "open", "#ffd300", "a command not yet run: yellow and open, as an open question (#335)"),
     ("command", "failed", "#ff2a6d", "a command whose run failed: red, still the person's (#335)"),
+    ("command", "running", tui.MATRIX, "a command running: as running work, never the open-question yellow (#339)"),
 ])
 async def test_the_selected_items_status_keeps_its_colour(store, sid, kind, status, colour, desc):
     """T113: the cursor's row in the item list keeps its status's colour, on the cursor's
@@ -6401,6 +6402,8 @@ async def test_the_selected_items_status_keeps_its_colour(store, sid, kind, stat
         ref = store.post_command(sid, "ls", "the item")[0]
         if status == "failed":
             store.outcome(sid, ref, 1)
+        elif status == "running":
+            store.start_run(sid, ref)
     else:
         store.post_item(sid, kind, "the item", status=status)
     app = WheelhouseApp(store)
@@ -10439,6 +10442,73 @@ async def test_run_shows_until_a_run_succeeds(store, tmp_path, monkeypatch, code
         app.paint_sendbar()
         await pilot.pause()
         assert tui.showing(app.screen.query_one("#run-command", Button)) == run_shows, desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("press, status, enabled, desc", [
+    ("#run-go", "running", False, "the dialog's Run: running, Run shown but disabled"),
+    ("#run-cancel", "open", True, "Cancel: nothing run, still open, Run enabled"),
+])
+async def test_sending_a_run_disables_run(store, tmp_path, monkeypatch, press, status, enabled, desc):
+    """#339: Run is disabled from the moment the run is sent, never by opening the dialog."""
+    from claude_wheelhouse import liveness
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
+    monkeypatch.setattr(launch, "open_shell", lambda *a, **k: None)
+    sid = store.create_session(str(tmp_path), name="demo")
+    ref, _ = store.post_command(sid, "ls", "List")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.items_table.move_cursor(row=app.items_table.keys().index(f"{sid}|{ref}"))
+        await pilot.pause()
+        app.paint_sendbar()
+        await pilot.pause()
+        app.screen.query_one("#run-command", Button).press()
+        await pilot.pause()
+        assert isinstance(app.screen, tui.RunCommand), desc
+        app.screen.query_one(press, Button).press()
+        await pilot.pause()
+        app.paint_sendbar()
+        await pilot.pause()
+        run = app.screen.query_one("#run-command", Button)
+        assert store.item(sid, ref)["status"] == status, desc
+        assert tui.showing(run) and run.disabled != enabled, desc
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("end, shown, enabled, desc", [
+    (None, True, False, "running: Run shown, disabled"),
+    (0, False, None, "exit 0: Run gone"),
+    (1, True, True, "a non-zero exit: Run enabled again"),
+    ("lost", True, True, "a run that never reported: failed, Run enabled again"),
+])
+async def test_run_while_running_and_after(store, tmp_path, monkeypatch, end, shown, enabled, desc):
+    """#339: Run stays disabled while the run is under way, and is enabled again only if it fails."""
+    from claude_wheelhouse import liveness
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
+    sid = store.create_session(str(tmp_path), name="demo")
+    ref, _ = store.post_command(sid, "make stop", "Stop it")
+    store.start_run(sid, ref)
+    if end == "lost":
+        store.lose_run(sid, ref, None, "failed 14:05: no tab took the run up within 90 s")
+    elif end is not None:
+        store.outcome(sid, ref, end)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.action_show_finished(True)
+        await pilot.pause()
+        app.items_table.move_cursor(row=app.items_table.keys().index(f"{sid}|{ref}"))
+        await pilot.pause()
+        app.paint_sendbar()
+        await pilot.pause()
+        run = app.screen.query_one("#run-command", Button)
+        assert tui.showing(run) == shown, desc
+        if shown:
+            assert run.disabled != enabled, desc
+            run.press()
+            await pilot.pause()
+            assert isinstance(app.screen, tui.RunCommand) == enabled, f"{desc}: a press opens the dialog only if enabled"
 
 
 @pytest.mark.anyio

@@ -381,6 +381,10 @@ FEATURES: tuple[Feature, ...] = (
             note="A command item waits like an open question, yellow and at the top, until you run it; then it "
                  "shows how the run ended: run, with Run gone, or failed in red, with the exit code (and the "
                  "output's last lines, when it was captured) and Run kept to try again."),
+    Feature("command-running", UNRELEASED, ADVANCED,
+            note="Run on a command item is disabled from the moment you run it until the run ends, in every app "
+                 "attached: it shows as running, and Run comes back only if the run fails, or its tab closes "
+                 "before it ends."),
     Feature("daemon-replaced", UNRELEASED, ADVANCED,
             note="An app whose daemon was replaced under it by an update says so in its title, to quit and "
                  "restart it, rather than reconnecting for ever."),
