@@ -1043,9 +1043,11 @@ class Prs(Vertical):
     def follow_detail(self) -> None:
         """The highlight on Detail's item if it's a PR listed, else hidden (showing). Also as
         the list lands (got): an item Detail showed before its PR was listed is highlighted
-        once it is, whichever comes first (#214)."""
+        once it is, whichever comes first (#214). A doc in Detail hides it even with the table
+        focused: shown by another pane, or by Keep editing after this table's cursor left it (#309)."""
         table = self.query_one(PrTable)
-        if table.has_focus and table.show_cursor:
+        doc = self.ctx.shown_doc() if self.ctx.shown_doc is not None else None
+        if table.has_focus and table.show_cursor and doc is None:
             return
         sid, ref = self.in_detail[1:] if self.in_detail is not None else (None, None)
         url = next((r["url"] for r in self.rows if r["item"] is not None

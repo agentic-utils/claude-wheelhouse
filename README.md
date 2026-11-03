@@ -441,7 +441,8 @@ session.
   rendered, with no answer box, and `Enter`, or a click on the highlighted row, opens it full screen. As with
   the PRs pane, Detail shows what you picked last: picking a decision hides the inbox's
   and the PRs pane's highlights, and picking in the inbox or the PRs pane hides this pane's, so a click on the row it was on
-  shows that row again, never opening it full screen. With no decisions found
+  shows that row again, never opening it full screen. Keep editing on a decision you left with
+  unsaved edits lights its row here again, and only here. With no decisions found
   the pane shrinks to a line saying where it looked, and the other panes in its column share
   the room, each in proportion to its size (the inbox twice the PRs', by default). That
   happens in any column with another pane in it: swapped onto Detail's, alone, it keeps its size. A session

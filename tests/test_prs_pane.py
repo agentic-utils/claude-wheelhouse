@@ -811,6 +811,51 @@ async def test_a_decision_shown_hides_the_prs_highlight(store, sid, github, tmp_
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("leave, desc", [
+    ("prs", "left by the PRs table's cursor onto PR109"),
+    ("inbox", "left by a pick of PR109 in the inbox"),
+    ("adr", "left by a pick of another decision in the Decisions pane"),
+])
+async def test_keep_editing_lights_only_the_decision(store, sid, github, tmp_path, monkeypatch, leave, desc):
+    """#309: Keep editing on a decision with unsaved edits goes back to it (go_back, through
+    show_doc): the Decisions pane's row for it lit, and no other pane's, as a pick of it does."""
+    design = pytest.importorskip("claude_wheelhouse_design", reason="installed without the design module")
+    from test_doc_editor import click, row_with
+    (tmp_path / ".git").mkdir(exist_ok=True)
+    (tmp_path / "docs" / "adr").mkdir(parents=True)
+    (tmp_path / "docs" / "adr" / "0003-ACCEPTED-wal.md").write_text("# WAL\n\nWrite-ahead logging.\n")
+    (tmp_path / "docs" / "adr" / "0004-ACCEPTED-gc.md").write_text("# GC\n\nGarbage collection.\n")
+    monkeypatch.setattr(api, "load", lambda: [api.Loaded("prs", prs.module), api.Loaded("design", design.module)])
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(200, 50)) as pilot:
+        await settled(app, pilot)
+        app.each_pane("tick")   # the Decisions pane asks again once the hub has read its sessions
+        decisions = app.query_one("#decision-list")
+        await until(pilot, lambda: decisions.row_count == 2, "the decisions listed")
+        wal, gc = (next(str(k.value) for k in decisions.rows if str(k.value).endswith(n)) for n in ("wal.md", "gc.md"))
+        await pilot.click("#decision-list", offset=(2, 1 + decisions.get_row_index(wal)))
+        await until(pilot, lambda: "Write-ahead logging." in app._detail_text, f"{desc}: the decision in Detail")
+        await click(pilot, app.detail, row_with(app.detail, "Write-ahead logging."))
+        app.detail_editor.insert("Kept. ")
+        table = app.query_one("#pr-list")
+        if leave == "prs":
+            await on_pr(app, pilot, URL.format(109))
+        elif leave == "inbox":
+            await pick_in_inbox(app, pilot, f"{sid}|PR109")
+        else:
+            await pilot.click("#decision-list", offset=(2, 1 + decisions.get_row_index(gc)))
+        await until(pilot, lambda: isinstance(app.screen, tui.LeaveEdits), f"{desc}: asked")
+        await pilot.press("escape")   # Keep editing
+        await until(pilot, lambda: app.detail_editor.display and app.detail_editor.has_focus, f"{desc}: editing again")
+        await pilot.pause()
+        assert app.shown_doc is not None and app.shown_doc[0] == wal, f"{desc}: the decision back in Detail"
+        assert not table.show_cursor, f"{desc}: the PRs pane's highlight hidden"
+        assert decisions.show_cursor and decisions.coordinate_to_cell_key(decisions.cursor_coordinate).row_key.value \
+            == wal, f"{desc}: the Decisions pane's row for it lit"
+        assert not app.items_table.show_cursor, f"{desc}: the inbox's highlight hidden"
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize("size", [(160, 40), (100, 30)])
 @pytest.mark.parametrize("follow, scope, listed, title, desc", [
     (None, "mine", ["PR108", "PR109", "PR5"], "PRs · mine", "none selected: every session's"),
