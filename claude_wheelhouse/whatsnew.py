@@ -393,6 +393,10 @@ FEATURES: tuple[Feature, ...] = (
                  "amber, and its session is told once, naming it and its last action. A session can change the "
                  "5 minutes (set_watchdog); a subagent can declare a quiet spell of its own (quiet).",
             tip="A subagent that goes quiet for 5 minutes shows quiet, in amber, and its session is told."),
+    Feature("split-chained", UNRELEASED, ADVANCED, when="sdk",
+            note="A hosted session asking to run several commands chained with &&, ||, ; or a new line is asked to run "
+                 "them as separate calls, so each can match its own permission rule; a dimmed row says so. The same "
+                 "command asked again comes to you."),
 
 )
 

@@ -15,6 +15,7 @@ dependencies = [
     "starlette>=1.7",
     "textual>=8.2,<8.3",   # tui.rehome and Dialog.render_lines (the shade, #268) use Textual internals: check them before widening
     "tree-sitter>=0.25",   # the doc editor's markdown highlighting (tui.DocEditor, TextArea's)
+    "tree-sitter-bash>=0.25",
     "tree-sitter-markdown>=0.3",
     "uvicorn>=0.54",
 ]

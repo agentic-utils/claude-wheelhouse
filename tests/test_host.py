@@ -3003,3 +3003,75 @@ def test_mcp_ask_given_back_never_overwrites_a_newer_one(store, sid):
     store.give_back_mcp_asks(sid, [old, {"do": "check", "server": "", "tries": 2}])
     assert store.take_mcp_asks(sid) == [{"do": "callback", "server": "s", "url": "new"}], \
         "the newer paste stands; one out of tries goes"
+
+
+@pytest.mark.parametrize("command, expected, desc", [
+    ("git add -A && git commit -m x", True, "chained with &&"),
+    ("make lint; make test", True, "chained with ;"),
+    ("test -f x || touch x", True, "chained with ||"),
+    ("cd repo\ngit status", True, "chained with a newline"),
+    ("cat <<EOF\nhi\nEOF\nls", True, "a heredoc, then another command on its own line"),
+    ("git log | head -5", False, "a pipe alone"),
+    ("echo 'a && b; c'", False, "&& and ; inside quotes"),
+    ("cat <<EOF\na && b; c\nEOF", False, "&& and ; inside a heredoc"),
+    ("(cd x && make)", False, "a subshell is one command"),
+    ("echo $(date; whoami)", False, "a $(...) is one command"),
+    ("sleep 5 & wait", False, "a background job can't be split apart"),
+    ("ls;", False, "a trailing ; is still one command"),
+    ("# list\nls", False, "a comment then one command"),
+    ("if then fi ((", False, "unparsable"),
+    ("a &&", False, "unfinished: unparsable"),
+    ("a && b &", False, "a chain sent to the background as a whole"),
+])
+def test_chained(command, expected, desc):
+    assert host_mod.chained(command) is expected, desc
+
+
+def deny_or_ask(host, store, sid, name, inp):
+    """can_use_tool's answer when it answers by itself, else None once it has posted an open item."""
+    async def go():
+        task = asyncio.create_task(host.can_use_tool(name, inp, ctx()))
+        for _ in range(50):
+            await asyncio.sleep(0.01)
+            if task.done():
+                return task.result()
+            if any(i["status"] == "open" for i in store.items(sid)):
+                task.cancel()
+                return None
+    return run(go())
+
+
+@pytest.mark.parametrize("name, inp, times, split, desc", [
+    ("Bash", {"command": "make lint && make test"}, 1, True, "chained: asked to split, not put to the person"),
+    ("Bash", {"command": "make lint && make test"}, 2, False, "the same chained command again goes to the person"),
+    ("Bash", {"command": "make lint | tee out"}, 1, False, "a pipe alone goes to the person"),
+    ("Read", {"command": "a && b"}, 1, False, "another tool goes to the person, whatever its input"),
+])
+def test_chained_command_asked_to_split_once(host, store, sid, name, inp, times, split, desc):
+    for _ in range(times - 1):
+        deny_or_ask(host, store, sid, name, inp)
+    result = deny_or_ask(host, store, sid, name, inp)
+    if split:
+        assert result.behavior == "deny" and result.message == host_mod.SPLIT_ASK, desc
+    else:
+        assert result is None, desc
+    notes = [i for i in store.items(sid) if i["status"] == "split"]
+    assert len(notes) == (1 if name == "Bash" and "&&" in inp["command"] else 0), desc
+    assert all(i["title"] == host_mod.SPLIT_TITLE and inp["command"] in i["body"] for i in notes), desc
+
+
+def test_split_note_is_settled_and_dismissable(host, store, sid):
+    deny_or_ask(host, store, sid, "Bash", {"command": "a && b"})
+    item = next(i for i in store.items(sid) if i["status"] == "split")
+    assert store_mod.standing(item) == "settled", "shown dimmed, never waiting on the person"
+    store.dismiss(sid, item["ref"])
+    assert store_mod.standing(store.item(sid, item["ref"])) == "finished", "Delete clears it"
+    waiting = store.post_item(sid, "permission", "Bash: ls")
+    with pytest.raises(KeyError):
+        store.dismiss(sid, waiting)   # an open permission: a call still waits on it
+
+
+@pytest.mark.parametrize("word", ["bypass", "around", "avoid", "circumvent", "reword", "rephrase", "obfuscat",
+                                  "workaround", "trick", "evade", "disguise", "hide"])
+def test_split_ask_only_asks_to_split(word):
+    assert word not in host_mod.SPLIT_ASK.lower(), f"the message must not suggest getting round anything: {word!r}"

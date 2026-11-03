@@ -252,6 +252,40 @@ def tool_summary(name: str, inp: dict) -> str:
     return name
 
 
+SPLIT_ASK = ("This call has not run, and the person has not seen it: it chains several commands in one Bash "
+             "call. Run each command as its own Bash call instead, in the same order, so each is checked "
+             "against the person's permission rules by itself. Any that still needs approval is then put to "
+             "the person. If the commands can't run apart (one sets up shell state the next needs), make "
+             "this same call again and it goes to the person as it is.")
+SPLIT_TITLE = "asked to split a chained command"
+
+
+def chained(command: str) -> bool:
+    """Whether a Bash command is several commands chained at its top level, by &&, ||, ; or a
+    newline (#329): what a session can run as separate calls without changing what each does. A
+    pipeline, a subshell, a $(...), a { } group or a heredoc is one command, whatever is inside it;
+    a top-level & (a background job, even after a chain) or anything that doesn't parse cleanly is
+    not chained. So is a chain whose first command opens a heredoc (tree-sitter-bash reads it as
+    one statement): it goes to the person, as any command not chained does."""
+    import tree_sitter_bash
+    from tree_sitter import Language, Parser
+    root = Parser(Language(tree_sitter_bash.language())).parse(command.encode()).root_node
+    if root.has_error:
+        return False
+    parts = [n for n in root.children if n.type not in ("comment", ";")]
+    if any(n.type == "&" for n in parts):
+        return False
+    return len(parts) > 1 or any(n.type == "list" for n in parts)
+
+
+def split_note(command: str) -> str:
+    """The body of the settled permission item that says a split was asked for."""
+    fence = "`" * max(3, 1 + max((len(m) for m in re.findall(r"`+", command)), default=0))   # longer than any run in it
+    return ("The wheelhouse answered this prompt itself: it asked the session to run these commands as "
+            "separate Bash calls, so each can match its own permission rule. If the session asks again "
+            f"with the same command, it comes to you.\n\n{fence}bash\n{command}\n{fence}")
+
+
 def permission_body(name: str, inp: dict, ctx) -> str:
     """What the person needs to approve a tool call: Claude Code's own description, then
     the call's input in full."""
@@ -356,6 +390,7 @@ class Host:
         self.client = None
         self.waiting: dict[str, asyncio.Future] = {}   # question refs an AskUserQuestion waits on
         self.asking: set[str] = set()   # permission refs a can_use_tool call waits on
+        self.split_asked: set[str] = set()   # chained Bash commands the session was asked to split (#329)
         # the person's message on an item, handed to the call waiting on it: still claimed,
         # confirmed once the call takes it, released (so it goes out as a turn) if withdrawn
         self.handed: dict[str, sqlite3.Row] = {}
@@ -605,6 +640,11 @@ class Host:
         if name == "AskUserQuestion":
             return await self.ask_question(inp)
         from claude_agent_sdk.types import PermissionResultAllow, PermissionResultDeny
+        command = inp.get("command") if name == "Bash" else None
+        if isinstance(command, str) and command not in self.split_asked and chained(command):
+            self.split_asked.add(command)   # once per command: the same one again goes to the person
+            self.store.post_item(self.sid, "permission", SPLIT_TITLE, split_note(command), status="split")
+            return PermissionResultDeny(message=SPLIT_ASK)
         ref = self.store.post_item(self.sid, "permission", tool_summary(name, inp), permission_body(name, inp, ctx))
         self.store.set_activity(self.sid, self.led(f"waiting on {ref}"))
         self.asking.add(ref)

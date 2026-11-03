@@ -961,7 +961,12 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
   a decision. A session in a terminal tab, where you may be at the keyboard, isn't asked to
   park itself, and a park there is never compacted. Permission items are answered with buttons: Allow and Always at once, while Deny opens a
   one-line box for an optional reason (the session reads it as why, so it can try something
-  else); Enter denies, empty or not, and Esc, wherever focus is, goes back to the buttons. The plugin's `SessionStart` hook does it
+  else); Enter denies, empty or not, and Esc, wherever focus is, goes back to the buttons. A Bash
+  command that chains several commands at its top level (`&&`, `||`, `;` or a new line, outside
+  quotes and heredocs; a pipe doesn't count) isn't put to you at first: the wheelhouse asks the
+  session to run them as separate calls, so each can match its own permission rule, and a dimmed
+  permission row, "asked to split a chained command", says so (Delete clears it). The same
+  command asked again comes to you as usual, as does anything that isn't chained. The plugin's `SessionStart` hook does it
   ([`hooks.json`](claude_wheelhouse/plugin/hooks/hooks.json)): it runs
   `"${WHEELHOUSE_PYTHON}" -m claude_wheelhouse open-items` with the wheelhouse's own Python,
   as the monitor is run, and Claude Code adds what it prints to the session's context.
