@@ -860,9 +860,6 @@
 "Gromit: (pulls up the oldest track behind the train and lays it in front)"
 ],
 [
-"Gromit: (lays the line in a wide curve round last week's argument)"
-],
-[
 "Wallace: I've had an idea, Gromit. What if we laid the track first?",
 "Gromit: (lays another piece without looking up)"
 ],
@@ -927,9 +924,6 @@
 ],
 [
 "Wallace: Cheerio, old messages! Lovely knowing you!"
-],
-[
-"Feathers McGraw: (cases the context like the museum. The loot: the summary.)"
 ],
 [
 "Techno-Trousers: (take two strides and reach the end of the conversation)"
@@ -1010,8 +1004,8 @@
 [
 53.741567999596846,
 [
-"Wallace: Will the summary mention my tank top, do you think?",
-"Gromit: (holds up the summary. It's mostly about the tank top.)"
+"Wallace: Funny, Gromit. I don't remember inviting a penguin.",
+"Gromit: (taps the WANTED poster, then the penguin, then the poster)"
 ]
 ],
 [
@@ -1025,84 +1019,84 @@
 [
 0,
 [
-"Feathers McGraw: (counts the tokens as they go by. Pockets one.)"
+"Gromit: (gives the summary a pat. Good summary.)"
 ]
 ],
 [
-28.15893030583406,
+22.647538602976795,
 [
-"Wallace: I've left us a note for after, lad: \"Buy cheese. Watch penguin.\"",
-"Gromit: (underlines \"Watch penguin\" three times)"
+"Wallace: Steady on, lad, you're summarising faster than I can talk!"
 ]
 ],
 [
-52.7535794436918,
+49.73123313334577,
 [
-"Feathers McGraw: (reads the summary. He isn't in it. He nods.)"
+"Wallace: It's the wrong summary, Gromit! And it's gone wrong!"
 ]
 ],
 [
-77.9492694305673,
+76.65953206400873,
 [
-"Wallace: I've built a machine that compacts the context and does the toast.",
-"Gromit: (holds up a slice. It's a summary of toast.)"
+"Wallace: The summary's spelt my name with one L, Gromit.",
+"Gromit: (adds the other L in crayon. It runs a line over.)"
 ]
 ],
 [
-106.05154371529486,
+104.81846236984279,
 [
 "Wallace: Our trip to the moon, Gromit? Summarised in one word: \"cheese\"."
 ]
 ],
 [
-127.41123162151624,
+129.41311150770053,
 [
 "Wallace: It's the bills, Gromit. Every token costs. That's why we compact."
 ]
 ],
 [
-155.2411815091093,
+154.60880149457603,
 [
-"Gromit: (stops to check the summary for typos, then lays three to catch up)"
+"Wallace: I'll just pop the kettle on while you compact, lad.",
+"Gromit: (lays track to the kettle as well)"
 ]
 ],
 [
-178.4601422333234,
+182.7110757793036,
 [
 "Wallace: Everything's under control, lad.",
 "Gromit: (a long, flat look)"
 ]
 ],
 [
-199.95191108034263,
+204.07076368552498,
 [
 "Gromit: (walks out in the rain with his bag. Summary: \"popped out\".)"
 ]
 ],
 [
-220.09247319542152,
+231.90071357311805,
 [
-"Wallace: Can the summary keep the bit where I was clever?",
-"Gromit: (searches. Keeps searching.)"
+"Wallace: Cheerio, old messages! Lovely knowing you!"
 ]
 ],
 [
-243.00866199680857,
+255.11967429733215,
 [
-"Techno-Trousers: (take two strides and reach the end of the conversation)"
+"Wallace: Next stop, After Compaction! All change!"
 ]
 ],
 [
-268.89959233394876,
+276.61144314435137,
 [
-"Wallace: Steady on, lad, you're summarising faster than I can talk!"
+"Wallace: Did you get all that, Gromit?",
+"Gromit: (got about a third of it, and the third that mattered)"
 ]
 ],
 [
-294.891383135588,
+296.7520052594303,
 [
-"Wallace: I've had an idea, Gromit. What if we laid the track first?",
-"Gromit: (lays another piece without looking up)"
+"Wallace: You've missed a bit, lad.",
+"Gromit: (points at the summary, where the bit is, only smaller)"
 ]
 ]
 ]
