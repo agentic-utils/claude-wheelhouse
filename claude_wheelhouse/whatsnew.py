@@ -249,6 +249,10 @@ FEATURES: tuple[Feature, ...] = (
             note="Compaction has a sixth scene: Indiana Jones and the Temple of Doom, with a ceiling of spikes "
                  "grinding down on Indy and Short Round as the HEADROOM readout falls, Willie screaming at the "
                  "bugs as she feels for the lever, and the cast's lines between."),
+    Feature("compactor-wrong-trousers", UNRELEASED, ADVANCED,
+            note="Compaction has a seventh scene: Wallace and Gromit's The Wrong Trousers, with Gromit laying "
+                 "track a piece ahead of the toy train as the TRACK left in his box falls, Wallace cheerfully "
+                 "oblivious, Feathers McGraw on the rear carriage, and the cast's lines between."),
     Feature("keepalive-50", UNRELEASED, ADVANCED,
             note="The keepalive comes every 50 minutes, ahead of Claude Code's idle compaction at about 54."),
     Feature("compact-at-keepalive-end", UNRELEASED, ADVANCED,
