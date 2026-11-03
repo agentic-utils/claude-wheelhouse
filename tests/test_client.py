@@ -548,6 +548,7 @@ def test_a_seen_marks_failed_fetch_is_left_to_the_fetching_thread(store, sid, se
     (False, None, "the same code started again (a restart): reconnected, nothing more said"),
     (True, client_mod.REPLACED, "other code started under the app (an update): said as replaced, restart the app"),
     ("own", None, "first joined on other code, then one on the app's own: nothing to restart for"),
+    ("token", client_mod.REPLACED, "a token refused meanwhile, then other code: the update said all the same"),
 ])
 def test_a_daemon_replaced_under_the_app_is_said(store, sid, served, heard, no_launch, monkeypatch,
                                                   other_code, replaced, desc):
@@ -560,15 +561,17 @@ def test_a_daemon_replaced_under_the_app_is_said(store, sid, served, heard, no_l
         until(lambda: c.daemon_code is not None, desc="the first daemon's code kept")
         if other_code == "own":
             c.daemon_code = "another package's"
+        if other_code == "token":
+            c.replaced = client_mod.REPLACED_TOKEN   # as the stream's 401 sets it
         port = d.port
         d.stop()
         until(lambda: not c.connected, desc="the stream ends")
-        if other_code is True:
+        if other_code in (True, "token"):
             monkeypatch.setattr(fingerprint, "code", lambda: "newer")
         served(store.path, port)
         until(lambda: c.connected, desc="reconnected")
         assert c.replaced == replaced, desc
-        assert (("notice", client_mod.REPLACED) in heard.said) == (other_code is True), desc
+        assert (("notice", client_mod.REPLACED) in heard.said) == (replaced is not None), desc
     finally:
         c.disconnect()
 
