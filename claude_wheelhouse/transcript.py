@@ -598,9 +598,11 @@ class Follower:
         self.recs: list[dict] | None = None
         self.blocks_key, self.blocks = None, None   # the app's rendering of recs, kept with them
         # the bytes recs were read from, [start, end), the file's inode and the bytes before
-        # end (mark_at), and the pages read before the last (older), its said records counted
+        # end (mark_at), its said records counted, and the pages read before the last (older),
+        # nearest first: where what came after each starts, and how many records it put before
         self.start = self.end = self.inode = self.mark = None
-        self.depth = self.said = 0
+        self.said = 0
+        self.pages: list[tuple[int, int]] = []
 
     def find(self) -> Path | None:
         return locate(self.sid, self.projects)
@@ -633,27 +635,52 @@ class Follower:
             recs = self.recs + new
         else:
             recs, self.start, self.end = read_back(path)
-            self.inode, self.depth, self.said = st.st_ino, 0, sum(map(says, recs))
+            self.inode, self.pages, self.said = st.st_ino, [], sum(map(says, recs))
         self.mark = mark_at(path, self.end)
         return recs
 
-    def more(self) -> bool:
-        """Whether there's more before what's read: not at the transcript's start."""
-        return bool(self.recs is not None and self.start)
+    @property
+    def depth(self) -> int:
+        """The pages read before the last."""
+        return len(self.pages)
+
+    def view(self, depth: int) -> list[dict] | None:
+        """recs as shown depth pages before the last, at most as many as are read (#347)."""
+        if self.recs is None:
+            return None
+        return self.recs[sum(n for _, n in self.pages[min(depth, self.depth):]):]
+
+    def more(self, depth: int | None = None) -> bool:
+        """Whether there's more before what's shown depth pages back (all that's read, None):
+        not at the transcript's start."""
+        return self.recs is not None and (depth is not None and depth < self.depth or bool(self.start))
 
     def older(self) -> bool:
-        """A page from before what's read, put before it (read_back, #347); False with none."""
+        """A page from before what's read, put before it (read_back, #347): read on till it shows
+        something (entries), or the transcript's start. False with none."""
         if not self.more():
             return False
-        recs, self.start, _ = read_back(self.path, self.start)
-        self.recs, self.depth, self.said = recs + self.recs, self.depth + 1, self.said + sum(map(says, recs))
+        start, recs = self.start, []
+        while self.start and not entries(recs, limit=None):
+            page, self.start, _ = read_back(self.path, self.start)
+            recs = page + recs
+        self.pages.append((start, len(recs)))
+        self.recs, self.said = recs + self.recs, self.said + sum(map(says, recs))
         return True
+
+    def drop(self) -> None:
+        """The pages read before the last let go: nobody shows them (#347). Grown past two
+        pages, its last is read afresh again (load)."""
+        if self.pages:
+            self.recs, self.start = self.view(0), self.pages[0][0]
+            self.pages, self.said = [], sum(map(says, self.recs))
 
     def forget(self) -> None:
         self.path = self.seen = self.recs = None
         self.blocks_key = self.blocks = None
         self.start = self.end = self.inode = self.mark = None
-        self.depth = self.said = 0
+        self.said = 0
+        self.pages = []
 
 
 class AgentFollower(Follower):

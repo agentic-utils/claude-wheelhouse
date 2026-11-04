@@ -67,6 +67,9 @@ MODULE_WAIT = 10.0   # seconds a module's route is waited on before 504 (it carr
 MODULE_GETS = 4      # a module's queries under way at once: one more is refused 503 (Lane)
 BUSY = "module {mid} is busy: {why}. Try again shortly"
 READ_WAIT = 1.0      # seconds a conversation waits on a read of it under way before 503
+# the most pages before its last a conversation is read back to (#347): at up to SCAN bytes a
+# page, a cap on what one request can make the daemon read and hold, not the whole of a huge transcript
+MAX_OLDER = 100
 LOCK = "daemon.lock"
 LOCK_WAIT = 0.5      # seconds it waits on the lock: a client's glance at it is shorter
 # what a change in the database may have moved: every session's row, the inbox, the threads,
@@ -808,7 +811,7 @@ class Daemon:
         pages before its last the client has scrolled back to (#347)."""
         sid = request.path_params["sid"]
         try:
-            older = max(0, int(request.query_params.get("older", 0)))
+            older = min(MAX_OLDER, max(0, int(request.query_params.get("older", 0))))
         except ValueError:
             raise Refused(400, "older must be a number of pages") from None
         lock = self.reading.setdefault(sid, threading.Lock())

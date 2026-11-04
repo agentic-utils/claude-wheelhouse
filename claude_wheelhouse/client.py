@@ -683,6 +683,15 @@ class RemoteClient:
             else:
                 self.forget(key)
 
+    def at_end(self, sid: str) -> None:
+        """A session's conversation scrolled back to its end (Hub.at_end, #347): fetched
+        again, asking for its last page alone, so the daemon may let the pages before it go."""
+        key = ("conversation", sid)
+        with self.lock:
+            if self.older_pages.pop(sid, None) and self.threads:
+                self.dirty.add(key)
+                self.lock.notify_all()
+
     def has_conversation(self, sid: str) -> bool:
         """Whether a session's conversation is here already, so conversation() answers without
         a request to the daemon: the app asks for one that isn't on a thread (#327)."""

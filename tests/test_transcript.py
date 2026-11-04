@@ -470,6 +470,37 @@ def test_a_follower_grown_past_two_pages_reads_its_last_afresh(tmp_path, monkeyp
         assert said(follower.read())[-1] == f"p{i}" and len(follower.recs) <= 4, "never more than two pages held"
 
 
+WH_CALL = assistant({"type": "tool_use", "id": "w", "name": "mcp__wheelhouse__post_item", "input": {}})
+
+
+@pytest.mark.parametrize("recs, pages, depth, expected, more, desc", [
+    ([user(f"p{i}") for i in range(7)], 2, 1, ["p3", "p4", "p5", "p6"], True, "a page back, of two read"),
+    ([user(f"p{i}") for i in range(7)], 2, 0, ["p5", "p6"], True, "its last page, with two read before it"),
+    ([user(f"p{i}") for i in range(7)], 2, 5, ["p1", "p2", "p3", "p4", "p5", "p6"], True, "deeper than read: all read"),
+    ([user("p0"), WH_CALL, WH_CALL, WH_CALL, user("p4")], 1, 1, ["p0", "mcp", "mcp", "mcp", "p4"], False,
+     "a page showing nothing (the wheelhouse's own calls): read on till one does"),
+])
+def test_a_followers_pages_each_shown_at_its_own_depth(tmp_path, monkeypatch, recs, pages, depth, expected, more, desc):
+    monkeypatch.setattr(transcript, "PAGE", 2)
+    _, follower = session_file(tmp_path, *recs)
+    follower.read()
+    for _ in range(pages):
+        follower.older()
+    got = [r["message"]["content"] if r["type"] == "user" else "mcp" for r in follower.view(depth)]
+    assert (got, follower.more(depth)) == (expected, more), desc
+
+
+def test_a_followers_pages_let_go_leave_its_last(tmp_path, monkeypatch):
+    monkeypatch.setattr(transcript, "PAGE", 2)
+    path, follower = session_file(tmp_path, *[user(f"p{i}") for i in range(7)])
+    follower.read()
+    follower.older()
+    follower.older()
+    follower.drop()
+    assert (said(follower.recs), follower.depth) == (["p5", "p6"], 0)
+    assert follower.older() and said(follower.recs) == ["p3", "p4", "p5", "p6"], "read again from where its last starts"
+
+
 def stage(text, at):
     return Entry("stage", text, at)
 

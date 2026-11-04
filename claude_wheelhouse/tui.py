@@ -2161,9 +2161,11 @@ class ConversationScroll(VerticalScroll, can_focus=False):
 
     def watch_scroll_y(self, old_value: float, new_value: float) -> None:
         super().watch_scroll_y(old_value, new_value)
-        self.at_end = new_value >= self.max_scroll_y - 1
+        was, self.at_end = self.at_end, new_value >= self.max_scroll_y - 1
         if new_value <= 0 < old_value:
             self.at_top()
+        elif self.at_end and not was and self.id == "detail-scroll" and hasattr(self.app, "reached_end"):
+            self.app.reached_end()
 
     def on_mouse_scroll_up(self) -> None:
         if self.scroll_y <= 0:   # at its top already, scrolled again: asked again
@@ -5260,7 +5262,7 @@ class WheelhouseApp(App):
         self.conversations_tried: dict[str, float] = {}   # ... and when a fetch that brought nothing landed
         self.conversations_asked: set[str] = set()   # conversations being fetched on a thread (conversation)
         self.detail_gen = 0   # Detail's shows, numbered: one overtaken is dropped (show_detail)
-        self.older_asked: tuple | None = None   # (session, its first entry) when a page more was last asked for (reached_top)
+        self.older_asked: tuple | None = None   # (session, Detail's text) when a page more was last asked for (reached_top)
         self.detail_waiting = False   # a show from the top under way (show_detail)
         self.detail_timer = None   # a show waiting for the selection to rest (show_detail)
         self.dwell_timer = None
@@ -7297,25 +7299,29 @@ class WheelhouseApp(App):
     def reached_top(self) -> None:
         """The conversation shown scrolled to its top: once it has rested there for OLDER_SETTLE
         (not just shown from the top, then sent to its end), a page more of it is asked for, from
-        before what it shows, if it has more (transcript.OLDER), and not again until that
-        page has landed. Read where the conversation is read (conversation, #327); Detail keeps
+        before what it shows, if it has more (transcript.OLDER), and not again until what it
+        shows has changed: the page landed (Follower.older reads on till it shows something). Read where the conversation is read (conversation, #327); Detail keeps
         the reader's place as it lands (Transcript.update)."""
         sid = self.viewing
 
         def settled() -> None:
-            blocks = getattr(self, "_detail_linked", None) or []
+            blocks, shown = getattr(self, "_detail_linked", None) or [], (sid, getattr(self, "_detail_text", None))
             if sid != self.viewing or not self.screen_stack or self.detail_scroll.scroll_y > 0 \
-                    or ("note", transcript.OLDER) not in blocks:
+                    or ("note", transcript.OLDER) not in blocks or self.older_asked == shown:   # its page not here yet
                 return
-            first = next((b for b in blocks if b[0] not in ("head", "warn", "note")), None)
-            if self.older_asked == (sid, first):   # its page not here yet
-                return
-            self.older_asked = (sid, first)
+            self.older_asked = shown
             self.client.older(sid)
             if not self.client.remote:   # read at the next paint, as in process it always is
                 self.paint_detail()
         if sid:
             self.set_timer(OLDER_SETTLE, settled)
+
+    def reached_end(self) -> None:
+        """The conversation shown scrolled back to its end: its last page alone from now, the
+        pages before it let go (#347)."""
+        if self.viewing:
+            self.older_asked = None
+            self.client.at_end(self.viewing)
 
     def conversation_landed(self, sid: str) -> None:
         """A conversation fetched on a thread (conversation): shown, if it's still the one."""
