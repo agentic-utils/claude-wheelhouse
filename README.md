@@ -346,7 +346,11 @@ session.
   (in white), in full, each tool call as one line. Tool output and subagents are left
   out, and so is what the inbox already shows: answers on an item (its thread has them),
   the wheelhouse's own notices, the default opening prompt (its ticket line stays) and
-  Claude's wheelhouse tool calls. The box underneath sends the session a general message,
+  Claude's wheelhouse tool calls. It opens on the latest turns; scrolled to its top, it reads
+  further back in the transcript and adds the earlier turns above, through as many compactions as
+  you like, each marked "conversation compacted". What Claude Code reloads after a compaction
+  (its summary, skill and tool listings, CLAUDE.md) is left out, and a compaction's stage lines
+  show with the turns around them, not piled at the top. The box underneath sends the session a general message,
   queued and sent like any answer. The pane names the session's tab: permission prompts,
   questions asked with Claude's question dialog, and slash commands still need that tab,
   and the pane flags when the session is waiting for you there (a question or a plan;

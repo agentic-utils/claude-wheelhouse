@@ -54,7 +54,7 @@ from starlette.requests import ClientDisconnect, Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from . import api, auth, away, docroots, features, fingerprint, liveness, models, served, steps, transcript_usage, tutorial
+from . import api, auth, away, docroots, features, fingerprint, liveness, models, served, steps, transcript, transcript_usage, tutorial
 from .hub import Done, Event, Hub, compaction_entries, host_context
 from .host import MCP_DOS
 from .store import COMPACT_QUESTION, HOST_QUESTION, NOTES_SEEN, NOTES_WAIT, THEN, TOUR_AT, SessionGone, Store, compacting_now, inbox_rank, mode, runner, standing
@@ -804,13 +804,18 @@ class Daemon:
         this query's, each session's read by one request at a time. One that finds a read
         under way waits for it up to READ_WAIT, then reads for itself, so a client refetching
         on an event never gets the blocks from before it; past that, 503, so a hung
-        transcript holds each of starlette's threads for READ_WAIT at most."""
+        transcript holds each of starlette's threads for READ_WAIT at most. older: how many
+        pages before its last the client has scrolled back to (#347)."""
         sid = request.path_params["sid"]
+        try:
+            older = min(transcript.MAX_OLDER, max(0, int(request.query_params.get("older", 0))))
+        except ValueError:
+            raise Refused(400, "older must be a number of pages") from None
         lock = self.reading.setdefault(sid, threading.Lock())
         if not lock.acquire(timeout=READ_WAIT):
             raise Refused(503, "this conversation is being read: try again shortly", {"Retry-After": "1"})
         try:
-            blocks = self.hub.conversation(sid)
+            blocks = self.hub.conversation(sid, older)
         finally:
             lock.release()
         if blocks is None:

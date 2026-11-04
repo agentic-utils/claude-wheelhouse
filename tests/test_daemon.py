@@ -642,10 +642,10 @@ async def test_a_slow_transcript_never_holds_up_the_hub(daemon, sid, monkeypatch
     read = daemon_mod.Hub.conversation
     reading_now, answered, released = threading.Event(), threading.Event(), []
 
-    def slow(hub, sid):
+    def slow(hub, sid, *older):
         reading_now.set()
         released.append(answered.wait(10))   # False: it gave up, the command never answered meanwhile
-        return read(hub, sid)
+        return read(hub, sid, *older)
     monkeypatch.setattr(daemon_mod.Hub, "conversation", slow)
     async with client(daemon) as c:
         reading = asyncio.create_task(c.get(f"/sessions/{sid}/conversation"))
@@ -677,9 +677,9 @@ async def test_a_conversation_waits_on_a_read_under_way_for_a_while(daemon, stor
     read = daemon_mod.Hub.conversation
     assert (await call(daemon, "GET", f"/sessions/{sid}/conversation")).status_code == 200
 
-    def slow(hub, sid):
+    def slow(hub, sid, *older):
         time.sleep(read_for)   # a transcript on a mount gone slow
-        return read(hub, sid)
+        return read(hub, sid, *older)
     monkeypatch.setattr(daemon_mod.Hub, "conversation", slow)
     monkeypatch.setattr(daemon_mod, "READ_WAIT", 0.4)
     async with client(daemon) as c:
@@ -718,6 +718,39 @@ async def test_two_refetches_overlapping_a_transcript_change_both_get_it(daemon,
         second = await c.get(f"/sessions/{sid}/conversation")
         for r in (await first, second):
             assert r.status_code == 200 and "the final reply" in r.text
+
+
+TURNS = [f"turn {i}" for i in range(7)]
+
+
+@pytest.mark.parametrize("asks, hold, depth, desc", [
+    ([(None, 5), (1, 3), (9, 0)], 60, 3, "its last page, a page more, back to its start: no note of more"),
+    ([(2, 1), (0, 5), (1, 3)], 60, 2, "two apps at their own depths, turn about: each its own"),
+    ([(3, 0), (1, 3)], 60, 3, "an app started again behind a daemon read back deep: a page more is its own"),
+    ([(9, 1)], 60, 2, "older past MAX_OLDER: read back that far only, the transcript's file named for the rest"),
+    ([(2, 1), (0, 5)], 0, 0, "back at its end, nobody asking for more: the pages before its last let go"),
+])
+async def test_a_conversation_scrolled_back_reads_pages_before_its_last(daemon, sid, tmp_path, monkeypatch,
+                                                                       asks, hold, depth, desc):
+    """#347: older, the pages before its last an app has scrolled back to, each request its
+    own; (older, the first turn shown) for each ask."""
+    path = tmp_path / "t.jsonl"
+    path.write_text("".join(json.dumps({"type": "user", "timestamp": "2026-10-07T21:30:00.000Z",
+                                        "message": {"role": "user", "content": t}}) + "\n" for t in TURNS))
+    monkeypatch.setattr(transcript.Follower, "find", lambda self: path)
+    monkeypatch.setattr(transcript, "PAGE", 2)
+    monkeypatch.setattr(transcript, "MAX_OLDER", 2 if "MAX_OLDER" in desc else 100)
+    monkeypatch.setattr(hub_mod, "DEEP_HOLD", hold)
+    for older, first in asks:
+        blocks = (await call(daemon, "GET", f"/sessions/{sid}/conversation" + (f"?older={older}" if older else ""))).json()
+        shown = [t for t in TURNS if any(b["text"].endswith(t) for b in blocks)]
+        assert shown == TURNS[first:], f"{desc}: {older}"
+        notes = [b["text"] for b in blocks if b["who"] == "note"]
+        capped = "MAX_OLDER" in desc
+        assert (transcript.OLDER in notes, transcript.BEYOND.format(path=path) in notes) == (first > 0 and not capped, capped), \
+            f"{desc}: {older}, the note of more before it"
+    assert daemon.hub.followers[sid].depth == depth, f"{desc}: the pages held"
+    assert (await call(daemon, "GET", f"/sessions/{sid}/conversation?older=x")).status_code == 400
 
 
 async def test_a_client_gone_before_its_body_is_let_go_quietly(daemon, store, sid, capsys):

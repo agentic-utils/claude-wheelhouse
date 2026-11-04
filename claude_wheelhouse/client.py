@@ -266,6 +266,7 @@ class RemoteClient:
         # sid, ref), ("conversation", sid), ("agent", sid, ref), ("doc", sid, ref), ("file", path)
         self.cache: dict[tuple, object] = {}
         self.shown_seq: dict[tuple, int] = {}   # each key's fetch as shown: a later one replaces it
+        self.older_pages: dict[str, int] = {}   # each conversation's pages asked for before its last (older, #347)
         self.waiting: dict[tuple, tuple[int, object]] = {}   # fetched in the background, for the next refresh
         self.dirty: set[tuple] = set()   # what the events say moved, to fetch
         self.asked: set[tuple] = set()   # what the TUI asked for since the last refresh
@@ -500,7 +501,8 @@ class RemoteClient:
             if kind == "thread":
                 return self.get(f"/items/{key[1]}/{key[2]}/thread")
             if kind == "conversation":
-                return self.get(f"/sessions/{key[1]}/conversation")
+                older = self.older_pages.get(key[1])
+                return self.get(f"/sessions/{key[1]}/conversation", {"older": older} if older else None)
             if kind == "doc":
                 have = (self.cache.get(key) or {}).get("stamp")
                 return self.get(f"/items/{key[1]}/{key[2]}/document", {"have": have} if have else None)
@@ -667,6 +669,28 @@ class RemoteClient:
 
     def conversation(self, sid: str) -> list[tuple[str, str]] | None:
         return blocks(self.shown(("conversation", sid)))
+
+    def older(self, sid: str) -> None:
+        """A page more of a session's conversation, from before what it shows (Hub.older,
+        #347): fetched again in the background, asking for it, and shown once it lands; with
+        no threads, at the next read."""
+        key = ("conversation", sid)
+        with self.lock:
+            self.older_pages[sid] = self.older_pages.get(sid, 0) + 1
+            if self.threads:
+                self.dirty.add(key)
+                self.lock.notify_all()
+            else:
+                self.forget(key)
+
+    def at_end(self, sid: str) -> None:
+        """A session's conversation scrolled back to its end (Hub.at_end, #347): fetched
+        again, asking for its last page alone, so the daemon may let the pages before it go."""
+        key = ("conversation", sid)
+        with self.lock:
+            if self.older_pages.pop(sid, None) and self.threads:
+                self.dirty.add(key)
+                self.lock.notify_all()
 
     def has_conversation(self, sid: str) -> bool:
         """Whether a session's conversation is here already, so conversation() answers without

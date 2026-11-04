@@ -4,8 +4,11 @@ session view.
 Claude Code appends one JSON record per line to ~/.claude/projects/<project>/<id>.jsonl as
 the conversation happens. The view shows the person's prompts, their general messages sent
 from the wheelhouse and Claude's text in full, each tool call as one line, and nothing else:
-no tool results, thinking, subagent (sidechain) records or bookkeeping. Only the tail of the
-file is read, so a transcript of many megabytes costs the same as a short one.
+no tool results, thinking, subagent (sidechain) records or bookkeeping. A session's is read
+from its end, a page of what the view shows at a time (read_back), past the records it never
+shows (pane_record): a compaction's reload after it, and the like. What it appends later is
+read alone (read_on), so a transcript of many megabytes costs the same as a short one. Scrolled
+to its top, the view reads a page further back (Follower.older), through any compactions (#347).
 
 What the inbox already shows elsewhere is left out too: answers on an item (its thread
 holds them), the wheelhouse's own notices and the default opening prompt (a ticket line
@@ -62,6 +65,21 @@ SKILL_BASE = re.compile(r"^Base directory for this skill: (.+)$", re.M)
 QUEUED = "queued_command"
 # stands in the tail for a newest record too large to read within it (tail_records)
 OVERSIZE = "wheelhouse-oversize"
+# a session's conversation, read a page at a time from its end (read_back, #347): a page is
+# the records of PAGE things said (says), read CHUNK bytes at a time, and never more than SCAN
+# bytes however little of them shows. A record longer than LINE_MAX is left out
+PAGE = MAX_ENTRIES
+CHUNK = 1 << 16
+SCAN = 8 << 20
+LINE_MAX = 1 << 20
+MARK = 256
+# heads a conversation with more before it, read once it's scrolled to its top (#347)
+OLDER = "_Earlier turns load as you scroll up._"
+# the most pages before its last a conversation is read back to (#347): at up to SCAN bytes a
+# page, a cap on what one request can make the daemon read and hold, not the whole of a huge
+# transcript. There, BEYOND heads it instead of OLDER, naming the transcript's file
+MAX_OLDER = 100
+BEYOND = "_Older turns are in the transcript:_ `{path}`"
 
 
 @dataclass
@@ -117,6 +135,106 @@ def tail_records(path: Path, limit: int | None = None, sidechain: bool = False) 
     if oversize:   # said so
         recs.append({"type": OVERSIZE})
     return recs
+
+
+def pane_record(rec: dict) -> bool:
+    """Whether a session's conversation reads a record (entries, held, waiting_in_tab): never
+    its subagents' (sidechain), nor a compaction's reload after it (#347), the summary
+    (isCompactSummary) and the attachments that restore its context (skills, tools,
+    CLAUDE.md), nor Claude Code's bookkeeping (API requests, titles, modes)."""
+    kind = rec.get("type")
+    if rec.get("isSidechain"):
+        return False
+    if kind == "user":
+        return not rec.get("isCompactSummary")
+    if kind == "attachment":
+        return (rec.get("attachment") or {}).get("type") == QUEUED
+    return kind in ("assistant", "queue-operation", OVERSIZE) or \
+        (kind == "system" and rec.get("subtype") == "compact_boundary")
+
+
+def says(rec: dict) -> bool:
+    """Whether a record the pane reads says something it shows: what a page counts (read_back).
+    Near enough: a wheelhouse tool call or a notice counts, though left out."""
+    kind, msg = rec.get("type"), rec.get("message") or {}
+    if kind == "assistant":
+        return any(isinstance(p, dict) and (p.get("type") == "tool_use" or p.get("type") == "text" and p.get("text", "").strip())
+                   for p in msg.get("content") or [])
+    if kind == "user":
+        return not rec.get("isMeta") and bool(_text(msg.get("content")).strip())
+    return kind in ("system", "attachment", OVERSIZE)
+
+
+def read_back(path: Path, end: int | None = None, want: int | None = None) -> tuple[list[dict], int, int]:
+    """A page of a session's conversation (#347): the records it reads (pane_record) from
+    before byte end (its end, None), back until want of them say something (says), the
+    transcript's start, or SCAN bytes. And where that is, and where the whole records end: a
+    record still being written isn't, nor read till it is. A record longer than LINE_MAX is
+    left out, never held whole; the newest stands as OVERSIZE (tail_records)."""
+    recs, said, buf, whole, want = [], 0, b"", end, want or PAGE
+    newest, big = end is None, False   # big: the newest record, read from the end, is too long
+    with open(path, "rb") as f:
+        top = pos = f.seek(0, 2) if end is None else end
+        while pos > 0 and said < want and top - pos < SCAN:
+            step = min(CHUNK, pos)
+            pos -= step
+            f.seek(pos)
+            buf = f.read(step) + buf
+            cut = len(buf)   # buf[cut:] is read: a line ends with its newline, or the file does
+            while cut and said < want:
+                j = buf.rfind(b"\n", 0, cut if whole is None else cut - 1)
+                if j < 0 and pos:   # its start is further back
+                    break
+                line, cut = buf[j + 1:cut], j + 1
+                if whole is None:   # after the last newline: a record still being written, if any
+                    whole, big = pos + cut, big or len(line) > LINE_MAX
+                    continue
+                big, newest = big or newest and len(line) > LINE_MAX, False
+                if len(line) > LINE_MAX:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except ValueError:   # a record too long to hold, its start
+                    continue
+                if isinstance(rec, dict) and pane_record(rec):
+                    recs.append(rec)
+                    said += says(rec)
+            buf = buf[:cut]
+            if said < want and len(buf) > LINE_MAX:   # inside a record too long to hold: let go, its start left to fail as JSON
+                big, buf = big or newest, b""
+    if whole is None:   # no newline read: all of it one record still being written
+        whole = top
+    if big:
+        recs.insert(0, {"type": OVERSIZE})
+    return recs[::-1], pos + len(buf), whole
+
+
+def read_on(path: Path, start: int) -> tuple[list[dict], int]:
+    """The records a session's conversation reads (pane_record) appended from byte start, and
+    where the whole ones end (#347). A record longer than LINE_MAX is left out."""
+    recs = []
+    with open(path, "rb") as f:
+        f.seek(start)
+        for line in f:
+            if not line.endswith(b"\n"):   # still being written: read once it's whole
+                break
+            start += len(line)
+            if len(line) > LINE_MAX:
+                continue
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(rec, dict) and pane_record(rec):
+                recs.append(rec)
+    return recs, start
+
+
+def mark_at(path: Path, end: int) -> bytes:
+    """The MARK bytes before end: unchanged, a file's only been appended to since (Follower.load)."""
+    with open(path, "rb") as f:
+        f.seek(max(0, end - MARK))
+        return f.read(min(end, MARK))
 
 
 def prompt_record(path: Path) -> dict | None:
@@ -215,10 +333,11 @@ class Notes:
         self.entry.text = f"{verb} its notes for after compaction · {self.lines} line{'' if self.lines == 1 else 's'}"
 
 
-def entries(recs: list[dict], full=None, agent: bool = False) -> list[Entry]:
+def entries(recs: list[dict], full=None, agent: bool = False, limit: int | None = MAX_ENTRIES) -> list[Entry]:
     """full: the person's message by id, for one a notification cut short (general_text).
     agent: a subagent's transcript, whose fork prompt keeps its directive (FORK). A
-    compaction's notes turn shows as one dim line (Notes)."""
+    compaction's notes turn shows as one dim line (Notes). The last limit of them; all for None
+    (a session's, whose page read_back sizes, #347)."""
     out, notes = [], None
     for rec in recs:
         kind, at = rec.get("type"), rec.get("timestamp", "")
@@ -264,7 +383,7 @@ def entries(recs: list[dict], full=None, agent: bool = False) -> list[Entry]:
                     out.append(Entry("claude", message.strip(), at))
                 elif part.get("type") == "tool_use" and not WHEELHOUSE_TOOL.match(part.get("name", "")):
                     out.append(Entry("tool", tool_line(part.get("name", "?"), part.get("input")), at))
-    return out[-MAX_ENTRIES:]
+    return out if limit is None else out[-limit:]
 
 
 def held(recs: list[dict], full=None) -> list[str]:
@@ -363,7 +482,7 @@ def _hhmm(at: str) -> str:
 
 
 def blocks(name: str, tab: str | None, recs: list[dict] | None, queued=(), full=None,
-           sending=(), stages=()) -> list[tuple[str, str]]:
+           sending=(), stages=(), older: bool = False, beyond: str | None = None) -> list[tuple[str, str]]:
     """The conversation as (who, markdown) blocks, then the person's general messages on
     their way: sent, but not yet taken up by the session, Claude Code holding them (held)
     or the wheelhouse not yet passing them on (sending); then those still queued for it.
@@ -371,7 +490,12 @@ def blocks(name: str, tab: str | None, recs: list[dict] | None, queued=(), full=
     the person's words apart from Claude's. tab None: the session runs in the wheelhouse,
     where its permission prompts and questions are items, so there's no tab to wait in.
     full: the person's message by id (entries). stages: a compaction's stage lines and its
-    overlay's dock entry (#244, #324), as Entry("stage" or "dock", text, at), placed by time among the rest."""
+    overlay's dock entry (#244, #324), as Entry("stage" or "dock", text, at), placed by time among the rest.
+    older: recs are a session's last pages (read_back), with more before them, read once the
+    view is scrolled to its top (OLDER, #347). Then a stage from before recs' first record is
+    left out with the turns around it: a compaction's lines show with the span they're in.
+    beyond: recs are as far back as it's read (MAX_OLDER), with more before them in this file
+    (BEYOND), never read here."""
     where = (f"_Tab: **{tab}**. Permission prompts and slash commands need that tab._" if tab else
              "_Runs in the wheelhouse: its permission prompts and questions come to the inbox. "
              "Shell opens it in a terminal tab._")
@@ -380,7 +504,12 @@ def blocks(name: str, tab: str | None, recs: list[dict] | None, queued=(), full=
         out.append(("note", "_No transcript found for this session yet._"))
     elif tab and (waiting := waiting_in_tab(recs)):
         out.append(("warn", f"> ⚠ **Waiting for you in its tab:** {waiting}."))
-    said = entries(recs or [], full)
+    if older or beyond:
+        out.append(("note", BEYOND.format(path=beyond) if beyond else OLDER))
+        first = next((r["timestamp"] for r in recs or [] if r.get("timestamp")), None)
+        if first:   # a stage with no time stays put
+            stages = [e for e in stages if e.who == "dock" or not e.at or e.at[:26] >= first[:26]]
+    said = entries(recs or [], full, limit=None)
     if stages:   # by time, a stage after anything said at the same moment; one with no time stays put
         merged, todo = [], sorted(stages, key=lambda e: e.at)
         for e in said:
@@ -463,7 +592,10 @@ def markdown(name: str, tab: str, recs: list[dict] | None, queued=()) -> str:
 
 
 class Follower:
-    """One session's transcript, re-read only when the file has changed."""
+    """One session's transcript, re-read only when the file has changed: its last page at
+    first (read_back), then only what's appended (read_on), and older pages as the view asks
+    for them (older, #347). Grown past two pages with none asked for, its last page is read
+    afresh, so a session followed for days holds what one just opened does."""
     sidechain = False   # a session's: its subagents' records are left out (tail_records)
 
     def __init__(self, sid: str, projects: Path | None = None):
@@ -472,6 +604,12 @@ class Follower:
         self.seen = None
         self.recs: list[dict] | None = None
         self.blocks_key, self.blocks = None, None   # the app's rendering of recs, kept with them
+        # the bytes recs were read from, [start, end), the file's inode and the bytes before
+        # end (mark_at), its said records counted, and the pages read before the last (older),
+        # nearest first: where what came after each starts, and how many records it put before
+        self.start = self.end = self.inode = self.mark = None
+        self.said = 0
+        self.pages: list[tuple[int, int]] = []
 
     def find(self) -> Path | None:
         return locate(self.sid, self.projects)
@@ -492,11 +630,66 @@ class Follower:
         return self.recs
 
     def load(self, path: Path) -> list[dict]:
-        return tail_records(path, sidechain=self.sidechain)
+        """What's appended since the last read, after what was read, while the file has only
+        grown (the same inode, no shorter, the MARK bytes before where the last read ended
+        the same) by less than SCAN; else its last page afresh."""
+        st = path.stat()
+        if self.recs is not None and self.end is not None and st.st_ino == self.inode \
+                and self.end <= st.st_size < self.end + SCAN and (self.depth or self.said < 2 * PAGE) \
+                and mark_at(path, self.end) == self.mark:
+            new, self.end = read_on(path, self.end)
+            self.said += sum(map(says, new))
+            recs = self.recs + new
+        else:
+            recs, self.start, self.end = read_back(path)
+            self.inode, self.pages, self.said = st.st_ino, [], sum(map(says, recs))
+        self.mark = mark_at(path, self.end)
+        return recs
+
+    @property
+    def depth(self) -> int:
+        """The pages read before the last."""
+        return len(self.pages)
+
+    def view(self, depth: int) -> list[dict] | None:
+        """recs as shown depth pages before the last, at most as many as are read (#347)."""
+        if self.recs is None:
+            return None
+        return self.recs[sum(n for _, n in self.pages[min(depth, self.depth):]):]
+
+    def more(self, depth: int | None = None) -> bool:
+        """Whether there's more before what's shown depth pages back (all that's read, None):
+        not at the transcript's start."""
+        return self.recs is not None and (depth is not None and depth < self.depth or bool(self.start))
+
+    def older(self) -> bool:
+        """A page from before what's read, put before it (read_back, #347): read on till it shows
+        something (entries), or the transcript's start. False with none."""
+        if not self.more():
+            return False
+        start, recs = self.start, []
+        while self.start:   # each page tested alone: what's gathered isn't parsed again
+            page, self.start, _ = read_back(self.path, self.start)
+            recs = page + recs
+            if entries(page, limit=None):
+                break
+        self.pages.append((start, len(recs)))
+        self.recs, self.said = recs + self.recs, self.said + sum(map(says, recs))
+        return True
+
+    def drop(self) -> None:
+        """The pages read before the last let go: nobody shows them (#347). Grown past two
+        pages, its last is read afresh again (load)."""
+        if self.pages:
+            self.recs, self.start = self.view(0), self.pages[0][0]
+            self.pages, self.said = [], sum(map(says, self.recs))
 
     def forget(self) -> None:
         self.path = self.seen = self.recs = None
         self.blocks_key = self.blocks = None
+        self.start = self.end = self.inode = self.mark = None
+        self.said = 0
+        self.pages = []
 
 
 class AgentFollower(Follower):

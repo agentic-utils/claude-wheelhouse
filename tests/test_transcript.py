@@ -383,3 +383,150 @@ def test_the_notes_ask_is_the_hosts():
     """KEEP_ASKED finds every ask the host sends, whatever its id."""
     from claude_wheelhouse.host import KEEP_ASK
     assert all(transcript.KEEP_ASKED.search(KEEP_ASK.format(nonce=n)) for n in ("c0ffee12", "0a1b2c3d"))
+
+
+# a session's conversation read a page at a time from its end (#347)
+RELOAD = [user("summary of what came before", isCompactSummary=True),
+          {"type": "attachment", "timestamp": AT, "attachment": {"type": "skill_listing", "content": "s" * 500}},
+          {"type": "api-request-blob", "timestamp": AT, "blob": "b" * 500}]
+BOUNDARY = {"type": "system", "subtype": "compact_boundary", "timestamp": AT}
+
+
+def said(recs) -> list[str]:
+    return [r["type"] if r["type"] in (transcript.OVERSIZE, "system") else r["message"]["content"] for r in recs]
+
+
+@pytest.mark.parametrize("recs, tail, want, expected, desc", [
+    ([user(f"p{i}") for i in range(5)], "", 2, ["p3", "p4"], "the last want said"),
+    ([user("p0"), BOUNDARY, *RELOAD, user("p1")], "", 3, ["p0", "system", "p1"],
+     "past a compaction's reload, which never shows: its divider kept"),
+    ([user("p0"), user("p1")], json.dumps(user("p2"))[:20], 5, ["p0", "p1"], "one still being written: not yet"),
+    ([user("p0"), user("x" * 300)], "", 5, ["p0", transcript.OVERSIZE], "a newest record too long: a stand-in"),
+    ([user("p0"), user("p1")], "x" * 300, 5, ["p0", "p1", transcript.OVERSIZE], "one being written too long, too"),
+    ([user("p0"), user("x" * 300), user("p2")], "", 5, ["p0", "p2"], "an older record too long: left out"),
+    ([user("p0", isSidechain=True), user("p1")], "", 5, ["p1"], "a subagent's left out"),
+])
+def test_a_page_read_back(tmp_path, monkeypatch, recs, tail, want, expected, desc):
+    monkeypatch.setattr(transcript, "CHUNK", 16)
+    monkeypatch.setattr(transcript, "LINE_MAX", 200)
+    path = tmp_path / "s.jsonl"
+    path.write_text(lines(*recs) + tail)
+    got, start, whole = transcript.read_back(path, want=want)
+    assert said(got) == expected, desc
+    assert whole == len(lines(*recs).encode()), f"{desc}: the whole records end"
+    assert start == 0 or said(transcript.read_back(path, start, want=100)[0])[-1] != expected[0], \
+        f"{desc}: the next page ends before this one starts"
+
+
+@pytest.mark.parametrize("seed", range(4))
+def test_pages_read_back_to_the_start_are_the_transcript(tmp_path, monkeypatch, seed):
+    """Paged back to its start, whatever the chunk, page and record sizes, a transcript's pages
+    put together are the records the pane reads, in order, never one twice, long ones left out."""
+    import random
+    rnd, path = random.Random(seed), tmp_path / "s.jsonl"
+    monkeypatch.setattr(transcript, "LINE_MAX", 120)
+    kinds = [lambda: user("x" * rnd.randint(0, 150)), lambda: assistant(TEXT), lambda: BOUNDARY, *[lambda r=r: r for r in RELOAD]]
+    for _ in range(200):
+        monkeypatch.setattr(transcript, "CHUNK", rnd.randint(1, 300))
+        recs = [rnd.choice(kinds)() for _ in range(rnd.randint(0, 30))]
+        path.write_text(lines(*recs))
+        want = [r for r in recs if transcript.pane_record(r) and len(json.dumps(r)) + 1 <= 120]
+        got, start, _ = transcript.read_back(path, want=rnd.randint(1, 5))
+        got = [r for r in got if r["type"] != transcript.OVERSIZE]
+        while start:
+            page, start, _ = transcript.read_back(path, start, want=rnd.randint(1, 5))
+            got = page + got
+        assert got == want, recs
+
+
+def session_file(tmp_path, *recs):
+    (tmp_path / "p").mkdir(exist_ok=True)
+    path = tmp_path / "p/abc.jsonl"
+    path.write_text(lines(*recs))
+    return path, transcript.Follower("abc", projects=tmp_path)
+
+
+def test_a_follower_reads_what_is_appended_alone_and_pages_back(tmp_path, monkeypatch):
+    monkeypatch.setattr(transcript, "PAGE", 2)
+    path, follower = session_file(tmp_path, *[user(f"p{i}") for i in range(5)])
+    assert said(follower.read()) == ["p3", "p4"] and follower.more()
+    with open(path, "a") as f:
+        f.write(lines(user("p5")) + json.dumps(user("p6"))[:10])
+    monkeypatch.setattr(transcript, "read_back", lambda *a, **k: pytest.fail("appended: read alone"))
+    assert said(follower.read()) == ["p3", "p4", "p5"], "what's appended, after; one being written, not yet"
+    monkeypatch.undo()
+    monkeypatch.setattr(transcript, "PAGE", 2)
+    assert follower.older() and said(follower.recs) == ["p1", "p2", "p3", "p4", "p5"]
+    assert follower.older() and said(follower.recs)[0] == "p0" and not follower.more() and not follower.older()
+
+
+def test_a_follower_grown_past_two_pages_reads_its_last_afresh(tmp_path, monkeypatch):
+    monkeypatch.setattr(transcript, "PAGE", 2)
+    path, follower = session_file(tmp_path, user("p0"), user("p1"))
+    follower.read()
+    for i in range(2, 20):
+        with open(path, "a") as f:
+            f.write(lines(user(f"p{i}")))
+        assert said(follower.read())[-1] == f"p{i}" and len(follower.recs) <= 4, "never more than two pages held"
+
+
+WH_CALL = assistant({"type": "tool_use", "id": "w", "name": "mcp__wheelhouse__post_item", "input": {}})
+
+
+@pytest.mark.parametrize("recs, pages, depth, expected, more, desc", [
+    ([user(f"p{i}") for i in range(7)], 2, 1, ["p3", "p4", "p5", "p6"], True, "a page back, of two read"),
+    ([user(f"p{i}") for i in range(7)], 2, 0, ["p5", "p6"], True, "its last page, with two read before it"),
+    ([user(f"p{i}") for i in range(7)], 2, 5, ["p1", "p2", "p3", "p4", "p5", "p6"], True, "deeper than read: all read"),
+    ([user("p0"), WH_CALL, WH_CALL, WH_CALL, user("p4")], 1, 1, ["p0", "mcp", "mcp", "mcp", "p4"], False,
+     "a page showing nothing (the wheelhouse's own calls): read on till one does"),
+])
+def test_a_followers_pages_each_shown_at_its_own_depth(tmp_path, monkeypatch, recs, pages, depth, expected, more, desc):
+    monkeypatch.setattr(transcript, "PAGE", 2)
+    _, follower = session_file(tmp_path, *recs)
+    follower.read()
+    for _ in range(pages):
+        follower.older()
+    got = [r["message"]["content"] if r["type"] == "user" else "mcp" for r in follower.view(depth)]
+    assert (got, follower.more(depth)) == (expected, more), desc
+
+
+def test_a_page_read_on_past_what_shows_nothing_parses_each_record_once(tmp_path, monkeypatch):
+    """Follower.older reads on past pages showing nothing, each tested alone: what's gathered
+    isn't parsed again for each page, which made a long run of them quadratic."""
+    monkeypatch.setattr(transcript, "PAGE", 2)
+    _, follower = session_file(tmp_path, user("p0"), *[WH_CALL] * 200, user("p201"))
+    follower.read()
+    parsed, real = [], transcript.entries
+    monkeypatch.setattr(transcript, "entries", lambda recs, *a, **k: parsed.append(len(recs)) or real(recs, *a, **k))
+    assert follower.older() and said(follower.recs)[0] == "p0"
+    assert sum(parsed) <= len(follower.recs), f"each record parsed once: {sum(parsed)}"
+
+
+def test_a_followers_pages_let_go_leave_its_last(tmp_path, monkeypatch):
+    monkeypatch.setattr(transcript, "PAGE", 2)
+    path, follower = session_file(tmp_path, *[user(f"p{i}") for i in range(7)])
+    follower.read()
+    follower.older()
+    follower.older()
+    follower.drop()
+    assert (said(follower.recs), follower.depth) == (["p5", "p6"], 0)
+    assert follower.older() and said(follower.recs) == ["p3", "p4", "p5", "p6"], "read again from where its last starts"
+
+
+def stage(text, at):
+    return Entry("stage", text, at)
+
+
+EARLY, LATE = "2026-10-07T20:00:00.000Z", "2026-10-07T22:00:00.000Z"
+
+
+@pytest.mark.parametrize("older, stages, expected, desc", [
+    (False, [stage("old", EARLY), stage("new", LATE)], ["old", "p", "new"], "all read: every compaction's lines"),
+    (True, [stage("old", EARLY), stage("new", LATE)], [transcript.OLDER, "p", "new"],
+     "more before: a compaction before what's read leaves its lines with it"),
+    (True, [stage("now", AT), Entry("dock", "art", EARLY)], [transcript.OLDER, "art", "p", "now"],
+     "one at the first record's time stays, and the live cycle's overlay always does"),
+])
+def test_stage_lines_show_with_the_span_they_are_in(older, stages, expected, desc):
+    got = transcript.blocks("demo", None, [user("p")], stages=stages, older=older)[1:]
+    assert [md.split("\n\n")[-1] for _, md in got] == expected, desc
