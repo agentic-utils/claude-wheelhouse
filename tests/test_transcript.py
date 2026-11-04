@@ -490,6 +490,18 @@ def test_a_followers_pages_each_shown_at_its_own_depth(tmp_path, monkeypatch, re
     assert (got, follower.more(depth)) == (expected, more), desc
 
 
+def test_a_page_read_on_past_what_shows_nothing_parses_each_record_once(tmp_path, monkeypatch):
+    """Follower.older reads on past pages showing nothing, each tested alone: what's gathered
+    isn't parsed again for each page, which made a long run of them quadratic."""
+    monkeypatch.setattr(transcript, "PAGE", 2)
+    _, follower = session_file(tmp_path, user("p0"), *[WH_CALL] * 200, user("p201"))
+    follower.read()
+    parsed, real = [], transcript.entries
+    monkeypatch.setattr(transcript, "entries", lambda recs, *a, **k: parsed.append(len(recs)) or real(recs, *a, **k))
+    assert follower.older() and said(follower.recs)[0] == "p0"
+    assert sum(parsed) <= len(follower.recs), f"each record parsed once: {sum(parsed)}"
+
+
 def test_a_followers_pages_let_go_leave_its_last(tmp_path, monkeypatch):
     monkeypatch.setattr(transcript, "PAGE", 2)
     path, follower = session_file(tmp_path, *[user(f"p{i}") for i in range(7)])

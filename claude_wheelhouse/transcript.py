@@ -75,6 +75,11 @@ LINE_MAX = 1 << 20
 MARK = 256
 # heads a conversation with more before it, read once it's scrolled to its top (#347)
 OLDER = "_Earlier turns load as you scroll up._"
+# the most pages before its last a conversation is read back to (#347): at up to SCAN bytes a
+# page, a cap on what one request can make the daemon read and hold, not the whole of a huge
+# transcript. There, BEYOND heads it instead of OLDER, naming the transcript's file
+MAX_OLDER = 100
+BEYOND = "_Older turns are in the transcript:_ `{path}`"
 
 
 @dataclass
@@ -477,7 +482,7 @@ def _hhmm(at: str) -> str:
 
 
 def blocks(name: str, tab: str | None, recs: list[dict] | None, queued=(), full=None,
-           sending=(), stages=(), older: bool = False) -> list[tuple[str, str]]:
+           sending=(), stages=(), older: bool = False, beyond: str | None = None) -> list[tuple[str, str]]:
     """The conversation as (who, markdown) blocks, then the person's general messages on
     their way: sent, but not yet taken up by the session, Claude Code holding them (held)
     or the wheelhouse not yet passing them on (sending); then those still queued for it.
@@ -488,7 +493,9 @@ def blocks(name: str, tab: str | None, recs: list[dict] | None, queued=(), full=
     overlay's dock entry (#244, #324), as Entry("stage" or "dock", text, at), placed by time among the rest.
     older: recs are a session's last pages (read_back), with more before them, read once the
     view is scrolled to its top (OLDER, #347). Then a stage from before recs' first record is
-    left out with the turns around it: a compaction's lines show with the span they're in."""
+    left out with the turns around it: a compaction's lines show with the span they're in.
+    beyond: recs are as far back as it's read (MAX_OLDER), with more before them in this file
+    (BEYOND), never read here."""
     where = (f"_Tab: **{tab}**. Permission prompts and slash commands need that tab._" if tab else
              "_Runs in the wheelhouse: its permission prompts and questions come to the inbox. "
              "Shell opens it in a terminal tab._")
@@ -497,8 +504,8 @@ def blocks(name: str, tab: str | None, recs: list[dict] | None, queued=(), full=
         out.append(("note", "_No transcript found for this session yet._"))
     elif tab and (waiting := waiting_in_tab(recs)):
         out.append(("warn", f"> ⚠ **Waiting for you in its tab:** {waiting}."))
-    if older:
-        out.append(("note", OLDER))
+    if older or beyond:
+        out.append(("note", BEYOND.format(path=beyond) if beyond else OLDER))
         first = next((r["timestamp"] for r in recs or [] if r.get("timestamp")), None)
         if first:   # a stage with no time stays put
             stages = [e for e in stages if e.who == "dock" or not e.at or e.at[:26] >= first[:26]]
@@ -661,9 +668,11 @@ class Follower:
         if not self.more():
             return False
         start, recs = self.start, []
-        while self.start and not entries(recs, limit=None):
+        while self.start:   # each page tested alone: what's gathered isn't parsed again
             page, self.start, _ = read_back(self.path, self.start)
             recs = page + recs
+            if entries(page, limit=None):
+                break
         self.pages.append((start, len(recs)))
         self.recs, self.said = recs + self.recs, self.said + sum(map(says, recs))
         return True

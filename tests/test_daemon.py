@@ -727,7 +727,7 @@ TURNS = [f"turn {i}" for i in range(7)]
     ([(None, 5), (1, 3), (9, 0)], 60, 3, "its last page, a page more, back to its start: no note of more"),
     ([(2, 1), (0, 5), (1, 3)], 60, 2, "two apps at their own depths, turn about: each its own"),
     ([(3, 0), (1, 3)], 60, 3, "an app started again behind a daemon read back deep: a page more is its own"),
-    ([(9, 1)], 60, 2, "older past MAX_OLDER: read back that far only"),
+    ([(9, 1)], 60, 2, "older past MAX_OLDER: read back that far only, the transcript's file named for the rest"),
     ([(2, 1), (0, 5)], 0, 0, "back at its end, nobody asking for more: the pages before its last let go"),
 ])
 async def test_a_conversation_scrolled_back_reads_pages_before_its_last(daemon, sid, tmp_path, monkeypatch,
@@ -739,13 +739,15 @@ async def test_a_conversation_scrolled_back_reads_pages_before_its_last(daemon, 
                                         "message": {"role": "user", "content": t}}) + "\n" for t in TURNS))
     monkeypatch.setattr(transcript.Follower, "find", lambda self: path)
     monkeypatch.setattr(transcript, "PAGE", 2)
-    monkeypatch.setattr(daemon_mod, "MAX_OLDER", 2 if "MAX_OLDER" in desc else 100)
+    monkeypatch.setattr(transcript, "MAX_OLDER", 2 if "MAX_OLDER" in desc else 100)
     monkeypatch.setattr(hub_mod, "DEEP_HOLD", hold)
     for older, first in asks:
         blocks = (await call(daemon, "GET", f"/sessions/{sid}/conversation" + (f"?older={older}" if older else ""))).json()
         shown = [t for t in TURNS if any(b["text"].endswith(t) for b in blocks)]
         assert shown == TURNS[first:], f"{desc}: {older}"
-        assert (["note", transcript.OLDER] in [[b["who"], b["text"]] for b in blocks]) == (first > 0), \
+        notes = [b["text"] for b in blocks if b["who"] == "note"]
+        capped = "MAX_OLDER" in desc
+        assert (transcript.OLDER in notes, transcript.BEYOND.format(path=path) in notes) == (first > 0 and not capped, capped), \
             f"{desc}: {older}, the note of more before it"
     assert daemon.hub.followers[sid].depth == depth, f"{desc}: the pages held"
     assert (await call(daemon, "GET", f"/sessions/{sid}/conversation?older=x")).status_code == 400

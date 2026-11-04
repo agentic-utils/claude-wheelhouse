@@ -1768,7 +1768,8 @@ class Hub:
             return None
         follower = self.followers.setdefault(sid, transcript.Follower(sid))
         follower.read()
-        want, now = self.older_pages.get(sid, 0) if older is None else older, time.monotonic()
+        want = min(transcript.MAX_OLDER, self.older_pages.get(sid, 0) if older is None else older)
+        now = time.monotonic()
         if want:
             self.deep_at[sid] = now
         elif follower.depth and now - self.deep_at.get(sid, 0) >= DEEP_HOLD:
@@ -1783,9 +1784,10 @@ class Hub:
         stages = compaction_entries(self.store.stages(sid), compacting_now(s))
         key = (s["name"] or short(sid), tab, follower.seen, depth, queued, sending, tuple(stages))
         if follower.blocks_key != key:   # parsed once per change, not on every refresh tick
+            more, capped = follower.more(depth), depth >= transcript.MAX_OLDER   # read back no further there
             follower.blocks_key, follower.blocks = key, transcript.blocks(
                 *key[:2], follower.view(depth), queued, functools.partial(self.sent, sid), sending, tuple(stages),
-                follower.more(depth))
+                more and not capped, str(follower.path) if more and capped else None)
         return follower.blocks
 
     def older(self, sid: str) -> None:
