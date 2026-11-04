@@ -642,10 +642,10 @@ async def test_a_slow_transcript_never_holds_up_the_hub(daemon, sid, monkeypatch
     read = daemon_mod.Hub.conversation
     reading_now, answered, released = threading.Event(), threading.Event(), []
 
-    def slow(hub, sid):
+    def slow(hub, sid, *older):
         reading_now.set()
         released.append(answered.wait(10))   # False: it gave up, the command never answered meanwhile
-        return read(hub, sid)
+        return read(hub, sid, *older)
     monkeypatch.setattr(daemon_mod.Hub, "conversation", slow)
     async with client(daemon) as c:
         reading = asyncio.create_task(c.get(f"/sessions/{sid}/conversation"))
@@ -677,9 +677,9 @@ async def test_a_conversation_waits_on_a_read_under_way_for_a_while(daemon, stor
     read = daemon_mod.Hub.conversation
     assert (await call(daemon, "GET", f"/sessions/{sid}/conversation")).status_code == 200
 
-    def slow(hub, sid):
+    def slow(hub, sid, *older):
         time.sleep(read_for)   # a transcript on a mount gone slow
-        return read(hub, sid)
+        return read(hub, sid, *older)
     monkeypatch.setattr(daemon_mod.Hub, "conversation", slow)
     monkeypatch.setattr(daemon_mod, "READ_WAIT", 0.4)
     async with client(daemon) as c:
@@ -718,6 +718,22 @@ async def test_two_refetches_overlapping_a_transcript_change_both_get_it(daemon,
         second = await c.get(f"/sessions/{sid}/conversation")
         for r in (await first, second):
             assert r.status_code == 200 and "the final reply" in r.text
+
+
+async def test_a_conversation_scrolled_back_reads_pages_before_its_last(daemon, sid, tmp_path, monkeypatch):
+    """#347: older, the pages before its last a client has scrolled back to; past the
+    transcript's start, no note of more before it."""
+    path = tmp_path / "t.jsonl"
+    path.write_text("".join(json.dumps({"type": "user", "timestamp": "2026-10-07T21:30:00.000Z",
+                                        "message": {"role": "user", "content": f"turn {i}"}}) + "\n" for i in range(5)))
+    monkeypatch.setattr(transcript.Follower, "find", lambda self: path)
+    monkeypatch.setattr(transcript, "PAGE", 2)
+    for older, shown, desc in [(None, ["turn 3", "turn 4", transcript.OLDER], "its last page, and more before it"),
+                               (1, ["turn 1", "turn 3", transcript.OLDER], "a page more"),
+                               (5, ["turn 0", "turn 4"], "back to its start: no more")]:
+        text = (await call(daemon, "GET", f"/sessions/{sid}/conversation" + (f"?older={older}" if older else ""))).text
+        assert all(json.dumps(s)[1:-1] in text for s in shown) and (transcript.OLDER in text) == (older != 5), desc
+    assert (await call(daemon, "GET", f"/sessions/{sid}/conversation?older=x")).status_code == 400
 
 
 async def test_a_client_gone_before_its_body_is_let_go_quietly(daemon, store, sid, capsys):

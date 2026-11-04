@@ -2315,6 +2315,33 @@ async def test_home_takes_a_long_conversation_to_its_top(store, sid, tmp_path, m
         assert seen[-1] == full[:page], "Home, straight to the top"
 
 
+@pytest.mark.anyio
+@pytest.mark.both
+async def test_a_conversation_scrolled_to_its_top_reads_a_page_more(store, sid, tmp_path, monkeypatch):
+    """#347: resting at its top, a page from before what it shows is put above it, the
+    reader's lines kept where they were; once it holds the whole transcript, no more is asked for."""
+    long_conversation(sid, tmp_path, monkeypatch)
+    monkeypatch.setattr(transcript, "PAGE", 120)
+    monkeypatch.setattr(tui, "OLDER_SETTLE", 0.01)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.follow(sid)
+        await pilot.pause()
+        assert "para one 1\n" not in app._detail_text and transcript.OLDER in app._detail_text, "its last page"
+        before = (await scroll_by(pilot, ["home"]))[-1]
+        first = app.detail._layout(app.detail.size.width)[2][2]   # its first turn's row, under its head and the note
+        for _ in range(100):
+            await pilot.pause(0.02)
+            app.refresh_data()
+            if "para one 1\n" in app._detail_text:
+                break
+        await pilot.wait_for_scheduled_animations()
+        await pilot.pause()
+        assert "para one 1\n" in app._detail_text and transcript.OLDER not in app._detail_text, "back to its start"
+        assert painted(app)[first:] == before[first:], "the reader's lines stay put, the older turns above them"
+
+
 def append_turn(sid, tmp_path, text: str) -> None:
     rec = {"type": "user", "timestamp": "2026-10-07T21:31:00Z", "message": {"content": text}}
     with (tmp_path / f"projects/-home-u-repo/{sid}.jsonl").open("a") as f:

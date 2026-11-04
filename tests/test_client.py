@@ -3,13 +3,14 @@ socket: what it shows changes only at refresh() or after a command, the stream's
 fetch in the background, a lost daemon is said and reconnected to, and a command is done
 once whatever the link does."""
 
+import json
 import time
 
 import httpx2
 import pytest
 from types import SimpleNamespace
 
-from claude_wheelhouse import client as client_mod, features, launch
+from claude_wheelhouse import client as client_mod, features, launch, transcript
 from claude_wheelhouse.client import LOST, UNREACHABLE, RemoteClient, Unreachable
 from claude_wheelhouse.daemon import Daemon
 from claude_wheelhouse.store import SessionGone
@@ -104,6 +105,26 @@ def test_a_conversation_shown_is_kept_up_to_date_and_one_not_shown_let_go(store,
         c.refresh()
         c.refresh()   # not shown since: let go
         assert ("thread", sid, t) not in c.cache
+    finally:
+        c.disconnect()
+
+
+def test_a_conversation_scrolled_back_is_fetched_with_a_page_more(store, sid, served, heard, tmp_path, monkeypatch):
+    """#347: older, asked for in the background, and shown at the next refresh."""
+    path = tmp_path / "t.jsonl"
+    path.write_text("".join(json.dumps({"type": "user", "timestamp": "2026-10-07T21:30:00.000Z",
+                                        "message": {"role": "user", "content": f"turn {i}"}}) + "\n" for i in range(5)))
+    monkeypatch.setattr(transcript.Follower, "find", lambda self: path)
+    monkeypatch.setattr(transcript, "PAGE", 2)
+    d = served(store.path)
+    c = heard(d.client())
+    try:
+        c.refresh()
+        assert not any("turn 1" in md for _, md in c.conversation(sid)), "its last page"
+        c.older(sid)
+        until(lambda: ("conversation", sid) in c.waiting, desc="fetched again in the background")
+        c.refresh()
+        assert any("turn 1" in md for _, md in c.conversation(sid)), "a page more, shown at the refresh"
     finally:
         c.disconnect()
 

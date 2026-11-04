@@ -125,6 +125,7 @@ RENDER_OFF_LOOP = 2000
 TOUR_OFFER_KEPT = 10   # seconds tour_offer's answer is kept while nothing it reads has moved
 DETAIL_SETTLE = 0.06   # seconds a selection rests before a conversation not yet rendered renders (show_detail)
 DETAIL_INLINE = 8   # ... and the most blocks not rendered yet that render on the loop at once
+OLDER_SETTLE = 0.3   # seconds a conversation rests at its top before a page more of it is read (reached_top, #347)
 CALLS_WAIT = 10   # seconds the app's close waits for a Delete's calls under way (delete_off_thread)
 RENDERING = ("note", "_rendering…_")
 CONVERSATION_RETRY = 2   # seconds before a conversation fetch that brought nothing (unreachable, busy) is tried again
@@ -836,7 +837,8 @@ class Transcript(Widget, can_focus=False):
         stays put and what grew shows below it; with none above, the first unchanged block below
         it in the view. Found more than once (a block said twice, a run of the same tool line),
         the one followed by most of what followed it, then preceded by most of what preceded
-        it, then the nearest."""
+        it, then the nearest. Never a heading or the note of more before it, which stay at the top
+        as older turns are put under them (#347)."""
         old, laid, scroll = self.blocks, self._laid, self.parent
         self.blocks = content.blocks if isinstance(content, Blocks) else list(content)
         self._laid = None
@@ -851,6 +853,8 @@ class Transcript(Widget, can_focus=False):
         top = bisect.bisect_right(starts, scroll.scroll_y) - 1
         bottom = bisect.bisect_left(starts, scroll.scroll_y + scroll.scrollable_content_region.height)
         for k in [top, *range(top - 1, -1, -1), *range(top + 1, bottom)]:
+            if old[k][0] == "head" or old[k] == ("note", transcript.OLDER):   # above what's read: older pages land under them (#347)
+                continue
             found = [i for i, b in enumerate(new) if b == old[k]]
             if found:
                 at = max(found, key=lambda i: (agreed(old[k:], new[i:]), agreed(old[k::-1], new[i::-1]),
@@ -2158,6 +2162,17 @@ class ConversationScroll(VerticalScroll, can_focus=False):
     def watch_scroll_y(self, old_value: float, new_value: float) -> None:
         super().watch_scroll_y(old_value, new_value)
         self.at_end = new_value >= self.max_scroll_y - 1
+        if new_value <= 0 < old_value:
+            self.at_top()
+
+    def on_mouse_scroll_up(self) -> None:
+        if self.scroll_y <= 0:   # at its top already, scrolled again: asked again
+            self.at_top()
+
+    def at_top(self) -> None:
+        """Scrolled to its top: a conversation with more before it reads a page more (#347)."""
+        if self.id == "detail-scroll" and hasattr(self.app, "reached_top"):
+            self.app.reached_top()
 
     def on_resize(self) -> None:
         before, self._seen_size = self._seen_size, tuple(self.container_size)
@@ -5245,6 +5260,7 @@ class WheelhouseApp(App):
         self.conversations_tried: dict[str, float] = {}   # ... and when a fetch that brought nothing landed
         self.conversations_asked: set[str] = set()   # conversations being fetched on a thread (conversation)
         self.detail_gen = 0   # Detail's shows, numbered: one overtaken is dropped (show_detail)
+        self.older_asked: tuple | None = None   # (session, its first entry) when a page more was last asked for (reached_top)
         self.detail_waiting = False   # a show from the top under way (show_detail)
         self.detail_timer = None   # a show waiting for the selection to rest (show_detail)
         self.dwell_timer = None
@@ -7277,6 +7293,29 @@ class WheelhouseApp(App):
         self.detail.update(render(blocks), top=top)   # a doc posted again: where it was scrolled to stays
         if following:   # stay at the newest turn or reply, unless the person has scrolled up to read
             self.call_after_refresh(self.detail_scroll.scroll_end, animate=False)
+
+    def reached_top(self) -> None:
+        """The conversation shown scrolled to its top: once it has rested there for OLDER_SETTLE
+        (not just shown from the top, then sent to its end), a page more of it is asked for, from
+        before what it shows, if it has more (transcript.OLDER), and not again until that
+        page has landed. Read where the conversation is read (conversation, #327); Detail keeps
+        the reader's place as it lands (Transcript.update)."""
+        sid = self.viewing
+
+        def settled() -> None:
+            blocks = getattr(self, "_detail_linked", None) or []
+            if sid != self.viewing or not self.screen_stack or self.detail_scroll.scroll_y > 0 \
+                    or ("note", transcript.OLDER) not in blocks:
+                return
+            first = next((b for b in blocks if b[0] not in ("head", "warn", "note")), None)
+            if self.older_asked == (sid, first):   # its page not here yet
+                return
+            self.older_asked = (sid, first)
+            self.client.older(sid)
+            if not self.client.remote:   # read at the next paint, as in process it always is
+                self.paint_detail()
+        if sid:
+            self.set_timer(OLDER_SETTLE, settled)
 
     def conversation_landed(self, sid: str) -> None:
         """A conversation fetched on a thread (conversation): shown, if it's still the one."""

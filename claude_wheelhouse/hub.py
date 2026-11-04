@@ -360,6 +360,7 @@ class Hub:
                                              if asked is not None}
         self.stopped_launches: set[str] = set()   # launches Interrupt aborted (op ids), their process stopped (#249)
         self.followers: dict[str, transcript.Follower] = {}
+        self.older_pages: dict[str, int] = {}   # each conversation's pages asked for before its last (older, #347)
         # each session's context size for the session list: read on workers, by a follower
         # shared with the stats pane (transcript_usage.follower), so each transcript is read once
         self.contexts: dict[str, transcript_usage.UsageFollower] = {}
@@ -1750,24 +1751,34 @@ class Hub:
         m = self.store.message(sid, msg_id)
         return m["body"] if m else None
 
-    def conversation(self, sid: str) -> list[tuple[str, str]] | None:
+    def conversation(self, sid: str, older: int | None = None) -> list[tuple[str, str]] | None:
         """A session's conversation as (who, markdown) blocks, from its transcript, with
-        what's sent and queued for it as a general message; None once the session has gone."""
+        what's sent and queued for it as a general message; None once the session has gone.
+        older: how many pages before its last to show (Follower.older, #347), the most any
+        client has asked for; this app's own (older_pages) for None."""
         s = self.store.session(sid)
         if s is None:
             return None
         follower = self.followers.setdefault(sid, transcript.Follower(sid))
         recs = follower.read()
+        want = self.older_pages.get(sid, 0) if older is None else older
+        while follower.depth < want and follower.older():
+            recs = follower.recs
         queued = tuple(m["body"] for m in self.store.drafts(sid) if m["item_ref"] is None)
         # sent, not yet passed on: the wheelhouse's own notices aren't the person's words
         sending = tuple(m["body"] for m in self.store.pending(sid) if m["item_ref"] is None and m["kind"] != "notice")
         tab = None if runner(s) == "sdk" and not s["shell"] else launch.tab_title(s)
         stages = compaction_entries(self.store.stages(sid), compacting_now(s))
-        key = (s["name"] or short(sid), tab, follower.seen, queued, sending, tuple(stages))
+        key = (s["name"] or short(sid), tab, follower.seen, follower.depth, queued, sending, tuple(stages))
         if follower.blocks_key != key:   # parsed once per change, not on every refresh tick
             follower.blocks_key, follower.blocks = key, transcript.blocks(*key[:2], recs, queued, functools.partial(self.sent, sid),
-                                                                          sending, tuple(stages))
+                                                                          sending, tuple(stages), follower.more())
         return follower.blocks
+
+    def older(self, sid: str) -> None:
+        """A page more of a session's conversation, from before what it shows, read at its next
+        read (conversation): it was scrolled to its top (#347)."""
+        self.older_pages[sid] = self.older_pages.get(sid, 0) + 1
 
     def agent_conversation(self, sid: str, ref: str) -> list[tuple[str, str]] | None:
         """A subagent item's own conversation as (who, markdown) blocks, from its transcript
