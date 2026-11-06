@@ -224,14 +224,17 @@ def session_key(spec: str, s, running: bool, at: int, name: str = "", context: i
     return keyed(s, f"{spec}|{value!r}", 0, value, (not running, last, at))
 
 
-def drop(order: list, tokens: dict, moved, before=None, after=None, shown=None) -> tuple[str | None, list]:
+def drop(order: list, tokens: dict, moved, before=None, after=None, shown=None,
+         foot=frozenset()) -> tuple[str | None, list]:
     """A unit (moved) dropped before the visible unit `before`, or after `after`, in the
     whole list's order (order: every row's key, as sorted now), next to it. Within its group, the group's
     drag group (drag_group) and its rows in their new order, each to be placed with its own
     token; across groups, None and every row in the
     new order. A drop where it already was changes nothing: ("", []). Within or across goes
     by its neighbours where it lands as the list shows them (shown: the visible rows a drag
-    moves, in order), else in the whole order."""
+    moves, in order), else in the whole order. Foot: the rows that keep to the foot whatever
+    the order (parked sessions, session_key): a drop that would put one above a row not
+    among them changes nothing either, as the sort would put it straight back (#352)."""
     rest = [k for k in order if k != moved]
     anchor, ahead = (before, True) if before is not None else (after, False)
     i = rest.index(anchor) + (0 if ahead else 1)
@@ -243,7 +246,7 @@ def drop(order: list, tokens: dict, moved, before=None, after=None, shown=None) 
     j = seen.index(anchor) + (0 if ahead else 1) if anchor in seen else None
     near = seen[max(0, j - 1):j + 1] if j is not None else rest[max(0, i - 1):i + 1]
     within = group in {drag_group(tokens[k]) for k in near}
-    if new == order:
+    if new == order or any(a in foot and b not in foot for a, b in zip(new, new[1:])):
         return "", []
     if within:
         return group, [k for k in new if drag_group(tokens[k]) == group]

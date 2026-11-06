@@ -6791,7 +6791,9 @@ class WheelhouseApp(App):
             return
         order = sorted(keyed, key=lambda k: keyed[k][0])
         group, new = ordering.drop(order, {k: v[1] for k, v in keyed.items()}, moved, before, after,
-                                   shown=[k for k, _, _ in table.units()])
+                                   shown=[k for k, _, _ in table.units()],
+                                   foot={s["id"] for s in self.sessions if s["parked"]} if table is self.session_list
+                                   else frozenset())
         if not new:
             return
         which = "items" if table is self.items_table else "sessions"

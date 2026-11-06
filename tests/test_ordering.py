@@ -223,17 +223,38 @@ def test_sessions_off_parked_at_the_foot(rows, want, desc):
     ("b", "a", None, "b a c d", "unparked within the unparked"),
     ("d", "c", None, "a b d c", "parked within the parked"),
     ("c", None, "d", "a b d c", "parked to the foot"),
-    ("c", "a", None, "a b c d", "parked dragged above the unparked: back at the foot"),
-    ("a", None, "d", "b a c d", "unparked dragged below the parked: the foot of the unparked"),
+    ("a", None, "b", "b a c d", "unparked to the foot of the unparked"),
+    ("c", "b", None, None, "parked above the unparked (Alt+Up): refused"),
+    ("c", "a", None, None, "parked dragged to the head: refused"),
+    ("b", None, "c", None, "unparked below the parked (Alt+Down): refused"),
+    ("a", None, "d", None, "unparked dragged to the foot: refused"),
 ])
 def test_sessions_off_drag_keeps_parked_at_the_foot(moved, before, after, want, desc):
+    """want None: refused, nothing written (#352)."""
     rows = "a:0:0 b:0:1 c:1:2 d:1:3"
     got, tokens = off_order(rows)
-    group, new = ordering.drop(got, tokens, moved, before=before, after=after)
+    group, new = ordering.drop(got, tokens, moved, before=before, after=after, foot={"c", "d"})
+    if want is None:
+        assert (group, new) == ("", []), desc
+        return
     assert group == ordering.MANUAL, f"{desc}: within, ordering stays off"
     place = {k: i for i, k in enumerate(new)}
     rows = " ".join(f"{k}:{p}:{place[k]}" for k, p, _ in (r.split(":") for r in rows.split()))
     assert off_order(rows)[0] == want.split(), desc
+
+
+@pytest.mark.parametrize("moved, before, after, desc", [
+    ("c", "b", None, "dot*: parked above the unparked, a group apart: refused, the sort kept"),
+    ("b", None, "c", "dot*: unparked below the parked: refused, the sort kept"),
+])
+def test_dot_drop_across_the_parked_line_refused(moved, before, after, desc):
+    rows = [{"id": k, "parked": p, "created_at": T0.format(0), "last_at": T0.format(0), "pos": None,
+             "pos_group": None} for k, p in (("a", 0), ("b", 0), ("c", 1), ("d", 1))]
+    keyed = {s["id"]: ordering.session_key("dot*", s, False, i) for i, s in enumerate(rows)}
+    got = sorted(keyed, key=lambda k: keyed[k][0])
+    tokens = {k: t for k, (_, t) in keyed.items()}
+    assert ordering.drop(got, tokens, moved, before=before, after=after)[0] is None, f"{desc}: across, but for foot"
+    assert ordering.drop(got, tokens, moved, before=before, after=after, foot={"c", "d"}) == ("", []), desc
 
 
 @pytest.mark.parametrize("order_, settled, want, desc", [
