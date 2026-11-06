@@ -689,7 +689,7 @@ The session list starts sorted: running sessions first, then by their latest act
 on the dot column). The name column cycles `▲`, `▼`, then back to the dot's `*`; the counts
 and sizes (context, `?`, `D`, `✉`) cycle `▼` (the most first), `▲`, then back, and a session
 whose context isn't known yet sorts last either way. A click on the dot's header puts `*` back. Parked sessions stay at the
-foot under every sort. A click on the header past the columns shows every session's items,
+foot under every sort, and with ordering off. A click on the header past the columns shows every session's items,
 as `Esc` does. Drag a row with the mouse, or move the
 highlighted one with `Alt+Up` and `Alt+Down`, to reorder. A move among rows that share its
 sort key keeps the sort, and your order breaks the tie until the row's key changes. Under

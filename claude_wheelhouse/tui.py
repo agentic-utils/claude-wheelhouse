@@ -3284,6 +3284,26 @@ class Hint(Label):
 OWN_ENTER = (Button, TextArea, DataTable, OptionList, DirectoryTree, Select, RadioSet)
 
 
+class WrapCheckbox(Checkbox):
+    """A Checkbox whose caption wraps at the dialog's width, the dialog growing with it, as a
+    .dialog-prompt does (#353): Textual's keeps to one line, cut with an ellipsis. Its
+    following lines start under the caption's first, not under the box."""
+    DEFAULT_CSS = "WrapCheckbox { width: 1fr; height: auto; }"
+
+    def lines(self, width: int) -> list[Content]:
+        """The caption wrapped beside the box and its gap, a cell kept at the end as Textual's."""
+        return self._label.wrap(max(1, width - self._button.cell_length - 2))
+
+    def get_content_height(self, container, viewport, width: int) -> int:
+        return len(self.lines(width))
+
+    def render(self) -> Content:
+        button, style = self._button, self.get_visual_style("toggle--label")
+        indent = Content(" " * button.cell_length)
+        return Content("\n").join(Content.assemble(button if i == 0 else indent, line.pad(1, 1).stylize_before(style))
+                                  for i, line in enumerate(self.lines(self.content_size.width)))
+
+
 class Dialog(ModalScreen):
     """A dialog. Every answer, by key, button or Enter in a box, is action_answer. A key acts
     once the one before it has landed (take_key), so a key typed behind the one that answers
@@ -4093,8 +4113,8 @@ class RunCommand(Dialog):
             yield Label(self.why, classes="dialog-prompt", markup=False)
             yield Label(f"in {self.cwd}", classes="dialog-note", markup=False)
             yield UndoInBounds(self.text, id="run-text", soft_wrap=False, show_line_numbers=False)
-            yield Checkbox(f"Send the output back to {self.name_}" + (" (it asked for it)" if self.wanted else ""),
-                           self.wanted, id="run-send")
+            yield WrapCheckbox(f"Send the output back to {self.name_}" + (" (it asked for it)" if self.wanted else ""),
+                               self.wanted, id="run-send")
             yield Label("The output (and the command, if you edit it) goes into the session's transcript: "
                         "untick if it may show secrets.", id="run-warning",
                         markup=False)
@@ -6782,7 +6802,9 @@ class WheelhouseApp(App):
             return
         order = sorted(keyed, key=lambda k: keyed[k][0])
         group, new = ordering.drop(order, {k: v[1] for k, v in keyed.items()}, moved, before, after,
-                                   shown=[k for k, _, _ in table.units()])
+                                   shown=[k for k, _, _ in table.units()],
+                                   foot={s["id"] for s in self.sessions if s["parked"]} if table is self.session_list
+                                   else frozenset())
         if not new:
             return
         which = "items" if table is self.items_table else "sessions"

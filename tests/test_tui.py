@@ -8713,10 +8713,57 @@ async def test_session_headers_sort_and_drag_turns_it_off(store, sid, tmp_path):
         app.refresh_data()
         await pilot.pause()
         assert table.keys()[-1] == parked, "parked at the foot"
-        await drag_row(pilot, table, 0, table.row_count - 1)
+        app.client.running = lambda k: k == other   # running first: a group of its own
+        app.refresh_data()
+        await pilot.pause()
+        assert [k for k in table.final() if k] == [other, sid, parked]
+        await drag_row(pilot, table, 1, 0)
         assert str(table.ordered_columns[0].label) == "", "across groups: ordering off"
-        assert [k for k in table.final() if k] == [other, parked, sid], "as dropped: the parked one no longer sinks"
+        assert [k for k in table.final() if k] == [sid, other, parked], "as dropped, the parked one still at the foot"
         assert store.setting("layout.sort.sessions") == ""
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("spec, move, desc", [
+    ("", ("drag", 2, 1), "off: parked dragged above the unparked"),
+    ("", ("drag", 1, 2), "off: unparked dragged below the parked"),
+    ("", ("key", 2, "alt+up"), "off: Alt+Up on the top parked row"),
+    ("", ("key", 1, "alt+down"), "off: Alt+Down on the last unparked row"),
+    ("dot*", ("drag", 2, 0), "dot*: parked dragged to the head"),
+    ("dot*", ("drag", 0, 3), "dot*: unparked dragged to the foot"),
+    ("dot*", ("key", 2, "alt+up"), "dot*: Alt+Up on the top parked row"),
+    ("dot*", ("key", 1, "alt+down"), "dot*: Alt+Down on the last unparked row"),
+])
+async def test_a_move_across_the_parked_line_is_refused(store, sid, tmp_path, spec, move, desc):
+    """#352: parked keeps to the foot, so a move that would cross it changes nothing: no row
+    moves, no place is written, and the sort stays."""
+    b = store.create_session(str(tmp_path), name="b")
+    for name in ("p1", "p2"):
+        p = store.create_session(str(tmp_path), name=name)
+        store.db.execute("UPDATE sessions SET parked = 1 WHERE id = ?", (p,))
+    if spec == "":
+        store.set_session_order(ordering.MANUAL, [s["id"] for s in store.sessions()])
+    store.set_setting("layout.sort.sessions", spec)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        table = app.session_list
+        before = [k for k in table.final() if k]
+        assert len(before) == 4 and [store.session(k)["parked"] for k in before] == [0, 0, 1, 1], desc
+        places = [(s["id"], s["pos"], s["pos_group"]) for s in store.sessions()]
+        kind, row, to = move
+        at = table.keys().index   # the Sink lays blank rows above the parked: by key, not index
+        if kind == "drag":
+            await drag_row(pilot, table, at(before[row]), at(before[to]))
+        else:
+            table.focus()
+            table.move_cursor(row=at(before[row]))
+            await pilot.pause()
+            await pilot.press(to)
+            await pilot.pause()
+        assert [k for k in table.final() if k] == before, f"{desc}: nothing moved"
+        assert [(s["id"], s["pos"], s["pos_group"]) for s in store.sessions()] == places, f"{desc}: nothing written"
+        assert app.session_sort == spec and store.setting("layout.sort.sessions") == spec, f"{desc}: the sort kept"
 
 
 @pytest.mark.anyio
@@ -10455,6 +10502,31 @@ async def test_run_opens_the_command_and_runs_what_the_box_holds(store, tmp_path
         if error:
             assert error in str(dialog.query_one("#run-error", Label).content), desc
             assert isinstance(app.screen, tui.RunCommand), f"{desc}: still open to fix"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("name, wanted, size, desc", [
+    ("Magento production support - ABN-621", True, (80, 24), "#353: a long name, asked for, at 80x24"),
+    ("demo", True, (80, 24), "a short name, asked for"),
+    ("Magento production support - ABN-621", False, (80, 24), "not asked for"),
+    ("Magento production support - ABN-621", True, (160, 40), "a wide screen"),
+])
+async def test_the_run_dialogs_send_caption_shows_whole(store, name, wanted, size, desc):
+    """#353: the Send the output back caption wraps inside the dialog, every word of it shown."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=size) as pilot:
+        await pilot.pause()
+        app.push_screen(tui.RunCommand("C1", name, "List the files", "/tmp", "ls -la", wanted))
+        await pilot.pause()
+        check = app.screen.query_one("#run-send", tui.Checkbox)
+        box = app.screen.query_one("#dialog").content_region
+        assert box.contains_region(check.region), f"{desc}: inside the dialog"
+        drawn = [s.text for s in check.render_lines(check.region.reset_offset)][1:-1]   # inside its border
+        shown = " ".join(" ".join(r.strip("▊▎ ") for r in drawn).split())
+        start = drawn[0].index("Send")
+        assert all(len(r) - len(r.lstrip("▊ ")) == start for r in drawn[1:]), f"{desc}: lines up under the caption"
+        caption = f"Send the output back to {name}" + (" (it asked for it)" if wanted else "")
+        assert caption in shown, f"{desc}: {shown!r}"
 
 
 @pytest.mark.anyio
