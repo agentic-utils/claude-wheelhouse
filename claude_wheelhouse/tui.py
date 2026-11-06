@@ -3286,11 +3286,22 @@ OWN_ENTER = (Button, TextArea, DataTable, OptionList, DirectoryTree, Select, Rad
 
 class WrapCheckbox(Checkbox):
     """A Checkbox whose caption wraps at the dialog's width, the dialog growing with it, as a
-    .dialog-prompt does (#353): Textual's keeps to one line, cut with an ellipsis."""
-    DEFAULT_CSS = "WrapCheckbox { width: 1fr; height: auto; text-wrap: wrap; }"
+    .dialog-prompt does (#353): Textual's keeps to one line, cut with an ellipsis. Its
+    following lines start under the caption's first, not under the box."""
+    DEFAULT_CSS = "WrapCheckbox { width: 1fr; height: auto; }"
+
+    def lines(self, width: int) -> list[Content]:
+        """The caption wrapped beside the box and its gap, a cell kept at the end as Textual's."""
+        return self._label.wrap(max(1, width - self._button.cell_length - 2))
 
     def get_content_height(self, container, viewport, width: int) -> int:
-        return self.render().get_height(self.styles, width)
+        return len(self.lines(width))
+
+    def render(self) -> Content:
+        button, style = self._button, self.get_visual_style("toggle--label")
+        indent = Content(" " * button.cell_length)
+        return Content("\n").join(Content.assemble(button if i == 0 else indent, line.pad(1, 1).stylize_before(style))
+                                  for i, line in enumerate(self.lines(self.content_size.width)))
 
 
 class Dialog(ModalScreen):

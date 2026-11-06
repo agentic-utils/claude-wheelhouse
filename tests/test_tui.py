@@ -10521,8 +10521,10 @@ async def test_the_run_dialogs_send_caption_shows_whole(store, name, wanted, siz
         check = app.screen.query_one("#run-send", tui.Checkbox)
         box = app.screen.query_one("#dialog").content_region
         assert box.contains_region(check.region), f"{desc}: inside the dialog"
-        rows = [s.text.strip("▊▎ ") for s in check.render_lines(check.region.reset_offset)][1:-1]   # in its border
-        shown = " ".join(" ".join(rows).split())
+        drawn = [s.text for s in check.render_lines(check.region.reset_offset)][1:-1]   # inside its border
+        shown = " ".join(" ".join(r.strip("▊▎ ") for r in drawn).split())
+        start = drawn[0].index("Send")
+        assert all(len(r) - len(r.lstrip("▊ ")) == start for r in drawn[1:]), f"{desc}: lines up under the caption"
         caption = f"Send the output back to {name}" + (" (it asked for it)" if wanted else "")
         assert caption in shown, f"{desc}: {shown!r}"
 
