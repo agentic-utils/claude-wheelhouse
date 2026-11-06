@@ -535,6 +535,7 @@ class Daemon:
         hub.refresh()
         hub.read_contexts()
         hub.keep_warm()
+        hub.tell_context()
         hub.watch_agents()
         hub.fetch_usage()
         hub.finish_relaunches()

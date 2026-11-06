@@ -98,6 +98,10 @@ DOCS_KEPT = 4   # docs whose last read the hub keeps (Hub.document), the newest 
 # for the compaction before it gives up, and says so
 COMPACT_FIRST_TOKENS = 150_000
 COMPACT_RELAUNCH_WAIT = 30 * 60
+# a session is told its context size as it passes CONTEXT_FIRST tokens and each CONTEXT_STEP
+# after (Hub.tell_context, #350): the cue to compact at its next natural break
+CONTEXT_FIRST = 200_000
+CONTEXT_STEP = 100_000
 # activity lines of a host that isn't running a turn: one compacted with nothing behind it
 # is stopped for its Relaunch then, never in the middle of a turn queued behind /compact
 IDLE_LINES = ("idle", "error", "interrupted")
@@ -313,6 +317,21 @@ class Done:
         return self
 
 
+def context_mark(tokens: int) -> int:
+    """The highest context threshold (CONTEXT_FIRST, then each CONTEXT_STEP) tokens has reached; 0 below the first."""
+    return 0 if tokens < CONTEXT_FIRST else CONTEXT_FIRST + (tokens - CONTEXT_FIRST) // CONTEXT_STEP * CONTEXT_STEP
+
+
+def context_notice(tokens: int, window: int | None, tab: bool = False) -> str:
+    """What tell_context says, without the [wheelhouse] mark: the size to the nearest k, of the
+    window where it's known and under 1M. A tab session can't call request_compact (the MCP
+    server refuses it there): it suggests /compact to the person instead."""
+    of = f" of {round(window / 1000)}k" if window and window < 1_000_000 else ""
+    how = ("suggest the person types /compact in your tab; otherwise carry on and suggest it at the next one" if tab
+           else "compact with request_compact(keep); otherwise carry on and compact at the next one")
+    return f"Your context is now {round(tokens / 1000)}k tokens{of}. If you're at a natural break, {how}."
+
+
 @dataclass
 class Warmth:
     """A tab session's keepalive, as the hub keeps it (keep_warm), all epoch seconds: since
@@ -403,6 +422,9 @@ class Hub:
         # the tab sessions' keepalive (keep_warm), by session: as the host keeps its own
         self.warmth: dict[str, Warmth] = {}
         self.keepalive_for = features.keepalive_hours() * 3600   # seconds; 0: no keepalive
+        # the context threshold each session was last told of (tell_context), by session: seeded
+        # at first sight, so a restart never tells a big session what it was already past
+        self.told: dict[str, int] = {}
         self.unpark_running()
 
     def unpark_running(self) -> None:
@@ -1661,6 +1683,34 @@ class Hub:
                     w.sent = at
             except (SessionGone, sqlite3.OperationalError):   # ended meanwhile, or a locked database: next tick
                 continue
+
+    def tell_context(self) -> None:
+        """Each session told its context size (context_notice) as it passes CONTEXT_FIRST and
+        each CONTEXT_STEP after (#350), tab and SDK alike: once per threshold per compaction
+        cycle, the highest when it passes several at once, and again from the first once a
+        compaction brings it back under what it was told. A session's first sight only seeds
+        it (no telling what it was already past). Only to a live session, not parked or
+        mid-operation; the context only grows as it works, so this never wakes an idle one."""
+        sessions = {s["id"]: s for s in self.sessions}
+        for sid in [sid for sid in self.told if sid not in sessions]:
+            del self.told[sid]
+        for sid, s in sessions.items():
+            follower = self.contexts.get(sid)
+            if follower is None or not follower.ready:
+                continue
+            snap = transcript_usage.current(follower.snap, host_context(s))
+            mark = context_mark(snap.context)
+            told = self.told.setdefault(sid, mark)
+            if mark < told:   # compacted: the climb starts again
+                self.told[sid] = mark
+            if (mark <= told or s["parked"] or operating(s)
+                    or self.statuses.get(sid) not in ("live", "stalled")):
+                continue
+            try:
+                self.store.notice(sid, context_notice(snap.context, snap.max or s["context_max"], runner(s) == "tab"))
+            except (SessionGone, sqlite3.OperationalError):   # ended meanwhile, or a locked database: next tick
+                continue
+            self.told[sid] = mark
 
     def watch_agents(self) -> None:
         """Each session's subagents brought up to date as A items, on a worker thread: every

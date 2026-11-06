@@ -1102,6 +1102,47 @@ def test_a_real_turn_restarts_the_quiet_time(hub, store, sid):
     assert len(notices(store, sid)) == 2, "quiet again from 58 minutes: a second keepalive inside the hour"
 
 
+def size_notice(n, window=None, tab=True):
+    return hub_mod.context_notice(n, window, tab)
+
+
+@pytest.mark.parametrize("sizes, state, told_of, desc", [
+    ([250_000], {}, [], "first sight at 250k: silent, already past it"),
+    ([199_000, 201_000], {}, [size_notice(201_000)], "199k to 201k: told of 200k"),
+    ([201_000, 299_000], {}, [], "201k to 299k: no new threshold"),
+    ([299_000, 350_000], {}, [size_notice(350_000)], "299k to 350k: told of 300k"),
+    ([210_000, 420_000, 430_000], {}, [size_notice(420_000)], "210k to 420k: told once, of the highest (400k)"),
+    ([210_000, 40_000, 205_000], {}, [size_notice(205_000)], "compacted to 40k, then 205k: told of 200k again"),
+    ([199_000, 214_400], {"max": 800_000}, [size_notice(214_400, 800_000)], "a window under 1M: named"),
+    ([199_000, 214_400], {"max": 1_000_000}, [size_notice(214_400)], "a 1M window: not named"),
+    ([199_000, 201_000], {"parked": True}, [], "parked: never told"),
+    ([199_000, 201_000], {"operating": True}, [], "mid-operation: never told"),
+    ([199_000, 201_000], {"status": "dead"}, [], "not live: never told"),
+    ([199_000, 201_000], {"runner": "sdk"}, [size_notice(201_000, tab=False)], "an SDK session alike, told to request_compact"),
+])
+def test_a_session_is_told_its_context_size_at_each_threshold(hub, store, sid, sizes, state, told_of, desc):
+    """#350: at 200k and each 100k after, once per compaction cycle, seeded at first sight."""
+    if state.get("parked"):
+        store.set_parked(sid, True)
+    if state.get("runner"):
+        store.set_runner(sid, state["runner"])
+    if state.get("operating"):
+        store.command(sid, "compact")
+    snap = transcript_usage.Snapshot(context=sizes[0], last_at=time.time(), stop="end_turn", max=state.get("max"))
+    warm_hub(hub, store, sid, snap, state.get("status", "live"))
+    for n in sizes:
+        snap.context = n
+        hub.tell_context()
+    assert notices(store, sid) == told_of, desc
+
+
+def test_the_context_notice_reads_as_the_session_sees_it():
+    assert hub_mod.context_notice(214_400, None) == ("Your context is now 214k tokens. If you're at a natural break, "
+                                                     "compact with request_compact(keep); otherwise carry on and compact at the next one.")
+    assert hub_mod.context_notice(299_600, 500_000).startswith("Your context is now 300k tokens of 500k.")
+    assert "request_compact" not in hub_mod.context_notice(214_400, None, tab=True), "a tab can't call it: /compact"
+
+
 @pytest.mark.parametrize("what, alive, killed, parked, gone, desc", [
     ("end", True, [4242], 0, True, "forced Forget on a running session: stopped first, then its row deleted"),
     ("park", True, [4242], 1, False, "forced Park: stopped, then parked"),

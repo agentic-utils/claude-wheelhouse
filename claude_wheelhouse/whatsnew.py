@@ -412,6 +412,10 @@ FEATURES: tuple[Feature, ...] = (
             note="A hosted session asking to run several commands chained with &&, ||, ; or a new line is asked to run "
                  "them as separate calls, so each can match its own permission rule; a dimmed row says so. The same "
                  "command asked again comes to you."),
+    Feature("context-notices", UNRELEASED, ADVANCED,
+            note="A session is told its context size as it passes 200k tokens and every 100k after, once each "
+                 "until it compacts: the cue to compact at its next natural break (in a tab, to suggest /compact "
+                 "to you). Never for what it was already past when the wheelhouse started."),
 
 )
 

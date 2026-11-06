@@ -18,3 +18,6 @@
 - While the person is away, the wheelhouse may send a `[wheelhouse] Keepalive` or
   `[wheelhouse] Check:` notification about every 50 minutes to keep your prompt cache warm.
   Do as it says and nothing more.
+- The wheelhouse tells you your context size as it passes 200k tokens and every 100k after
+  (`[wheelhouse] Your context is now ...`): that's the cue to suggest the person types
+  `/compact` at your next natural break (`request_compact` works only in SDK mode).
