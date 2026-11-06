@@ -202,14 +202,15 @@ def arrange(spec: str, raw: dict) -> dict:
 
 
 def session_key(spec: str, s, running: bool, at: int, name: str = "", context: int | None = None) -> tuple[tuple, str]:
-    """A session's sort key and its group's token. Ordering off: unparked then parked, in
-    creation order (at, its place in the store's list) for those not placed; under dot*, running
+    """A session's sort key and its group's token. Ordering off: unparked then parked, each
+    in the person's order, those not placed first, in creation order (at, its place in the
+    store's list): parked leads the key, not the pos, as parking moves no pos (#352); under dot*, running
     first, then the latest activity; under another column (name, its natural key; context, its
     size in tokens; the open questions, unseen decisions and drafts, their counts), by it, then
     as under dot*; a context not known yet last either way. Parked sessions keep to the foot
     under every sort."""
     if not spec:
-        return keyed(s, MANUAL, 0, 0, (s["parked"], at))
+        return keyed(s, MANUAL, 0, (s["parked"],), at)
     col, mark = parse(spec)
     last = Desc(field(s, "last_at") or s["created_at"])
     if col not in SESSION_COLUMNS[1:]:   # dot*

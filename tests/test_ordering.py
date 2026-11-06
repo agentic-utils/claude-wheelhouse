@@ -196,7 +196,44 @@ def test_sessions_off_keep_creation_order_until_placed():
     rows[0].update(pos=0, pos_group="manual")
     rows[2].update(pos=1, pos_group="manual")
     keyed = {s["id"]: ordering.session_key("", s, False, i)[0] for i, s in enumerate(rows)}
-    assert sorted(keyed, key=keyed.get) == ["b", "a", "c"], "a newcomer first, the placed as the person put them"
+    assert sorted(keyed, key=keyed.get) == ["b", "c", "a"], "a newcomer first, the placed as the person put them"
+
+
+def off_order(rows: str) -> tuple[list, dict]:
+    """Ordering off over rows "id:parked:pos" (pos - for none): the order, and each row's token."""
+    sessions = [dict(zip(("id", "parked", "pos"), r.split(":"))) for r in rows.split()]
+    for s in sessions:
+        s.update(parked=int(s["parked"]), created_at=T0.format(0),
+                 pos=None if s["pos"] == "-" else float(s["pos"]), pos_group=None if s["pos"] == "-" else "manual")
+    keyed = {s["id"]: ordering.session_key("", s, False, i) for i, s in enumerate(sessions)}
+    return sorted(keyed, key=lambda k: keyed[k][0]), {k: t for k, (_, t) in keyed.items()}
+
+
+@pytest.mark.parametrize("rows, want, desc", [
+    ("a:1:0 b:0:1 c:1:2 d:1:3 e:0:4", "b e a c d", "#352: parked placed above the unparked still at the foot"),
+    ("a:0:0 b:0:1 c:1:2", "a b c", "parked placed last: as placed"),
+    ("a:1:0 b:0:1 c:0:-", "c b a", "a newcomer first among the unparked, the parked still last"),
+    ("a:1:- b:1:0 c:0:1", "c a b", "a parked newcomer first among the parked"),
+])
+def test_sessions_off_parked_at_the_foot(rows, want, desc):
+    assert off_order(rows)[0] == want.split(), desc
+
+
+@pytest.mark.parametrize("moved, before, after, want, desc", [
+    ("b", "a", None, "b a c d", "unparked within the unparked"),
+    ("d", "c", None, "a b d c", "parked within the parked"),
+    ("c", None, "d", "a b d c", "parked to the foot"),
+    ("c", "a", None, "a b c d", "parked dragged above the unparked: back at the foot"),
+    ("a", None, "d", "b a c d", "unparked dragged below the parked: the foot of the unparked"),
+])
+def test_sessions_off_drag_keeps_parked_at_the_foot(moved, before, after, want, desc):
+    rows = "a:0:0 b:0:1 c:1:2 d:1:3"
+    got, tokens = off_order(rows)
+    group, new = ordering.drop(got, tokens, moved, before=before, after=after)
+    assert group == ordering.MANUAL, f"{desc}: within, ordering stays off"
+    place = {k: i for i, k in enumerate(new)}
+    rows = " ".join(f"{k}:{p}:{place[k]}" for k, p, _ in (r.split(":") for r in rows.split()))
+    assert off_order(rows)[0] == want.split(), desc
 
 
 @pytest.mark.parametrize("order_, settled, want, desc", [

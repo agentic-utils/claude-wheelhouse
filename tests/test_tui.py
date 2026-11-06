@@ -8715,7 +8715,7 @@ async def test_session_headers_sort_and_drag_turns_it_off(store, sid, tmp_path):
         assert table.keys()[-1] == parked, "parked at the foot"
         await drag_row(pilot, table, 0, table.row_count - 1)
         assert str(table.ordered_columns[0].label) == "", "across groups: ordering off"
-        assert [k for k in table.final() if k] == [other, parked, sid], "as dropped: the parked one no longer sinks"
+        assert [k for k in table.final() if k] == [other, sid, parked], "as dropped, the parked one still at the foot (#352)"
         assert store.setting("layout.sort.sessions") == ""
 
 
