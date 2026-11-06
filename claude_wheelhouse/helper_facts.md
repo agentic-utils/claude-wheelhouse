@@ -1,4 +1,4 @@
-<!-- fact sheet stamp: version 239, 2026-11-06T09:54:46Z, source de785d6f20fb3e4d (make facts restamps it: AGENTS.md) -->
+<!-- fact sheet stamp: version 239, 2026-11-06T09:56:47Z, source f67410f1c846a10a (make facts restamps it: AGENTS.md) -->
 # Wheelhouse fact sheet
 
 What the helper chat knows before any question. The guide below is written by hand; the
@@ -60,8 +60,8 @@ daemon running.
   task in the inbox ("Compact <name>: <k>k context", done once compacted) and a plain blue line
   per stage in the conversation ("Compaction: compacting"), and the session's eye is blue
   meanwhile; what you send it waits until it's done. Its animated art shows over the middle of
-  the conversation with the crew's latest line; Esc, its ✕ at the top right or a click on it hides
-  it until the next compaction, and its last frame stays 8 seconds after the end.
+  the conversation with the crew's latest line; Esc or a click hides it until the next compaction,
+  and its last frame stays 8 seconds after the end.
 - Tour: the guided tour, resumed with Alt+T while the title bar shows its badge.
 - Doc editor: a click on a doc (an item's or a decision, in Detail or full screen) opens an
   editor below it. Ctrl+S saves to the file; the pane's title says `edited · Ctrl+S saves`
