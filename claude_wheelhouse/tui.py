@@ -3284,6 +3284,15 @@ class Hint(Label):
 OWN_ENTER = (Button, TextArea, DataTable, OptionList, DirectoryTree, Select, RadioSet)
 
 
+class WrapCheckbox(Checkbox):
+    """A Checkbox whose caption wraps at the dialog's width, the dialog growing with it, as a
+    .dialog-prompt does (#353): Textual's keeps to one line, cut with an ellipsis."""
+    DEFAULT_CSS = "WrapCheckbox { width: 1fr; height: auto; text-wrap: wrap; }"
+
+    def get_content_height(self, container, viewport, width: int) -> int:
+        return self.render().get_height(self.styles, width)
+
+
 class Dialog(ModalScreen):
     """A dialog. Every answer, by key, button or Enter in a box, is action_answer. A key acts
     once the one before it has landed (take_key), so a key typed behind the one that answers
@@ -4093,8 +4102,8 @@ class RunCommand(Dialog):
             yield Label(self.why, classes="dialog-prompt", markup=False)
             yield Label(f"in {self.cwd}", classes="dialog-note", markup=False)
             yield UndoInBounds(self.text, id="run-text", soft_wrap=False, show_line_numbers=False)
-            yield Checkbox(f"Send the output back to {self.name_}" + (" (it asked for it)" if self.wanted else ""),
-                           self.wanted, id="run-send")
+            yield WrapCheckbox(f"Send the output back to {self.name_}" + (" (it asked for it)" if self.wanted else ""),
+                               self.wanted, id="run-send")
             yield Label("The output (and the command, if you edit it) goes into the session's transcript: "
                         "untick if it may show secrets.", id="run-warning",
                         markup=False)

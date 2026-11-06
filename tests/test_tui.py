@@ -10458,6 +10458,29 @@ async def test_run_opens_the_command_and_runs_what_the_box_holds(store, tmp_path
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("name, wanted, size, desc", [
+    ("Magento production support - ABN-621", True, (80, 24), "#353: a long name, asked for, at 80x24"),
+    ("demo", True, (80, 24), "a short name, asked for"),
+    ("Magento production support - ABN-621", False, (80, 24), "not asked for"),
+    ("Magento production support - ABN-621", True, (160, 40), "a wide screen"),
+])
+async def test_the_run_dialogs_send_caption_shows_whole(store, name, wanted, size, desc):
+    """#353: the Send the output back caption wraps inside the dialog, every word of it shown."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=size) as pilot:
+        await pilot.pause()
+        app.push_screen(tui.RunCommand("C1", name, "List the files", "/tmp", "ls -la", wanted))
+        await pilot.pause()
+        check = app.screen.query_one("#run-send", tui.Checkbox)
+        box = app.screen.query_one("#dialog").content_region
+        assert box.contains_region(check.region), f"{desc}: inside the dialog"
+        rows = [s.text.strip("▊▎ ") for s in check.render_lines(check.region.reset_offset)][1:-1]   # in its border
+        shown = " ".join(" ".join(rows).split())
+        caption = f"Send the output back to {name}" + (" (it asked for it)" if wanted else "")
+        assert caption in shown, f"{desc}: {shown!r}"
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize("code, run_shows, desc", [
     (None, True, "not yet run: Run shows"),
     (0, False, "run, exit 0: Run goes"),
