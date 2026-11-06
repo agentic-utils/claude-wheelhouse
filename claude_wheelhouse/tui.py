@@ -2009,13 +2009,16 @@ class CompactorOverlay(Widget, can_focus=False):
     12 frame (big), the scene's small still below that or with the app's animation off the big
     still, and the cycle's newest crew excerpt under it. Absolute, so it takes no height from
     the conversation, which scrolls and follows under it as ever (a wheel over it scrolls it).
-    Esc or a click hides it for the rest of its cycle (dismiss); an end's final frame stays
+    Esc or a click (its ✕ at the top right, #349, or anywhere on it) hides it for the rest of
+    its cycle (dismiss); an end's final frame stays
     compactor.LINGER seconds, then it goes the same way. Its own timer, at DOCK_FPS (or the
     app's rate if lower), runs only while it shows, and draws only this widget (#287, #268)."""
     DEFAULT_CSS = """
     CompactorOverlay { position: absolute; overlay: screen; display: none; height: auto; padding: 0 1;
-                       border: round #2f8cff; background: #0a0a1a; }
+                       border: round #2f8cff; background: #0a0a1a;
+                       border-title-align: right; border-title-color: #c8d0e0; }
     """
+    CLOSE = "✕"   # its border title, top right (#349): a click on it, as anywhere, dismisses
     timer = None
     linger = None   # an end's one-shot: the final frame's LINGER seconds out
     shown: "compactor.Docked | None" = None
@@ -2026,6 +2029,7 @@ class CompactorOverlay(Widget, can_focus=False):
     def __init__(self, **kw) -> None:
         super().__init__(**kw)
         self.dismissed: set[str] = set()   # cycles hidden for the rest of their run, by id
+        self.border_title = self.CLOSE
 
     @staticmethod
     def now() -> float:
@@ -4934,6 +4938,7 @@ MOUSE = ("Click selects a row; in the session list, a click on the selected sess
          "A click on a row's first column pins it (📌) or clears its pin, as Alt+P does. "
          "A click on an emoji suggestion under the answer box takes it in place of the code typed. "
          "A click on the 🔍 at the inbox's top right opens its search, as typing in the inbox does. "
+         "A click on the ✕ at the top right of a compaction's art hides it until the next compaction, as Esc does. "
          "A click on an item's id in Detail (a doc, a conversation, a thread) goes to that item of the same session. "
          "A click on the ⓘ at the stats pane's top right opens the selected session's info: its id (C copies it), "
          "user and machine, directory, branch, model, mode, start, transcript and its MCP server, flagged when stale. "

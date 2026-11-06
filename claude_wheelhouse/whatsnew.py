@@ -228,9 +228,9 @@ FEATURES: tuple[Feature, ...] = (
     Feature("compactor-dock", UNRELEASED, ADVANCED,
             note="A running compaction's trash compactor shows over the middle of the conversation, big and animated, "
                  "with the crew's latest line under it: the walls grind in, the crew dodge, sparks fly and the dianoga "
-                 "grabs Luke. The conversation under it keeps a plain line per stage; Esc or a click hides it until "
-                 "the next compaction, and its last frame stays 8 seconds. The session's notes for compaction fold "
-                 "to one line."),
+                 "grabs Luke. The conversation under it keeps a plain line per stage; Esc, its ✕ at the top right or "
+                 "a click on it hides it until the next compaction, and its last frame stays 8 seconds. The "
+                 "session's notes for compaction fold to one line."),
     Feature("compactor-star-trek", UNRELEASED, ADVANCED,
             note="Compaction has a second scene, picked per cycle: Star Trek's engine room, with Scotty thumping "
                  "the console as the warp core races and the CONTEXT gauge falls to a sliver, Kirk pacing and "
