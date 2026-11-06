@@ -34,6 +34,9 @@ to a session: launch.protocol_file drops it. -->
   `request_compact(keep)`, `keep` being what to carry through (open threads, decisions,
   files, the next step). The wheelhouse compacts you once your turn ends, never during it,
   so end your turn soon after. One request at a time, and not again within 30 minutes.
+  The wheelhouse tells you your context size as it passes 200k tokens and every 100k after
+  (`[wheelhouse] Your context is now ...`): that's the cue to compact at your next natural
+  break.
 - When the wheelhouse asks you for notes to keep through compaction, write them and end
   your turn: the person can't send you anything until the compaction is done, and after 2
   minutes they are asked whether to keep waiting.

@@ -1102,6 +1102,74 @@ def test_a_real_turn_restarts_the_quiet_time(hub, store, sid):
     assert len(notices(store, sid)) == 2, "quiet again from 58 minutes: a second keepalive inside the hour"
 
 
+def size_notice(n, window=None, tab=True):
+    return hub_mod.context_notice(n, window, tab)
+
+
+@pytest.mark.parametrize("steps, state, told_of, desc", [
+    ([250_000], {}, [], "first sight at 250k: silent, already past it"),
+    ([199_000, 201_000], {}, [size_notice(201_000)], "199k to 201k: told of 200k"),
+    ([201_000, 299_000], {}, [], "201k to 299k: no new threshold"),
+    ([299_000, 350_000], {}, [size_notice(350_000)], "299k to 350k: told of 300k"),
+    ([210_000, 420_000, 430_000], {}, [size_notice(420_000)], "210k to 420k: told once, of the highest (400k)"),
+    ([210_000, ("compact", 40_000), 205_000], {}, [size_notice(205_000)], "compacted to 40k, then 205k: told of 200k again"),
+    ([210_000, 310_000, ("rewind", 250_000), 310_000], {}, [size_notice(310_000)], "a drop with no compaction (/rewind): 300k not told again"),
+    ([210_000, 310_000, ("compact", 305_000), ("rewind", 250_000), 310_000], {}, [size_notice(310_000)],
+     "a compaction left over 300k, then /rewind: still not told again"),
+    ([210_000, 310_000, ("stale", 310_000), ("compact", 40_000), 205_000], {}, [size_notice(310_000), size_notice(205_000)],
+     "a compaction read before its size (no response since): noted once the drop shows"),
+    ([199_000, ("idle", 203_000), ("keepalive", 203_000)], {}, [], "the wheelhouse's own keepalive: no turn of its own"),
+    ([199_000, ("idle", 203_000)], {}, [], "passed on a turn's last response: nothing while idle"),
+    ([199_000, ("idle", 203_000), 206_000], {}, [size_notice(206_000)], "then told at the next turn's first tool call"),
+    ([199_000, ("idle", 203_000)], {"runner": "sdk"}, [], "SDK: nothing while its host rests"),
+    ([199_000, ("idle", 203_000), 206_000], {"runner": "sdk"}, [size_notice(206_000, tab=False)], "SDK: told once its host works again"),
+    ([199_000, 214_400], {"max": 800_000}, [size_notice(214_400, 800_000)], "a window under 1M: named"),
+    ([199_000, 214_400], {"max": 1_000_000}, [size_notice(214_400)], "a 1M window: not named"),
+    ([199_000, 201_000], {"parked": True}, [], "parked: never told"),
+    ([199_000, 201_000], {"operating": True}, [], "mid-operation: never told"),
+    ([199_000, 201_000], {"status": "dead"}, [], "not live: never told"),
+    ([199_000, 201_000], {"runner": "sdk"}, [size_notice(201_000, tab=False)], "an SDK session alike, told to request_compact"),
+])
+def test_a_session_is_told_its_context_size_at_each_threshold(hub, store, sid, steps, state, told_of, desc):
+    """#350: at 200k and each 100k after, once per compaction cycle, seeded at first sight,
+    and only mid-turn. A step is a size read mid-turn (a tool call), or (how, size): idle
+    (its turn ended there), compact (a compaction, then that size) or rewind (a drop, no compaction)."""
+    sdk = state.get("runner") == "sdk"
+    if state.get("parked"):
+        store.set_parked(sid, True)
+    if sdk:
+        store.set_runner(sid, "sdk")
+    if state.get("operating"):
+        store.command(sid, "compact")
+    at = time.time() - 1000
+    snap = transcript_usage.Snapshot(context=0, last_at=at, stop="tool_use", max=state.get("max"))
+    warm_hub(hub, store, sid, snap, state.get("status", "live"))
+    for step in steps:
+        how, n = step if isinstance(step, tuple) else ("tool", step)
+        at += 10   # the transcript's clock, well before now (a notice sent now is after it)
+        if how == "stale":   # a compaction in the transcript, no response read since
+            snap.compactions = [*snap.compactions, transcript_usage.Compaction(at, "manual", n, 0)]
+        elif how == "compact" and not (snap.compactions and snap.compactions[-1].after == 0):
+            snap.compactions = [*snap.compactions, transcript_usage.Compaction(at, "manual", snap.context, n)]
+        if how == "keepalive":
+            store.notice(sid, "Keepalive")
+        elif how != "stale":
+            snap.context, snap.last_at = n, at + 1
+        snap.stop = "tool_use" if how in ("tool", "compact", "rewind") else "end_turn"
+        if sdk:
+            store.set_activity(sid, "idle" if how == "idle" else "running Bash")
+            warm_hub(hub, store, sid, snap, state.get("status", "live"))
+        hub.tell_context()
+    assert [n for n in notices(store, sid) if n != "Keepalive"] == told_of, desc
+
+
+def test_the_context_notice_reads_as_the_session_sees_it():
+    assert hub_mod.context_notice(214_400, None) == ("Your context is now 214k tokens. If you're at a natural break, "
+                                                     "compact with request_compact(keep); otherwise carry on and compact at the next one.")
+    assert hub_mod.context_notice(299_600, 500_000).startswith("Your context is now 300k tokens of 500k.")
+    assert "request_compact" not in hub_mod.context_notice(214_400, None, tab=True), "a tab can't call it: /compact"
+
+
 @pytest.mark.parametrize("what, alive, killed, parked, gone, desc", [
     ("end", True, [4242], 0, True, "forced Forget on a running session: stopped first, then its row deleted"),
     ("park", True, [4242], 1, False, "forced Park: stopped, then parked"),

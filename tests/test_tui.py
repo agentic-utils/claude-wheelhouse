@@ -11032,6 +11032,31 @@ async def test_esc_or_a_click_hides_the_overlay_for_the_cycle(store, sid, live, 
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("size, big, desc", [
+    ((160, 50), True, "the big frame"),
+    ((120, 40), False, "the small still"),
+])
+async def test_the_overlay_closes_on_its_close_icon(store, sid, live, overlay_clock, size, big, desc):
+    """#349: a ✕ at the top right of its border, big or small, and a click on it hides it for
+    the rest of the cycle, as Esc does."""
+    cid, _ = cycle(store, sid, ["preparing", "compacting"], overlay_clock)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=size) as pilot:
+        await pick(app, pilot, sid)
+        app.refresh_data()
+        await pilot.pause()
+        overlay = app.compactor_overlay
+        assert overlay.display and overlay.big() == big, desc
+        top = overlay.render_lines(overlay.region.reset_offset)[0].text
+        x = top.find(overlay.CLOSE)
+        assert x >= overlay.region.width - 4 and top.startswith("╭") and top.endswith("╮"), f"{desc}: {top!r}"
+        await pilot.click("#compactor-overlay", offset=(x, 0))
+        await pilot.pause()
+        assert not overlay.display and overlay.timer is None, f"{desc}: hidden, its timer stopped"
+        assert overlay.dismissed == {cid}, f"{desc}: for the rest of its cycle"
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize("end, after, left, desc", [
     ("completed", 2.0, 6.0, "compacted: its final frame for the rest of LINGER"),
     ("failed", 7.5, 0.5, "failed: the same"),

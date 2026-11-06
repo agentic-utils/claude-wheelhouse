@@ -612,7 +612,7 @@ how to work.
   posts and reads through. Each tool's description is its docstring.
 - [The monitor](claude_wheelhouse/monitor.py) ([plugin entry](claude_wheelhouse/plugin/monitors/monitors.json))
   delivers your answers, the Park and Stop & Forget requests, the note an adopted session gets
-  on joining, the notes a fork and its parent get ([`fork.py`](claude_wheelhouse/fork.py)), and the keepalive and check messages, as `[wheelhouse]` notifications.
+  on joining, the notes a fork and its parent get ([`fork.py`](claude_wheelhouse/fork.py)), the keepalive and check messages, and the session's context size as it passes 200k tokens and every 100k after (the cue to compact at its next natural break), as `[wheelhouse]` notifications.
 - [The plugin's hook](claude_wheelhouse/plugin/hooks/hooks.json): after a compaction,
   the session's open tasks and questions.
 - [Session steps](claude_wheelhouse/steps.py): what a session is told at Compact and after

@@ -228,9 +228,9 @@ FEATURES: tuple[Feature, ...] = (
     Feature("compactor-dock", UNRELEASED, ADVANCED,
             note="A running compaction's trash compactor shows over the middle of the conversation, big and animated, "
                  "with the crew's latest line under it: the walls grind in, the crew dodge, sparks fly and the dianoga "
-                 "grabs Luke. The conversation under it keeps a plain line per stage; Esc or a click hides it until "
-                 "the next compaction, and its last frame stays 8 seconds. The session's notes for compaction fold "
-                 "to one line."),
+                 "grabs Luke. The conversation under it keeps a plain line per stage; Esc, its ✕ at the top right or "
+                 "a click on it hides it until the next compaction, and its last frame stays 8 seconds. The "
+                 "session's notes for compaction fold to one line."),
     Feature("compactor-star-trek", UNRELEASED, ADVANCED,
             note="Compaction has a second scene, picked per cycle: Star Trek's engine room, with Scotty thumping "
                  "the console as the warp core races and the CONTEXT gauge falls to a sliver, Kirk pacing and "
@@ -412,6 +412,11 @@ FEATURES: tuple[Feature, ...] = (
             note="A hosted session asking to run several commands chained with &&, ||, ; or a new line is asked to run "
                  "them as separate calls, so each can match its own permission rule; a dimmed row says so. The same "
                  "command asked again comes to you."),
+    Feature("context-notices", UNRELEASED, ADVANCED,
+            note="A session is told its context size as it passes 200k tokens and every 100k after, once each "
+                 "until it compacts: the cue to compact at its next natural break (in a tab, to suggest /compact "
+                 "to you). Told only during a turn, never waking an idle session, and never for what it was "
+                 "already past when the wheelhouse started."),
 
 )
 

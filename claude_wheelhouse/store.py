@@ -2230,10 +2230,12 @@ class Store:
                 ORDER BY id""", (sid, cutoff, *TRANSIENT))
         return [f"{r['ref']} {'reply owed' if r['kind'] in ('question', 'doc') else r['status']}" for r in rows]
 
-    def heard_at(self, sid: str) -> str | None:
+    def heard_at(self, sid: str, notices: bool = True) -> str | None:
         """When the session was last sent anything: the latest a message of the person's (a
-        notice included) was sent, claimed or delivered (REACHED); None if never."""
-        row = self._one(f"""SELECT max(CASE WHEN author = 'person' AND draft = 0 THEN {REACHED.format(m="")} END) AS at
+        notice included, unless notices is false) was sent, claimed or delivered (REACHED);
+        None if never."""
+        kind = "" if notices else " AND kind IS NOT 'notice'"
+        row = self._one(f"""SELECT max(CASE WHEN author = 'person' AND draft = 0{kind} THEN {REACHED.format(m="")} END) AS at
                               FROM messages WHERE session_id = ?""", (sid,))
         return row["at"] or None
 
