@@ -1,9 +1,11 @@
 import json
 import sys
+import time
 
 import pytest
 from textual import events
 from textual.geometry import Region
+from textual.pilot import Pilot
 from textual.widgets import Button, DataTable, Input, TextArea
 
 from claude_wheelhouse import callout, features, launch, tutorial, whatsnew
@@ -15,6 +17,33 @@ from claude_wheelhouse.tui import BUTTONS, Compose, Dialog, ForgetChoice, ItemLi
 from claude_wheelhouse.tutorial import should_offer as real_should_offer   # before conftest stubs it
 from claude_wheelhouse.tutorial import state as real_state
 from test_tui import dwell, one_second
+
+
+def unsettled(app) -> list[str]:
+    """What has yet to land after a pause: a conversation fetched on a thread, "reading…" shown
+    till it's here (WheelhouseApp.conversation, #327), and a callout taken away
+    (drop_callouts), still in the DOM beside the next dialog's till Textual prunes it."""
+    main = app.screen_stack[0] if app.screen_stack else None
+    return ([f"conversations reading: {sorted(app.conversations_asked)}"] if getattr(app, "conversations_asked", None)
+            else []) + (["a callout going"] if main is not None and any(c._pruning for c in main.query(TourCallout))
+                        else [])
+
+
+@pytest.fixture(autouse=True)
+def pause_settles(monkeypatch):
+    """Here pilot.pause() waits on those landings too (#356). Textual's pause waits for the
+    process to go idle, CPU time against wall time, and a loaded runner (or a thread waiting on
+    the daemon) looks idle: the next assert read "_reading…_", or the callout going, not the
+    next one. As #307's tests wait on the call landing, not on a count of pauses."""
+    pause = Pilot.pause
+
+    async def settled(pilot, delay=None):
+        await pause(pilot, delay)
+        deadline = time.monotonic() + 10
+        while waiting := unsettled(pilot.app):
+            assert time.monotonic() < deadline, f"never landed: {waiting}"
+            await pause(pilot, 0.01)
+    monkeypatch.setattr(Pilot, "pause", settled)
 
 
 def demo(store, runner="tab"):
