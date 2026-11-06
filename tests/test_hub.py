@@ -1114,6 +1114,11 @@ def size_notice(n, window=None, tab=True):
     ([210_000, 420_000, 430_000], {}, [size_notice(420_000)], "210k to 420k: told once, of the highest (400k)"),
     ([210_000, ("compact", 40_000), 205_000], {}, [size_notice(205_000)], "compacted to 40k, then 205k: told of 200k again"),
     ([210_000, 310_000, ("rewind", 250_000), 310_000], {}, [size_notice(310_000)], "a drop with no compaction (/rewind): 300k not told again"),
+    ([210_000, 310_000, ("compact", 305_000), ("rewind", 250_000), 310_000], {}, [size_notice(310_000)],
+     "a compaction left over 300k, then /rewind: still not told again"),
+    ([210_000, 310_000, ("stale", 310_000), ("compact", 40_000), 205_000], {}, [size_notice(310_000), size_notice(205_000)],
+     "a compaction read before its size (no response since): noted once the drop shows"),
+    ([199_000, ("idle", 203_000), ("keepalive", 203_000)], {}, [], "the wheelhouse's own keepalive: no turn of its own"),
     ([199_000, ("idle", 203_000)], {}, [], "passed on a turn's last response: nothing while idle"),
     ([199_000, ("idle", 203_000), 206_000], {}, [size_notice(206_000)], "then told at the next turn's first tool call"),
     ([199_000, ("idle", 203_000)], {"runner": "sdk"}, [], "SDK: nothing while its host rests"),
@@ -1136,18 +1141,26 @@ def test_a_session_is_told_its_context_size_at_each_threshold(hub, store, sid, s
         store.set_runner(sid, "sdk")
     if state.get("operating"):
         store.command(sid, "compact")
-    snap = transcript_usage.Snapshot(context=0, last_at=time.time(), stop="tool_use", max=state.get("max"))
+    at = time.time() - 1000
+    snap = transcript_usage.Snapshot(context=0, last_at=at, stop="tool_use", max=state.get("max"))
     warm_hub(hub, store, sid, snap, state.get("status", "live"))
     for step in steps:
         how, n = step if isinstance(step, tuple) else ("tool", step)
-        if how == "compact":
-            snap.compactions = [*snap.compactions, transcript_usage.Compaction(time.time(), "manual", snap.context, n)]
-        snap.context, snap.stop = n, "end_turn" if how == "idle" else "tool_use"
+        at += 10   # the transcript's clock, well before now (a notice sent now is after it)
+        if how == "stale":   # a compaction in the transcript, no response read since
+            snap.compactions = [*snap.compactions, transcript_usage.Compaction(at, "manual", n, 0)]
+        elif how == "compact" and not (snap.compactions and snap.compactions[-1].after == 0):
+            snap.compactions = [*snap.compactions, transcript_usage.Compaction(at, "manual", snap.context, n)]
+        if how == "keepalive":
+            store.notice(sid, "Keepalive")
+        elif how != "stale":
+            snap.context, snap.last_at = n, at + 1
+        snap.stop = "tool_use" if how in ("tool", "compact", "rewind") else "end_turn"
         if sdk:
             store.set_activity(sid, "idle" if how == "idle" else "running Bash")
             warm_hub(hub, store, sid, snap, state.get("status", "live"))
         hub.tell_context()
-    assert notices(store, sid) == told_of, desc
+    assert [n for n in notices(store, sid) if n != "Keepalive"] == told_of, desc
 
 
 def test_the_context_notice_reads_as_the_session_sees_it():

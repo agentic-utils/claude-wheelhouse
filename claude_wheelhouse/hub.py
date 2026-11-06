@@ -1689,8 +1689,8 @@ class Hub:
         """Each session told its context size (context_notice) as it passes CONTEXT_FIRST and
         each CONTEXT_STEP after (#350), tab and SDK alike: once per threshold per compaction
         cycle, the highest when it passes several at once, and again from the first once a
-        compaction (a newer one than it was last told after) brings it back under what it was
-        told; a drop with none (/rewind) tells nothing again. A session's first sight only
+        compaction (each noted as it's seen) brings it back under what it was told; a drop
+        with none since (/rewind) tells nothing again. A session's first sight only
         seeds it (no telling what it was already past). Only to a live session, not parked
         or mid-operation, and only mid-turn (mid_turn): a threshold its turn's last response
         passed waits for its next turn, so the notice never wakes an idle one."""
@@ -1704,8 +1704,10 @@ class Hub:
             snap = transcript_usage.current(follower.snap, host_context(s))
             mark, compacted = context_mark(snap.context), snap.compactions[-1].at if snap.compactions else 0.0
             told, since = self.told.setdefault(sid, (mark, compacted))
-            if compacted > since and mark < told:   # compacted: the climb starts again
-                told, since = self.told[sid] = (mark, compacted)
+            if compacted > since and (snap.estimate or (snap.last_at or 0) > compacted):
+                # each compaction noted once its size is read (a response since, or the host's count):
+                # the climb starts again if it left the context under what was told
+                told, since = self.told[sid] = (min(mark, told), compacted)
             if (mark <= told or s["parked"] or operating(s)
                     or self.statuses.get(sid) not in ("live", "stalled")):
                 continue
@@ -1721,10 +1723,12 @@ class Hub:
         """Whether a session is in a turn, so a notice now lands in it rather than starting
         one: an SDK host's activity line not resting (working); a tab's last response stopped
         for a tool, or something sent to it since that response (Store.heard_at), as
-        keep_warm reads it."""
+        keep_warm reads it, but never the wheelhouse's own notices (a keepalive starts no turn
+        of the person's)."""
         if runner(s) == "sdk":
             return working(s)
-        return snap.stop == "tool_use" or (transcript_usage.epoch(self.store.heard_at(s["id"]) or "") or 0) > (snap.last_at or 0)
+        heard = transcript_usage.epoch(self.store.heard_at(s["id"], notices=False) or "") or 0
+        return snap.stop == "tool_use" or heard > (snap.last_at or 0)
 
     def watch_agents(self) -> None:
         """Each session's subagents brought up to date as A items, on a worker thread: every
