@@ -422,9 +422,10 @@ class Hub:
         # the tab sessions' keepalive (keep_warm), by session: as the host keeps its own
         self.warmth: dict[str, Warmth] = {}
         self.keepalive_for = features.keepalive_hours() * 3600   # seconds; 0: no keepalive
-        # the context threshold each session was last told of (tell_context), by session: seeded
-        # at first sight, so a restart never tells a big session what it was already past
-        self.told: dict[str, int] = {}
+        # the context threshold each session was last told of (tell_context), and its newest
+        # compaction then, by session: seeded at first sight, so a restart never tells a big
+        # session what it was already past
+        self.told: dict[str, tuple[int, float]] = {}
         self.unpark_running()
 
     def unpark_running(self) -> None:
@@ -1688,9 +1689,11 @@ class Hub:
         """Each session told its context size (context_notice) as it passes CONTEXT_FIRST and
         each CONTEXT_STEP after (#350), tab and SDK alike: once per threshold per compaction
         cycle, the highest when it passes several at once, and again from the first once a
-        compaction brings it back under what it was told. A session's first sight only seeds
-        it (no telling what it was already past). Only to a live session, not parked or
-        mid-operation; the context only grows as it works, so this never wakes an idle one."""
+        compaction (a newer one than it was last told after) brings it back under what it was
+        told; a drop with none (/rewind) tells nothing again. A session's first sight only
+        seeds it (no telling what it was already past). Only to a live session, not parked
+        or mid-operation, and only mid-turn (mid_turn): a threshold its turn's last response
+        passed waits for its next turn, so the notice never wakes an idle one."""
         sessions = {s["id"]: s for s in self.sessions}
         for sid in [sid for sid in self.told if sid not in sessions]:
             del self.told[sid]
@@ -1699,18 +1702,29 @@ class Hub:
             if follower is None or not follower.ready:
                 continue
             snap = transcript_usage.current(follower.snap, host_context(s))
-            mark = context_mark(snap.context)
-            told = self.told.setdefault(sid, mark)
-            if mark < told:   # compacted: the climb starts again
-                self.told[sid] = mark
+            mark, compacted = context_mark(snap.context), snap.compactions[-1].at if snap.compactions else 0.0
+            told, since = self.told.setdefault(sid, (mark, compacted))
+            if compacted > since and mark < told:   # compacted: the climb starts again
+                told, since = self.told[sid] = (mark, compacted)
             if (mark <= told or s["parked"] or operating(s)
                     or self.statuses.get(sid) not in ("live", "stalled")):
                 continue
             try:
+                if not self.mid_turn(s, snap):
+                    continue   # held for its next turn
                 self.store.notice(sid, context_notice(snap.context, snap.max or s["context_max"], runner(s) == "tab"))
             except (SessionGone, sqlite3.OperationalError):   # ended meanwhile, or a locked database: next tick
                 continue
-            self.told[sid] = mark
+            self.told[sid] = (mark, since)
+
+    def mid_turn(self, s, snap) -> bool:
+        """Whether a session is in a turn, so a notice now lands in it rather than starting
+        one: an SDK host's activity line not resting (working); a tab's last response stopped
+        for a tool, or something sent to it since that response (Store.heard_at), as
+        keep_warm reads it."""
+        if runner(s) == "sdk":
+            return working(s)
+        return snap.stop == "tool_use" or (transcript_usage.epoch(self.store.heard_at(s["id"]) or "") or 0) > (snap.last_at or 0)
 
     def watch_agents(self) -> None:
         """Each session's subagents brought up to date as A items, on a worker thread: every

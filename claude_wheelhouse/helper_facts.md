@@ -1,4 +1,4 @@
-<!-- fact sheet stamp: version 237, 2026-11-06T08:43:49Z, source 34bfbce9462c78d7 (make facts restamps it: AGENTS.md) -->
+<!-- fact sheet stamp: version 238, 2026-11-06T09:52:02Z, source c45ae8c8554263a3 (make facts restamps it: AGENTS.md) -->
 # Wheelhouse fact sheet
 
 What the helper chat knows before any question. The guide below is written by hand; the
@@ -426,4 +426,4 @@ The app's command line args (make args). Give them to make run in ARGS, for exam
 - An item's id in Detail (T3, Q25, PR276 in a doc, a conversation or a thread) is a link: a click goes to that item of the same session, as a search's pick does.
 - Ctrl+Q asks before quitting, on No, so a slip for Alt+Q quits nothing; Ctrl+Q again quits.
 - A running subagent quiet for 5 minutes (or past its tool call's own timeout) shows quiet, in amber, and its session is told once, naming it and its last action. A session can change the 5 minutes (set_watchdog); a subagent can declare a quiet spell of its own (quiet).
-- A session is told its context size as it passes 200k tokens and every 100k after, once each until it compacts: the cue to compact at its next natural break (in a tab, to suggest /compact to you). Never for what it was already past when the wheelhouse started.
+- A session is told its context size as it passes 200k tokens and every 100k after, once each until it compacts: the cue to compact at its next natural break (in a tab, to suggest /compact to you). Told only during a turn, never waking an idle session, and never for what it was already past when the wheelhouse started.

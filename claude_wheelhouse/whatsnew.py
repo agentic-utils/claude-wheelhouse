@@ -415,7 +415,8 @@ FEATURES: tuple[Feature, ...] = (
     Feature("context-notices", UNRELEASED, ADVANCED,
             note="A session is told its context size as it passes 200k tokens and every 100k after, once each "
                  "until it compacts: the cue to compact at its next natural break (in a tab, to suggest /compact "
-                 "to you). Never for what it was already past when the wheelhouse started."),
+                 "to you). Told only during a turn, never waking an idle session, and never for what it was "
+                 "already past when the wheelhouse started."),
 
 )
 
