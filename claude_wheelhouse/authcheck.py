@@ -22,6 +22,7 @@ class Cli:
     login: str                      # a runnable command that signs the person in
     subcommands: tuple[str, ...] = ()   # only these need auth (none: every use)
     hint: str = ""                  # said beside the login, never inside it
+    or_else: str = "be offline"     # what else a failed check may mean
 
 
 # one row per CLI. Unverified against an installed CLI's --help: aws, az, vercel
@@ -32,7 +33,7 @@ CLIS = (
     Cli(("az",), "az account get-access-token --output none", "az login"),
     # assumes GKE: another cluster has its own login
     Cli(("kubectl", "helm"), "kubectl version --request-timeout=5s", "gcloud auth login --update-adc",
-        hint="assuming a GKE cluster"),
+        hint="assuming a GKE cluster", or_else="be offline, or the kube context is missing or unreachable"),
     Cli(("npm",), "npm whoami", "npm login", subcommands=("publish", "unpublish", "deprecate")),
     # assumes the Google provider, the one we use
     Cli(("terraform",), "gcloud auth application-default print-access-token --quiet",
@@ -50,17 +51,40 @@ _cache: dict[str, float] = {}   # a check that passed: when
 _lock = threading.Lock()
 
 
-def word(name: str) -> re.Pattern:
-    """name as a program: not inside a longer word (ghost, my-gh) or a file name (gh.sh),
-    but after a path (/usr/bin/gh), $( or a backtick."""
-    return re.compile(rf"(?<![\w.-]){re.escape(name)}(?![\w.-])")
+# where a program may start: after a separator, $(, a backtick, ( or an opening quote
+STARTS = re.compile(r"&&|\|\||\$\(|[;|&\n`()'\"]")
+ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+WRAPPERS = {"sudo", "env", "time", "nice", "nohup", "command", "exec", "timeout", "xargs", "doas"}
+BY_NAME = {n: cli for cli in CLIS for n in cli.names}
+
+
+def programs(command: str) -> list[tuple[str, list[str]]]:
+    """Each program the command runs, with the words after it up to the next separator:
+    past env assignments and wrappers with their flags and values. A path's last part is
+    the name (/usr/bin/gh is gh)."""
+    found = []
+    for piece in STARTS.split(command):
+        words = piece.split()
+        while words and ASSIGNMENT.match(words[0]):
+            words.pop(0)
+        if words and words[0] in WRAPPERS:
+            words.pop(0)
+            while words and (words[0].startswith("-") or words[0].isdigit() or ASSIGNMENT.match(words[0])):
+                flag = words.pop(0)
+                # a short flag's value (sudo -u root), unless it's the program (sudo -E gh)
+                if len(flag) == 2 and flag[0] == "-" and words and words[0] not in BY_NAME:
+                    words.pop(0)
+        if words:
+            found.append((words[0].rsplit("/", 1)[-1], words[1:]))
+    return found
 
 
 def clis(command: str) -> list[Cli]:
-    """The listed CLIs the command names anywhere, once each, in table order."""
-    return [cli for cli in CLIS
-            if any(word(n).search(command) for n in cli.names)
-            and (not cli.subcommands or any(word(s).search(command) for s in cli.subcommands))]
+    """The listed CLIs the command runs, once each, in table order. A CLI whose login the
+    command runs is left out: it doesn't need running before itself."""
+    used = {BY_NAME[name] for name, args in programs(command) if name in BY_NAME
+            and (not BY_NAME[name].subcommands or set(args) & set(BY_NAME[name].subcommands))}
+    return [cli for cli in CLIS if cli in used and cli.login not in command]
 
 
 def run_check(cli: Cli) -> str:
@@ -100,7 +124,7 @@ def notes(command: str, ref: str) -> list[str]:
         s, name = state(cli), cli.names[0]
         hint = f" ({cli.hint})" if cli.hint else ""
         if s == SIGNED_OUT:
-            lines.append(f"{name}'s sign-in check failed ({cli.check}): it may need signing in, or be offline. "
+            lines.append(f"{name}'s sign-in check failed ({cli.check}): it may need signing in, or {cli.or_else}. "
                          f'Suggest "{cli.login}"{hint} as its own command, and ask the person to run it before {ref}.')
         elif s == UNKNOWN:
             lines.append(f"couldn't confirm {name} is signed in (its check timed out): if {ref} stops at a login "

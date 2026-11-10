@@ -19,6 +19,15 @@ def fresh_cache():
     ("timeout -s KILL 5 gcloud compute ssh vm", ["gcloud"], "past a wrapper's flag and values"),
     ("curl -H \"Bearer $(gcloud auth print-access-token)\" x", ["gcloud"], "inside $(...)"),
     ("bash -c 'kubectl get pods'", ["kubectl"], "inside bash -c"),
+    ("bash -c 'gh pr list'", ["gh"], "inside bash -c, after the opening quote"),
+    ("sudo -E gh pr list", ["gh"], "a wrapper's flag that takes no value"),
+    ("cd infra/terraform && make plan", [], "a directory named like a CLI"),
+    ("ls supabase/migrations", [], "a path through a CLI's name"),
+    ("cat charts/helm/values.yaml", [], "a CLI's name mid-path"),
+    ('git commit -m "fix gh auth note"', [], "a CLI's name in a message"),
+    ("npm run build && git tag publish", [], "publish in another program's words"),
+    ("gcloud auth login --update-adc", [], "the login itself: not run before itself"),
+    ("gcloud auth login --update-adc && gh pr list", ["gh"], "the login, and another CLI"),
     ("ls -l\nhelm list || aws s3 ls", ["aws", "kubectl"], "helm shares kubectl's check; table order"),
     ("/usr/bin/gh pr list", ["gh"], "a program given by path"),
     ("ghost run", [], "a longer word"),
@@ -92,3 +101,9 @@ def test_suggest_command_still_posts_and_adds_the_note(store, sid, monkeypatch):
     result = mcp_server.suggest_command("gh pr view 1", "Check the PR")
     assert result.startswith("C1: shown\ngh's sign-in check failed") and result.endswith("run it before C1."), result
     assert store.item(sid, "C1")["body"] == "gh pr view 1"
+
+
+def test_a_kubectl_failure_names_the_kube_context(monkeypatch):
+    monkeypatch.setattr(authcheck, "run_check", lambda cli: authcheck.SIGNED_OUT)
+    [line] = authcheck.notes("helm list", "C2")
+    assert "or be offline, or the kube context is missing or unreachable." in line and "(assuming a GKE cluster)" in line
