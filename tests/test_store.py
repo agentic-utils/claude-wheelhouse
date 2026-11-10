@@ -223,19 +223,22 @@ def test_any_unfinished_item_can_be_processing(store, sid, kind, status, steps, 
 
 
 @pytest.mark.parametrize("command_status, question, counted, desc", [
-    ("open", False, 1, "a command waiting to be run counts as a question"),
-    ("running", False, 0, "a running command doesn't count"),
-    ("run", False, 0, "a command run doesn't count"),
-    ("failed", False, 0, "a failed command doesn't count"),
-    ("closed", False, 0, "a closed command doesn't count"),
-    ("open", True, 2, "an open question and an open command make 2"),
+    ("open", None, 1, "a command waiting to be run counts as a question"),
+    ("running", None, 0, "a running command doesn't count"),
+    ("run", None, 0, "a command run doesn't count"),
+    ("failed", None, 0, "a failed command doesn't count"),
+    ("closed", None, 0, "a closed command doesn't count"),
+    ("open", "open", 2, "an open question and an open command make 2"),
+    ("open", "sent", 1, "a question answered and sent is processing; the open command still counts"),
 ])
 def test_the_session_list_counts_commands_waiting_with_questions(store, sid, command_status, question, counted, desc):
     ref, _ = store.post_command(sid, "make test", "to see the suite pass")
     if command_status != "open":
         store.close_command(sid, ref, closed=command_status == "closed", status=command_status)
     if question:
-        store.post_item(sid, "question", "db?")
+        qref = store.post_item(sid, "question", "db?")
+        if question == "sent":
+            store.send(sid, "postgres", qref)
     assert store.sessions()[0]["open_questions"] == counted, desc
 
 
