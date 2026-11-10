@@ -1384,8 +1384,9 @@ class Store:
         return self._all(
             f"""SELECT s.*,
                  (SELECT value FROM settings WHERE key = '{COMPACT_CUTOFF}' || s.id) AS compact_cutoff,
-                 (SELECT count(*) FROM items i WHERE i.session_id = s.id
-                    AND i.kind = 'question' AND i.status = 'open' AND NOT {PROCESSING}) AS open_questions,
+                 -- what waits on the person: a question unanswered or a command not yet run (#364)
+                 (SELECT count(*) FROM items i WHERE i.session_id = s.id AND i.status = 'open'
+                    AND (i.kind = 'command' OR i.kind = 'question' AND NOT {PROCESSING})) AS open_questions,
                  -- a command running is the person's shell, never the session's work (#339)
                  (SELECT count(*) FROM items i WHERE i.session_id = s.id
                     AND i.status = 'running' AND i.kind != 'command') AS running,

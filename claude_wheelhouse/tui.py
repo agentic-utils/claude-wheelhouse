@@ -8452,7 +8452,7 @@ class WheelhouseApp(App):
         if s["ticket"]:
             t.append(f"\n{s['ticket']}", style="#05d9e8")
         t.append(f"\n{s['cwd']}", style="#777777")
-        counts = [f"{n} {what}" for n, what in ((s["open_questions"], "open Q"), (s["running"], "running"),
+        counts = [f"{n} {what}" for n, what in ((s["open_questions"], "open Q or C"), (s["running"], "running"),
                                                  (s["unseen_decisions"], "unseen D"), (s["drafts"], "queued")) if n]
         if counts:
             t.append("\n" + " · ".join(counts))

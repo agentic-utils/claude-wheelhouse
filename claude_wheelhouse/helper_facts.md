@@ -1,4 +1,4 @@
-<!-- fact sheet stamp: version 246, 2026-11-10T11:19:06Z, source aba974611d65adcd (make facts restamps it: AGENTS.md) -->
+<!-- fact sheet stamp: version 247, 2026-11-10T11:54:34Z, source 8a641e0c9f1d9487 (make facts restamps it: AGENTS.md) -->
 # Wheelhouse fact sheet
 
 What the helper chat knows before any question. The guide below is written by hand; the
@@ -34,7 +34,7 @@ daemon running.
 
 ## Words the app uses
 
-- Item: anything a session posts. Kinds: task, question, decision, subagent (A), PR, doc, command (C: a shell command a session asks the person to run, with a Run button that opens it in an editable box with a "Send the output back" checkbox, then runs it in a quick shell's tab). A command is open (yellow, at the top, like an open question) until run, then running (shown as running work, Run shown but disabled) until the run ends; the tab then records how it ended, even when the command stopped the daemon: run (Run gone) on exit 0, else failed (red) with the exit code and, if the output was captured, its last 20 lines, Run enabled again. A tab closed before the command ends, or none taking the run up within 90 seconds, makes it failed too, with a note saying so.
+- Item: anything a session posts. Kinds: task, question, decision, subagent (A), PR, doc, command (C: a shell command a session asks the person to run, with a Run button that opens it in an editable box with a "Send the output back" checkbox, then runs it in a quick shell's tab). A command is open (yellow, at the top, like an open question, and counted with the questions in the session list's ? column) until run, then running (shown as running work, Run shown but disabled) until the run ends; the tab then records how it ended, even when the command stopped the daemon: run (Run gone) on exit 0, else failed (red) with the exit code and, if the output was captured, its last 20 lines, Run enabled again. A tab closed before the command ends, or none taking the run up within 90 seconds, makes it failed too, with a note saying so.
 - Daemon updated: an app whose daemon was replaced under it by other code (a make stop and make install) says "the daemon was updated: quit and restart the app" in its title, instead of "daemon unreachable: reconnecting".
 - Queued and Immediate: a session's send mode. Queued holds answers until Send (Ctrl+S).
 - Park: a session writes its handoff and stops, kept dimmed until Unpark.
