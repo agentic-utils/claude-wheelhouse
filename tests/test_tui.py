@@ -10682,7 +10682,7 @@ async def test_a_run_the_daemon_never_had_says_why(store, tmp_path, monkeypatch,
         got = []
         app.client.run_command = lambda *a: got.append(a) or tui.Done()
         app.client.replaced = replaced
-        app.run_command((sid, ref), {"text": "ls", "send": False})
+        app.run_command((sid, ref), {"text": "ls", "send": False, "now": False})
         await pilot.pause()
         assert bool(got) == (replaced is None), desc
         if said:
@@ -10702,7 +10702,7 @@ def test_a_failed_run_request_names_its_ref(store, tmp_path, text, want, desc):
     app.told = lambda done: told.extend(n.text for n in done.notices) or done
     app.refresh_data = lambda: None
     app.client.run_command = lambda *a: tui.Done(False).say(text, "error")
-    app.run_command((sid, "C1"), {"text": "ls", "send": False})
+    app.run_command((sid, "C1"), {"text": "ls", "send": False, "now": False})
     assert told == [want], desc
 
 
