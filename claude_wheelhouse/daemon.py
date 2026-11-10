@@ -1232,8 +1232,12 @@ class Daemon:
         send = body.get("send")
         if not isinstance(send, bool):
             raise Refused(400, "send must be true or false")
+        now = body.get("now", False)   # Run, send now (#365): absent from an older app's request
+        if not isinstance(now, bool):
+            raise Refused(400, "now must be true or false")
         try:
-            return self.hub.run_command(request.path_params["sid"], request.path_params["ref"], text(body, "text"), send)
+            return self.hub.run_command(request.path_params["sid"], request.path_params["ref"], text(body, "text"),
+                                        send, now)
         except ValueError as e:
             raise Refused(400, str(e)) from e
 

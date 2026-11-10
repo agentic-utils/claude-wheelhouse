@@ -251,8 +251,9 @@ def run(key: str, db: Path) -> None:
     print()
     how = None
     try:
-        # queued while the session is busy or parked (hub.send_or_queue, #249): nothing to wait out
-        how = hub.send_or_queue(store, payload["sid"], ref, message(payload, status, captured))
+        # queued while the session is busy or parked (hub.send_or_queue, #249): nothing to wait out;
+        # sent at once whatever the mode with Run, send now (#365; a payload from before has no "now")
+        how = hub.send_or_queue(store, payload["sid"], ref, message(payload, status, captured), payload.get("now", False))
     except SessionGone:
         print(f"{name} has gone from the wheelhouse: the output wasn't sent")
     if how:

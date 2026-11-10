@@ -4098,9 +4098,13 @@ class RunCommand(Dialog):
     horizontal scrollbar instead) so its line breaks are the real ones, with focus in it so a
     stray Enter edits rather than runs; and whether the output goes back to the session,
     ticked when it asked (want_output). Run checks the box as suggest_command does
-    (quickshell.check_command), refusing with the place. Answers {"text", "send"}, or None."""
+    (quickshell.check_command), refusing with the place. While the box is ticked, Run, send now
+    (Alt+S, #365) runs it too, its output sent at once whatever the session's mode, as Alt+S
+    sends a typed answer; Run's goes as answers do, queued or sent by the mode. Answers
+    {"text", "send", "now"}, or None."""
     ACTION = "run-go"
-    BINDINGS = [Binding("ctrl+enter", "run", show=False, priority=True)]
+    BINDINGS = [Binding("ctrl+enter", "run", show=False, priority=True),
+                Binding("alt+s", "run(True)", show=False, priority=True)]
     DEFAULT_CSS = """
     RunCommand #run-text { height: 22; }
     RunCommand #run-warning { color: #ffd300; padding: 0 0 0 4; }
@@ -4125,24 +4129,32 @@ class RunCommand(Dialog):
             yield Label("", id="run-error", markup=False)
             with Horizontal(classes="buttons"):
                 yield Button("Run  Ctrl+Enter", variant="success", id="run-go")
+                yield Button("Run, send now  Alt+S", variant="primary", id="run-now")
                 yield Button("Cancel  Escape", id="run-cancel")
 
     def on_mount(self) -> None:
         super().on_mount()
-        self.query_one("#run-warning").display = self.wanted
+        self.send_changed(self.wanted)
         self.query_one("#run-text", TextArea).focus()
 
     @on(Checkbox.Changed, "#run-send")
-    def send_changed(self, event: Checkbox.Changed) -> None:
-        self.query_one("#run-warning").display = event.value
+    def checked(self, event: Checkbox.Changed) -> None:
+        self.send_changed(event.value)
 
-    def action_run(self) -> None:
-        self.query_one("#run-go", Button).press()
+    def send_changed(self, send: bool) -> None:
+        """The warning and Run, send now shown only while the output goes back (#365)."""
+        self.query_one("#run-warning").display = send
+        self.query_one("#run-now").display = send
+
+    def action_run(self, now: bool = False) -> None:
+        button = self.query_one("#run-now" if now else "#run-go", Button)
+        if button.display:
+            button.press()
 
     @on(Button.Pressed)
     def pressed(self, event: Button.Pressed) -> None:
         event.stop()
-        if event.button.id != "run-go":
+        if event.button.id not in ("run-go", "run-now"):
             self.action_answer(None)
             return
         text = self.query_one("#run-text", TextArea).text
@@ -4151,7 +4163,8 @@ class RunCommand(Dialog):
         except ValueError as e:
             self.query_one("#run-error", Label).update(Text(str(e)))
             return
-        self.action_answer({"text": text, "send": self.query_one("#run-send", Checkbox).value})
+        send = self.query_one("#run-send", Checkbox).value
+        self.action_answer({"text": text, "send": send, "now": send and event.button.id == "run-now"})
 
 
 class ParkSession(Dialog):
@@ -4875,8 +4888,9 @@ BUTTONS = {
     "shell": ("Shell (Alt+H, from anywhere): a quick shell in a new terminal tab, in the session in context's "
               "directory (where it works now), or home with none; exit or Ctrl+D closes it"),
     "run-command": ("Run (on a command a session suggested): opens it in a box you can edit, with whether its output "
-                    "goes back to the session; Run there runs it in a new terminal tab in the session's directory. "
-                    "Disabled while it runs; back if the run fails"),
+                    "goes back to the session; Run there (Ctrl+Enter) runs it in a new terminal tab in the session's "
+                    "directory, the output queued or sent by the session's mode, and with the output ticked, Run, "
+                    "send now (Alt+S) sends it at once. Disabled while it runs; back if the run fails"),
     "handover": ("Handover to Claude Code in a shell (in the session list's right-click menu only, no key): open a "
                  "session run in the wheelhouse in a real Claude Code tab; it comes back when you /exit"),
     "model": "Model (Alt+M): change the model a session run in the wheelhouse runs on, live; its prompt cache goes with the old one",
@@ -9644,7 +9658,7 @@ class WheelhouseApp(App):
             self.notify(f"{target[1]} wasn't run: {self.client.replaced}", severity="error")
             return
         try:
-            done = self.client.run_command(*target, answer["text"], answer["send"])
+            done = self.client.run_command(*target, answer["text"], answer["send"], answer["now"])
             if not done.ok:
                 done.notices = [dataclasses.replace(n, text=f"{target[1]} {'may not have run' if n.text == LOST else 'was not run'}: "
                                                     f"{n.text}") if n.severity == "error" else n for n in done.notices]

@@ -1940,6 +1940,25 @@ def test_send_or_queue(store, sid, mode_, parked, busy, want, desc):
         assert ("typed" in [m["body"] for m in store.drafts(sid)]) == (want == "queued"), f"{desc}: typed"
 
 
+@pytest.mark.parametrize("parked, busy, want, desc", [
+    (False, None, "sent", "Queued: sent at once, the queue bypassed"),
+    (False, "runner = 'sdk', activity = 'thinking'", "sent", "Queued, mid-turn: sent at once, as Alt+S sends"),
+    (True, None, "sent", "Queued, parked: sent, delivered on resume, as Alt+S sends"),
+    (False, "op = 'park', op_state = 'told'", "queued", "parking (blue): still queued, never refused (D232)"),
+])
+def test_send_or_queue_now(store, sid, parked, busy, want, desc):
+    """#365: Run, send now's output goes at once whatever the mode, as a typed answer's Alt+S
+    (Hub.submit's now), the session's mode and the rest of its queue left as they are."""
+    ref = store.post_command(sid, "ls", "List")[0]
+    store.queue(sid, "earlier", None)
+    store.db.execute("UPDATE sessions SET send_mode = 'queued', parked = ?", (int(parked),))
+    if busy:
+        store.db.execute(f"UPDATE sessions SET {busy}")
+    assert hub_mod.send_or_queue(store, sid, ref, "out", now=True) == want, desc
+    assert [m["body"] for m in store.drafts(sid)] == (["earlier", "out"] if want == "queued" else ["earlier"]), desc
+    assert store.session(sid)["send_mode"] == "queued", f"{desc}: the mode as it was"
+
+
 def test_send_or_queue_busy_after_the_look(store, sid, monkeypatch):
     """The send refused as busy (an operation under way): queued, not lost (#249, #257)."""
     ref = store.post_command(sid, "ls", "List")[0]
@@ -1952,13 +1971,15 @@ def test_send_or_queue_busy_after_the_look(store, sid, monkeypatch):
     assert [m["body"] for m in store.drafts(sid)] == ["out"]
 
 
-@pytest.mark.parametrize("text, send, gone, ok, note, desc", [
-    ("ls", False, False, True, "started", "as suggested, unticked: started, noted"),
-    ("ls -l", False, False, True, "started, edited", "edited: noted so"),
-    ("ls", True, False, True, None, "ticked: run, the output its record"),
-    ("ls", False, True, False, None, "its directory gone: refused, nothing run"),
+@pytest.mark.parametrize("text, send, now, gone, ok, note, desc", [
+    ("ls", False, False, False, True, "started", "as suggested, unticked: started, noted"),
+    ("ls -l", False, False, False, True, "started, edited", "edited: noted so"),
+    ("ls", True, False, False, True, None, "ticked: run, the output its record"),
+    ("ls", True, True, False, True, None, "Run, send now: the output to go at once (#365)"),
+    ("ls", False, True, False, True, "started", "now without the output: nothing to send at once"),
+    ("ls", False, False, True, False, None, "its directory gone: refused, nothing run"),
 ])
-def test_run_command(store, projects, monkeypatch, text, send, gone, ok, note, desc):
+def test_run_command(store, projects, monkeypatch, text, send, now, gone, ok, note, desc):
     """#257: Run writes a 0600 file and opens a tab whose command line carries only the
     database's path and the key; refused rather than run elsewhere when the directory's gone."""
     work = projects / "work"
@@ -1969,7 +1990,7 @@ def test_run_command(store, projects, monkeypatch, text, send, gone, ok, note, d
         work.rmdir()
     opened = []
     monkeypatch.setattr(launch, "open_shell", lambda st, cwd, title, command=None, note="": opened.append((cwd, command)))
-    done = Hub(store).run_command(sid, ref, text, send)
+    done = Hub(store).run_command(sid, ref, text, send, now)
     assert done.ok == ok, desc
     item = store.item(sid, ref)
     assert item["status"] == ("running" if ok else "open"), \
@@ -1984,7 +2005,9 @@ def test_run_command(store, projects, monkeypatch, text, send, gone, ok, note, d
     assert cwd == str(work) and command[2:5] == ["claude_wheelhouse", "shell", "--db"], desc
     assert command[5] == str(store.path), f"{desc}: the database, a scratch one too"
     payload = json.loads((store.path.parent / "shell" / command[6]).read_text())
-    assert (payload["text"], payload["want"], payload["edited"]) == (text, send, text != "ls"), desc
+    assert (payload["text"], payload["want"], payload["edited"], payload["now"]) == \
+        (text, send, text != "ls", send and now), desc
+    assert done.notices[-1].text.endswith(" at once if it can") == (send and now), f"{desc}: {done.notices[-1].text}"
 
 
 def test_close_and_reopen_a_command(store, sid):
