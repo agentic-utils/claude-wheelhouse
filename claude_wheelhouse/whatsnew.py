@@ -389,6 +389,9 @@ FEATURES: tuple[Feature, ...] = (
             note="Run on a command item is disabled from the moment you run it until the run ends, in every app "
                  "attached: it shows as running, and Run comes back only if the run fails, or its tab closes "
                  "before it ends."),
+    Feature("run-send-now", UNRELEASED, ADVANCED,
+            note="With Send the output back ticked, the Run dialog adds Run, send now (Alt+S): it runs the command "
+                 "and sends the output at once, whatever the session's mode, rather than into its queue."),
     Feature("daemon-replaced", UNRELEASED, ADVANCED,
             note="An app whose daemon was replaced under it by an update says so in its title, to quit and "
                  "restart it, rather than reconnecting for ever."),

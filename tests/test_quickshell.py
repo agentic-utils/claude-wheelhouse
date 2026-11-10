@@ -151,3 +151,30 @@ def test_the_tabs_own_shell_records_an_unticked_run(store, sid, tmp_path, cmd, s
     assert item["status"] == status, f"{desc}: {out.stderr}"
     body, = [m["body"] for m in store.thread(sid, ref) if m["kind"] == "run"]
     assert body.split(": ", 1)[1] == note, desc
+
+
+@pytest.mark.parametrize("mode, now, queued, desc", [
+    ("queued", False, True, "Run in Queued mode: the output queued for Send, as a typed answer is (D267)"),
+    ("queued", True, False, "Run, send now in Queued mode: sent at once, bypassing the queue (#365)"),
+    ("immediate", False, False, "Run in Immediate mode: sent, as a typed answer is"),
+    ("queued", None, True, "a payload from before #365, without now: by the mode, as before"),
+])
+def test_the_tab_sends_the_output_by_the_mode_or_at_once(store, sid, tmp_path, monkeypatch, capsys, mode, now,
+                                                          queued, desc):
+    """#257, #365: ticked, the tab captures the output and sends it on the item, queued or sent by
+    the session's mode unless the dialog's Run, send now asked for it at once."""
+    import subprocess
+    ref = store.post_command(sid, "ls", "List", True)[0]
+    store.db.execute("UPDATE sessions SET send_mode = ?", (mode,))
+    payload = {"sid": sid, "ref": ref, "name": "demo", "cwd": str(tmp_path), "text": "ls", "edited": False,
+               "want": True, **({} if now is None else {"now": now})}
+    monkeypatch.setattr(quickshell, "take", lambda db, key: payload)
+    monkeypatch.setattr(quickshell, "taken", lambda *_: None)
+    monkeypatch.setattr(quickshell, "bash", lambda *_, **__: None)
+    monkeypatch.setattr(subprocess, "run", lambda *_, **__: subprocess.CompletedProcess([], 0))
+    monkeypatch.chdir(tmp_path)
+    quickshell.shell_dir(store.path).mkdir(parents=True, exist_ok=True)
+    quickshell.run("a" * 48, store.path)
+    drafts = [m["body"] for m in store.drafts(sid)]
+    assert bool(drafts) == queued, desc
+    assert f"output {'queued' if queued else 'sent'} to demo" in capsys.readouterr().out, desc

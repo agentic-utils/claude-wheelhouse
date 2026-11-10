@@ -50,17 +50,18 @@ def goes_now(store: Store, s, ref: str | None) -> bool:
     return mode(s) == "immediate" or (operating(s) and store.waits_on(s["id"], ref))
 
 
-def send_or_queue(store: Store, sid: str, ref: str, text: str) -> str:
+def send_or_queue(store: Store, sid: str, ref: str, text: str, now: bool = False) -> str:
     """A message of the person's that goes out without them pressing send: a run's output
     (#257). Sent or queued by the rule every answer follows (goes_now, #335), so in Queued mode
-    it waits in the session's queue for Send like any other, mid-turn or not. One refused as
-    busy (an operation under way, #249) is queued, never refused or dropped (D232); the quiet
-    mark's cycle is called off as a person's answer would. SessionGone if the session has
-    gone. "sent" or "queued"."""
+    it waits in the session's queue for Send like any other, mid-turn or not; `now` (the Run
+    dialog's Run, send now, #365) sends it at once whatever the mode, as Alt+S does a typed
+    answer (Hub.submit). One refused as busy (an operation under way, #249) is queued, never
+    refused or dropped (D232); the quiet mark's cycle is called off as a person's answer would.
+    SessionGone if the session has gone. "sent" or "queued"."""
     s = store.session(sid)
     if s is None:
         raise SessionGone(sid)
-    if goes_now(store, s, ref):
+    if now or goes_now(store, s, ref):
         try:
             store.send(sid, text, ref)
             return "sent"
@@ -1321,7 +1322,7 @@ class Hub:
         return Done().say(f"{display_name(s)}'s {'Relaunch' if op[0] == 'relaunch' else 'start'} aborted: "
                           "it stops as soon as it has started")
 
-    def run_command(self, sid: str, ref: str, text: str, send: bool) -> Done:
+    def run_command(self, sid: str, ref: str, text: str, send: bool, now: bool = False) -> Done:
         """Run, from a command item's dialog (#257): the text, checked again (quickshell.check_command),
         written to a 0600 file under a random key, and a quick shell's tab opened in the session's
         directory to run it (quickshell.run), its command line carrying only the database's path
@@ -1330,7 +1331,8 @@ class Hub:
         the tab opens, refused if it is already. Unless the output is sent, the item gains a note
         of the run the session isn't sent (Store.ran); its status then waits for the run's end,
         which the tab writes (quickshell.ended, #335): run, or failed with the exit code, Run
-        kept; or, if the tab goes without saying, sweep_runs fails it."""
+        kept; or, if the tab goes without saying, sweep_runs fails it. With `now` (Run, send now,
+        #365) the output sent goes at once whatever the session's mode (send_or_queue)."""
         item = self.store.item(sid, ref)
         if item is None or item["kind"] != "command":
             self.row(sid)   # SessionGone if that's why
@@ -1349,7 +1351,8 @@ class Hub:
         key = None
         try:
             key = quickshell.write(db, {"sid": sid, "ref": ref, "name": display_name(s), "cwd": cwd, "text": text,
-                                        "edited": edited, "want": bool(send)})
+                                        "edited": edited, "want": bool(send),
+                                        "now": bool(send and now)})
             launch.open_shell(self.store, cwd, f"{ref} {display_name(s)}",
                               [sys.executable, "-m", "claude_wheelhouse", "shell", "--db", str(db), key], note=ref)
         except (OSError, ValueError) as e:
@@ -1359,7 +1362,7 @@ class Hub:
             return Done(False).say(f"couldn't open a shell: {e}", "error")
         note = None if send else f"started {time.strftime('%H:%M')}" + (", edited" if edited else "")
         self.store.ran(sid, ref, note)
-        return Done().say(f"running {ref} in {cwd}" + (f": its output goes to {display_name(s)}" if send else ""))
+        return Done().say(f"running {ref} in {cwd}" + (f": its output goes to {display_name(s)}" + (" at once" if now else "") if send else ""))
 
     def shell_dir(self, sid: str | None) -> tuple[str | None, str | None]:
         """Where a quick shell for a session opens (#257): (directory, the one wanted if it's

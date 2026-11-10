@@ -10469,7 +10469,7 @@ async def test_run_opens_the_command_and_runs_what_the_box_holds(store, tmp_path
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         got = []
-        app.client.run_command = lambda s, r, text, send: got.append((text, send)) or tui.Done()
+        app.client.run_command = lambda s, r, text, send, now: got.append((text, send)) or tui.Done()
         await to_first_item(app, pilot)
         app.items_table.move_cursor(row=app.items_table.keys().index(f"{sid}|{ref}"))
         await pilot.pause()
@@ -10502,6 +10502,49 @@ async def test_run_opens_the_command_and_runs_what_the_box_holds(store, tmp_path
         if error:
             assert error in str(dialog.query_one("#run-error", Label).content), desc
             assert isinstance(app.screen, tui.RunCommand), f"{desc}: still open to fix"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("wanted, toggle, press, answer, desc", [
+    (True, False, "#run-go", {"send": True, "now": False}, "ticked, Run: the output by the mode"),
+    (True, False, "#run-now", {"send": True, "now": True}, "ticked, Run, send now: the output at once"),
+    (True, False, "ctrl+enter", {"send": True, "now": False}, "ticked, Ctrl+Enter: Run's"),
+    (True, False, "alt+s", {"send": True, "now": True}, "ticked, Alt+S: Run, send now's"),
+    (False, False, "#run-go", {"send": False, "now": False}, "unticked, Run: nothing sent"),
+    (False, False, "alt+s", None, "unticked, Alt+S: nothing to send at once, so nothing runs"),
+    (False, True, "alt+s", {"send": True, "now": True}, "ticked by the person: Run, send now offered"),
+    (True, True, "alt+s", None, "unticked by the person: Run, send now gone with it"),
+])
+async def test_the_run_dialogs_send_now_shows_only_with_the_output_ticked(store, wanted, toggle, press, answer, desc):
+    """#365: Run, send now (Alt+S) shows only while Send the output back is ticked, and answers
+    now, for the output to go at once; Run (Ctrl+Enter) and Cancel keep theirs. At 80x24 every
+    button shows whole inside the dialog."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        got = []
+        app.push_screen(tui.RunCommand("C1", "demo", "List the files", "/tmp", "ls -la", wanted), got.append)
+        await pilot.pause()
+        dialog = app.screen
+        if toggle:
+            check = dialog.query_one("#run-send", tui.Checkbox)
+            check.value = not check.value
+            await pilot.pause()
+        ticked = wanted != toggle
+        now = dialog.query_one("#run-now", Button)
+        assert now.display == ticked and dialog.query_one("#run-warning").display == ticked, desc
+        box = dialog.query_one("#dialog").content_region
+        shown = [b for b in dialog.query(Button) if b.display]
+        assert all(box.contains_region(b.region) for b in shown), f"{desc}: every button inside the dialog"
+        assert [str(b.label) for b in shown] == ["Run  Ctrl+Enter"] + (["Run, send now  Alt+S"] if ticked else []) + \
+            ["Cancel  Escape"], desc
+        if press.startswith("#"):
+            dialog.query_one(press, Button).press()
+        else:
+            await pilot.press(press)
+        await pilot.pause()
+        assert got == ([{"text": "ls -la", **answer}] if answer else []), desc
+        assert isinstance(app.screen, tui.RunCommand) == (answer is None), f"{desc}: closed once answered"
 
 
 @pytest.mark.anyio
