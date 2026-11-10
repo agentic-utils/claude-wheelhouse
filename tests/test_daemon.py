@@ -853,6 +853,23 @@ async def test_a_tab_session_only_from_this_machine(daemon, store, tmp_path, add
     assert [s["runner"] for s in store.sessions()] == (["tab"] if status == 200 else []), desc
 
 
+@pytest.mark.parametrize("body, status, now, desc", [
+    ({"text": "ls", "send": True, "now": True}, 200, True, "Run, send now: now reaches the hub (#365)"),
+    ({"text": "ls", "send": True, "now": False}, 200, False, "Run: by the mode"),
+    ({"text": "ls", "send": True}, 200, False, "an older app's request, without now: False"),
+    ({"text": "ls", "send": True, "now": "yes"}, 400, None, "now not a bool: refused"),
+    ({"text": "ls", "send": True, "now": None}, 400, None, "now null: refused"),
+])
+async def test_run_passes_now_to_the_hub(daemon, store, sid, monkeypatch, body, status, now, desc):
+    """#365: POST /items/{sid}/{ref}/run carries Run, send now's choice to Hub.run_command."""
+    got = []
+    monkeypatch.setattr(daemon.hub, "run_command",
+                        lambda s, r, text, send, now=False: got.append((s, r, text, send, now)) or hub_mod.Done())
+    r = await call(daemon, "POST", f"/items/{sid}/C1/run", body)
+    assert r.status_code == status, f"{desc}: {r.text}"
+    assert got == ([(sid, "C1", "ls", True, now)] if status == 200 else []), desc
+
+
 # the token (phase 2c): every route, the stream's too
 
 def every_route(daemon):

@@ -10451,10 +10451,11 @@ async def test_double_click_on_detail_goes_full_screen_and_back(store, sid, tmp_
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("want_output, edit, untick, sent, error, desc", [
-    (False, None, False, [("ls -la", False)], None, "as suggested: Run runs the box's text, output not asked"),
-    (True, None, False, [("ls -la", True)], None, "asked for: ticked, and sent so"),
-    (True, None, True, [("ls -la", False)], None, "the person unticks it"),
-    (False, "ls -la | head", False, [("ls -la | head", False)], None, "edited: exactly what the box holds"),
+    (False, None, False, [("ls -la", False, False)], None, "as suggested: Run runs the box's text, output not asked"),
+    (True, None, False, [("ls -la", True, False)], None, "asked for: ticked, and sent so"),
+    (True, "now", False, [("ls -la", True, True)], None, "asked for, Run, send now: the output at once (#365)"),
+    (True, None, True, [("ls -la", False, False)], None, "the person unticks it"),
+    (False, "ls -la | head", False, [("ls -la | head", False, False)], None, "edited: exactly what the box holds"),
     (False, "ls ’x", False, [], "U+2019 at line 1, column 4", "a paste outside ASCII: refused with its place"),
 ])
 async def test_run_opens_the_command_and_runs_what_the_box_holds(store, tmp_path, monkeypatch, want_output, edit,
@@ -10469,7 +10470,7 @@ async def test_run_opens_the_command_and_runs_what_the_box_holds(store, tmp_path
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         got = []
-        app.client.run_command = lambda s, r, text, send, now: got.append((text, send)) or tui.Done()
+        app.client.run_command = lambda s, r, text, send, now: got.append((text, send, now)) or tui.Done()
         await to_first_item(app, pilot)
         app.items_table.move_cursor(row=app.items_table.keys().index(f"{sid}|{ref}"))
         await pilot.pause()
@@ -10486,6 +10487,7 @@ async def test_run_opens_the_command_and_runs_what_the_box_holds(store, tmp_path
         check = dialog.query_one("#run-send", tui.Checkbox)
         assert check.value == want_output, desc
         assert dialog.query_one("#run-warning").display == want_output, f"{desc}: the warning while ticked"
+        press, edit = ("#run-now", None) if edit == "now" else ("#run-go", edit)
         if edit is not None:
             box.text = edit
         if untick:
@@ -10496,7 +10498,7 @@ async def test_run_opens_the_command_and_runs_what_the_box_holds(store, tmp_path
         await pilot.pause()
         assert got == [] and isinstance(app.screen, tui.RunCommand), f"{desc}: Enter in the box runs nothing"
         box.text = edit or "ls -la"   # the newline Enter typed taken out again
-        dialog.query_one("#run-go", Button).press()
+        dialog.query_one(press, Button).press()
         await pilot.pause()
         assert got == sent, desc
         if error:

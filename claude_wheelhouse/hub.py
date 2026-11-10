@@ -1362,7 +1362,7 @@ class Hub:
             return Done(False).say(f"couldn't open a shell: {e}", "error")
         note = None if send else f"started {time.strftime('%H:%M')}" + (", edited" if edited else "")
         self.store.ran(sid, ref, note)
-        return Done().say(f"running {ref} in {cwd}" + (f": its output goes to {display_name(s)}" + (" at once" if now else "") if send else ""))
+        return Done().say(f"running {ref} in {cwd}" + (f": its output goes to {display_name(s)}" + (" at once if it can" if now else "") if send else ""))
 
     def shell_dir(self, sid: str | None) -> tuple[str | None, str | None]:
         """Where a quick shell for a session opens (#257): (directory, the one wanted if it's

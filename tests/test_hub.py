@@ -2007,7 +2007,7 @@ def test_run_command(store, projects, monkeypatch, text, send, now, gone, ok, no
     payload = json.loads((store.path.parent / "shell" / command[6]).read_text())
     assert (payload["text"], payload["want"], payload["edited"], payload["now"]) == \
         (text, send, text != "ls", send and now), desc
-    assert done.notices[-1].text.endswith(" at once") == (send and now), f"{desc}: {done.notices[-1].text}"
+    assert done.notices[-1].text.endswith(" at once if it can") == (send and now), f"{desc}: {done.notices[-1].text}"
 
 
 def test_close_and_reopen_a_command(store, sid):
