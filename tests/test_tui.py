@@ -10451,10 +10451,11 @@ async def test_double_click_on_detail_goes_full_screen_and_back(store, sid, tmp_
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("want_output, edit, untick, sent, error, desc", [
-    (False, None, False, [("ls -la", False)], None, "as suggested: Run runs the box's text, output not asked"),
-    (True, None, False, [("ls -la", True)], None, "asked for: ticked, and sent so"),
-    (True, None, True, [("ls -la", False)], None, "the person unticks it"),
-    (False, "ls -la | head", False, [("ls -la | head", False)], None, "edited: exactly what the box holds"),
+    (False, None, False, [("ls -la", False, False)], None, "as suggested: Run runs the box's text, output not asked"),
+    (True, None, False, [("ls -la", True, False)], None, "asked for: ticked, and sent so"),
+    (True, "now", False, [("ls -la", True, True)], None, "asked for, Run, send now: the output at once (#365)"),
+    (True, None, True, [("ls -la", False, False)], None, "the person unticks it"),
+    (False, "ls -la | head", False, [("ls -la | head", False, False)], None, "edited: exactly what the box holds"),
     (False, "ls ’x", False, [], "U+2019 at line 1, column 4", "a paste outside ASCII: refused with its place"),
 ])
 async def test_run_opens_the_command_and_runs_what_the_box_holds(store, tmp_path, monkeypatch, want_output, edit,
@@ -10469,7 +10470,7 @@ async def test_run_opens_the_command_and_runs_what_the_box_holds(store, tmp_path
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         got = []
-        app.client.run_command = lambda s, r, text, send: got.append((text, send)) or tui.Done()
+        app.client.run_command = lambda s, r, text, send, now: got.append((text, send, now)) or tui.Done()
         await to_first_item(app, pilot)
         app.items_table.move_cursor(row=app.items_table.keys().index(f"{sid}|{ref}"))
         await pilot.pause()
@@ -10486,6 +10487,7 @@ async def test_run_opens_the_command_and_runs_what_the_box_holds(store, tmp_path
         check = dialog.query_one("#run-send", tui.Checkbox)
         assert check.value == want_output, desc
         assert dialog.query_one("#run-warning").display == want_output, f"{desc}: the warning while ticked"
+        press, edit = ("#run-now", None) if edit == "now" else ("#run-go", edit)
         if edit is not None:
             box.text = edit
         if untick:
@@ -10496,12 +10498,55 @@ async def test_run_opens_the_command_and_runs_what_the_box_holds(store, tmp_path
         await pilot.pause()
         assert got == [] and isinstance(app.screen, tui.RunCommand), f"{desc}: Enter in the box runs nothing"
         box.text = edit or "ls -la"   # the newline Enter typed taken out again
-        dialog.query_one("#run-go", Button).press()
+        dialog.query_one(press, Button).press()
         await pilot.pause()
         assert got == sent, desc
         if error:
             assert error in str(dialog.query_one("#run-error", Label).content), desc
             assert isinstance(app.screen, tui.RunCommand), f"{desc}: still open to fix"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("wanted, toggle, press, answer, desc", [
+    (True, False, "#run-go", {"send": True, "now": False}, "ticked, Run: the output by the mode"),
+    (True, False, "#run-now", {"send": True, "now": True}, "ticked, Run, send now: the output at once"),
+    (True, False, "ctrl+enter", {"send": True, "now": False}, "ticked, Ctrl+Enter: Run's"),
+    (True, False, "alt+s", {"send": True, "now": True}, "ticked, Alt+S: Run, send now's"),
+    (False, False, "#run-go", {"send": False, "now": False}, "unticked, Run: nothing sent"),
+    (False, False, "alt+s", None, "unticked, Alt+S: nothing to send at once, so nothing runs"),
+    (False, True, "alt+s", {"send": True, "now": True}, "ticked by the person: Run, send now offered"),
+    (True, True, "alt+s", None, "unticked by the person: Run, send now gone with it"),
+])
+async def test_the_run_dialogs_send_now_shows_only_with_the_output_ticked(store, wanted, toggle, press, answer, desc):
+    """#365: Run, send now (Alt+S) shows only while Send the output back is ticked, and answers
+    now, for the output to go at once; Run (Ctrl+Enter) and Cancel keep theirs. At 80x24 every
+    button shows whole inside the dialog."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        got = []
+        app.push_screen(tui.RunCommand("C1", "demo", "List the files", "/tmp", "ls -la", wanted), got.append)
+        await pilot.pause()
+        dialog = app.screen
+        if toggle:
+            check = dialog.query_one("#run-send", tui.Checkbox)
+            check.value = not check.value
+            await pilot.pause()
+        ticked = wanted != toggle
+        now = dialog.query_one("#run-now", Button)
+        assert now.display == ticked and dialog.query_one("#run-warning").display == ticked, desc
+        box = dialog.query_one("#dialog").content_region
+        shown = [b for b in dialog.query(Button) if b.display]
+        assert all(box.contains_region(b.region) for b in shown), f"{desc}: every button inside the dialog"
+        assert [str(b.label) for b in shown] == ["Run  Ctrl+Enter"] + (["Run, send now  Alt+S"] if ticked else []) + \
+            ["Cancel  Escape"], desc
+        if press.startswith("#"):
+            dialog.query_one(press, Button).press()
+        else:
+            await pilot.press(press)
+        await pilot.pause()
+        assert got == ([{"text": "ls -la", **answer}] if answer else []), desc
+        assert isinstance(app.screen, tui.RunCommand) == (answer is None), f"{desc}: closed once answered"
 
 
 @pytest.mark.anyio
@@ -10637,7 +10682,7 @@ async def test_a_run_the_daemon_never_had_says_why(store, tmp_path, monkeypatch,
         got = []
         app.client.run_command = lambda *a: got.append(a) or tui.Done()
         app.client.replaced = replaced
-        app.run_command((sid, ref), {"text": "ls", "send": False})
+        app.run_command((sid, ref), {"text": "ls", "send": False, "now": False})
         await pilot.pause()
         assert bool(got) == (replaced is None), desc
         if said:
@@ -10657,7 +10702,7 @@ def test_a_failed_run_request_names_its_ref(store, tmp_path, text, want, desc):
     app.told = lambda done: told.extend(n.text for n in done.notices) or done
     app.refresh_data = lambda: None
     app.client.run_command = lambda *a: tui.Done(False).say(text, "error")
-    app.run_command((sid, "C1"), {"text": "ls", "send": False})
+    app.run_command((sid, "C1"), {"text": "ls", "send": False, "now": False})
     assert told == [want], desc
 
 

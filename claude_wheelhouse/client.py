@@ -990,8 +990,8 @@ class RemoteClient:
             raise hub_error(e) from None
         return cwd, gone
 
-    def run_command(self, sid: str, ref: str, text: str, send: bool) -> Done:
-        return self.done(f"/items/{sid}/{ref}/run", {"text": text, "send": send})
+    def run_command(self, sid: str, ref: str, text: str, send: bool, now: bool = False) -> Done:
+        return self.done(f"/items/{sid}/{ref}/run", {"text": text, "send": send, "now": now})
 
     def mcp(self, sid: str, do: str, server: str = "", url: str | None = None) -> Done:
         return self.done(f"/sessions/{sid}/mcp", {"do": do, "server": server, "url": url})

@@ -521,7 +521,8 @@ session.
   the session asked for it: the command then runs under `script` (colours, `sudo` and `less`
   still work, but a `cd` or `export` in it doesn't stay), and what it showed, cleaned and cut
   to the first 4,000 and last 12,000 characters, goes to the session as your reply on the item,
-  queued or sent as your answers are. It goes into the session's transcript: untick it if the
+  queued or sent as your answers are. While it's ticked, Run, send now (Alt+S) runs it too,
+  and sends the output at once whatever the session's mode, as Alt+S sends a typed answer. It goes into the session's transcript: untick it if the
   output may show secrets. Unticked, the session gets nothing and the item notes the run.
   From the moment you run it the item is `running`, shown as running work rather than yellow,
   with Run shown but disabled, in every app attached. When the command ends, the tab writes how
