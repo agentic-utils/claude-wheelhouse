@@ -598,7 +598,7 @@ def test_suggest_command(store, sid, command, why, want_output, error, desc, mon
     """#257: a command item, its why the title and the command the body, checked at post time."""
     from mcp.server.mcpserver.exceptions import ToolError
     from claude_wheelhouse import authcheck, mcp_server
-    monkeypatch.setattr(authcheck, "notes", lambda command: [])   # no real gh check (#361)
+    monkeypatch.setattr(authcheck, "notes", lambda command, ref: [])   # no real gh check (#361)
     mcp_server._store, mcp_server._sid = store, sid
     if error:
         with pytest.raises(ToolError, match=error.replace("+", r"\+")):

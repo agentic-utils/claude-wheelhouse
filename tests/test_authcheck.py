@@ -15,16 +15,17 @@ def fresh_cache():
 @pytest.mark.parametrize("command, expected, desc", [
     ("gcloud run services list", ["gcloud"], "a plain gcloud command"),
     ("bq ls && gsutil ls gs://x", ["gcloud"], "bq and gsutil share gcloud's check, once"),
-    ("FOO=1 sudo -E gh pr list", ["gh"], "past an env assignment, a wrapper and its flag"),
-    ("nice -n 19 timeout 5 kubectl get pods", ["kubectl"], "past wrappers and their values"),
-    ("cd infra; terraform plan | tee out", ["terraform"], "a later segment, and a pipe"),
-    ("ls -l\nhelm list || aws s3 ls", ["kubectl", "aws"], "newline and ||: helm shares kubectl's check"),
-    ("/usr/bin/az account list", ["az"], "a program given by path"),
-    ("npm install", [], "npm only for publishing"),
-    ("npm --tag next publish", ["npm"], "npm publish, past a flag"),
-    ("echo gcloud", [], "a CLI's name as an argument"),
+    ("FOO=1 sudo -u root gh pr list", ["gh"], "past an env assignment and a wrapper's valued flag"),
+    ("timeout -s KILL 5 gcloud compute ssh vm", ["gcloud"], "past a wrapper's flag and values"),
+    ("curl -H \"Bearer $(gcloud auth print-access-token)\" x", ["gcloud"], "inside $(...)"),
+    ("bash -c 'kubectl get pods'", ["kubectl"], "inside bash -c"),
+    ("ls -l\nhelm list || aws s3 ls", ["aws", "kubectl"], "helm shares kubectl's check; table order"),
+    ("/usr/bin/gh pr list", ["gh"], "a program given by path"),
+    ("ghost run", [], "a longer word"),
+    ("my-gh x && /x/gh.sh", [], "a hyphenated word and a file name"),
+    ("npm test", [], "npm only for publishing"),
+    ("npm --tag next publish", ["npm"], "npm publish, past a valued flag"),
     ("claude mcp list", [], "claude is never checked"),
-    ("echo 'unterminated", [], "a segment that won't parse is skipped"),
 ])
 def test_clis(command, expected, desc):
     assert [c.names[0] for c in authcheck.clis(command)] == expected, desc
@@ -42,10 +43,12 @@ class FakeProc:
 
 @pytest.mark.parametrize("code, note, desc", [
     (0, None, "signed in: no note"),
-    (1, 'gcloud isn\'t signed in (gcloud auth print-access-token --quiet failed): suggest '
-        '"gcloud auth login --update-adc" first, as its own command, and tell the person why.', "signed out"),
+    (1, "gcloud's sign-in check failed (gcloud auth print-access-token --quiet): it may need signing in, or be "
+        'offline. Suggest "gcloud auth login --update-adc" as its own command, and ask the person to run it before '
+        "C4.", "signed out"),
     (127, None, "not installed: skipped, not reported"),
-    (None, "couldn't confirm gcloud is signed in", "a timeout: unknown"),
+    (None, "couldn't confirm gcloud is signed in (its check timed out): if C4 stops at a login prompt, suggest "
+        '"gcloud auth login --update-adc".', "a timeout: unknown, with what to do"),
 ])
 def test_notes(monkeypatch, code, note, desc):
     calls, killed = [], []
@@ -56,8 +59,8 @@ def test_notes(monkeypatch, code, note, desc):
     monkeypatch.setattr(authcheck.subprocess, "Popen", popen)
     monkeypatch.setattr(authcheck.os, "killpg", lambda pid, sig: killed.append(pid))
     monkeypatch.setenv("SHELL", "/bin/zsh")
-    lines = authcheck.notes("gcloud run deploy && bq ls")
-    assert (lines[0].startswith(note) if note else lines == []), desc
+    lines = authcheck.notes("gcloud run deploy && bq ls", "C4")
+    assert lines == ([note] if note else []), desc
     argv, kw = calls[0]
     assert len(calls) == 1 and argv == ["/bin/zsh", "-lc", "gcloud auth print-access-token --quiet"], desc
     assert (kw["stdin"], kw["stdout"], kw["stderr"], kw["start_new_session"]) == \
@@ -65,16 +68,21 @@ def test_notes(monkeypatch, code, note, desc):
     assert killed == ([4242] if code is None else []), desc
 
 
-def test_a_check_is_cached_for_a_minute(monkeypatch):
+@pytest.mark.parametrize("result, checks, desc", [
+    (authcheck.SIGNED_IN, [1, 1, 2], "a pass is trusted for a minute, then checked again"),
+    (authcheck.SIGNED_OUT, [1, 2, 3], "a failure is checked again every time"),
+    (authcheck.UNKNOWN, [1, 2, 3], "so is a timeout"),
+])
+def test_only_a_pass_is_cached(monkeypatch, result, checks, desc):
     calls, clock = [], [1000.0]
-    monkeypatch.setattr(authcheck, "run_check", lambda cli: calls.append(cli) or authcheck.SIGNED_OUT)
+    monkeypatch.setattr(authcheck, "run_check", lambda cli: calls.append(cli) or result)
     monkeypatch.setattr(authcheck.time, "monotonic", lambda: clock[0])
-    authcheck.notes("gh pr list")
-    clock[0] += 59
-    assert authcheck.notes("gh pr view 1") and len(calls) == 1
-    clock[0] += 2
-    authcheck.notes("gh pr list")
-    assert len(calls) == 2
+    seen = []
+    for step in (0, 59, 2):
+        clock[0] += step
+        authcheck.notes("gh pr list", "C1")
+        seen.append(len(calls))
+    assert seen == checks, desc
 
 
 def test_suggest_command_still_posts_and_adds_the_note(store, sid, monkeypatch):
@@ -82,5 +90,5 @@ def test_suggest_command_still_posts_and_adds_the_note(store, sid, monkeypatch):
     mcp_server._store, mcp_server._sid = store, sid
     monkeypatch.setattr(authcheck, "run_check", lambda cli: authcheck.SIGNED_OUT)
     result = mcp_server.suggest_command("gh pr view 1", "Check the PR")
-    assert result.startswith("C1: shown\ngh isn't signed in") and 'suggest "gh auth login" first' in result
+    assert result.startswith("C1: shown\ngh's sign-in check failed") and result.endswith("run it before C1."), result
     assert store.item(sid, "C1")["body"] == "gh pr view 1"

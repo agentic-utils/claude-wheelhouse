@@ -103,9 +103,9 @@ def suggest_command(command: str, why: str, want_output: bool = False) -> str:
     until they run it, running while it runs, run once a run exits 0, failed when one doesn't
     (or its tab closes before it ends). Suggesting the same command again updates its item
     and opens it again, unless it is running. Returns "C4: shown", with a line for each CLI
-    it uses that isn't signed in (gcloud, gh, aws...): suggest that CLI's login first."""
+    it uses that may need signing in (gcloud, gh, aws...): suggest that CLI's login too."""
     ref, _ = _store.post_command(_sid, command, why, bool(want_output))
-    return "\n".join([f"{ref}: shown", *authcheck.notes(command)])   # posted first: a check takes up to 10 s
+    return "\n".join([f"{ref}: shown", *authcheck.notes(command, ref)])   # posted first: a check takes up to 10 s
 
 
 # a change of work: a task finished or dropped, a question answered. Its reply lists what is
