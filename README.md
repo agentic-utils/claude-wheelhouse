@@ -188,7 +188,8 @@ session.
   question shows as `processing` (dimmed), awaiting the session, and the session list's
   question count leaves it out: it counts only questions awaiting you, a queued answer
   not yet sent included, and adds each command waiting for you to run it. Tasks,
-  decisions and subagents you answer show `queued` and `processing` the same way. Answers reach the session
+  decisions and subagents you answer show `queued` and `processing` the same way.
+  Answers reach the session
   as a notification, even when it's idle. A running session started from an older
   wheelhouse shows "needs relaunch" (`⟳` in the session list): Relaunch gives it the new wheelhouse
   code (once you've `/exit`ed it in its tab). It still queues answers as usual,
