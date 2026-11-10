@@ -594,10 +594,11 @@ def test_a_tabs_compaction_says_its_sizes_from_its_transcript(store, sid, tmp_pa
     ("ls", "", False, "why is empty", "no why"),
     ("ls", "one\ntwo", False, "one line", "a why over one line"),
 ])
-def test_suggest_command(store, sid, command, why, want_output, error, desc):
+def test_suggest_command(store, sid, command, why, want_output, error, desc, monkeypatch):
     """#257: a command item, its why the title and the command the body, checked at post time."""
     from mcp.server.mcpserver.exceptions import ToolError
-    from claude_wheelhouse import mcp_server
+    from claude_wheelhouse import authcheck, mcp_server
+    monkeypatch.setattr(authcheck, "notes", lambda command, ref: [])   # no real gh check (#361)
     mcp_server._store, mcp_server._sid = store, sid
     if error:
         with pytest.raises(ToolError, match=error.replace("+", r"\+")):

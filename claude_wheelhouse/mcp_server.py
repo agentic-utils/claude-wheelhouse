@@ -12,7 +12,7 @@ import time
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
-from . import docroots, fingerprint, liveness, steps, watchdog
+from . import authcheck, docroots, fingerprint, liveness, steps, watchdog
 from .store import GONE_TEXT, SessionGone, Store, mcp_named, mcp_servers, redacted, runner, wheelhouse_item
 
 HEARTBEAT_SECONDS = 30
@@ -102,9 +102,10 @@ def suggest_command(command: str, why: str, want_output: bool = False) -> str:
     that. Without it you see nothing, so don't wait for it. Its status is the person's: open
     until they run it, running while it runs, run once a run exits 0, failed when one doesn't
     (or its tab closes before it ends). Suggesting the same command again updates its item
-    and opens it again, unless it is running. Returns "C4: shown"."""
+    and opens it again, unless it is running. Returns "C4: shown", with a line for each CLI
+    it uses that may need signing in (gcloud, gh, aws...): suggest that CLI's login too."""
     ref, _ = _store.post_command(_sid, command, why, bool(want_output))
-    return f"{ref}: shown"
+    return "\n".join([f"{ref}: shown", *authcheck.notes(command, ref)])   # posted first: a check takes up to 10 s
 
 
 # a change of work: a task finished or dropped, a question answered. Its reply lists what is

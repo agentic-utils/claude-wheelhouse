@@ -126,7 +126,9 @@ DECISION_FIELDS = (("why", "Why"),)
 # edits the place the Decisions pane reads: an older session isn't told.
 # 28: the subagent watchdog (#328): the set_watchdog and quiet tools, and the protocol rule that a
 # brief tells a subagent that will be quiet on purpose to call quiet: an older MCP server has neither.
-PROTOCOL_VERSION = 28
+# 29: suggest_command's sign-in check (#361), and the protocol rule to suggest a CLI's login when
+# its result says the CLI may need signing in: an older MCP server checks nothing.
+PROTOCOL_VERSION = 29
 # the least time between two compactions a session asks for itself (request_compact), so a
 # confused one can't loop: seconds since its last accepted request
 MODEL_COMPACT_GAP = 30 * 60
