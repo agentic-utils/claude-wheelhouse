@@ -5,15 +5,26 @@ is due, and the cache in `<state dir>/prs.db` the route answers from.
 A fetch is one `gh api graphql` call serving both scopes: each tracked PR (a PR item not yet
 merged or closed) as an aliased `repository { pullRequest }`, and the `author:@me` search for
 All. The clock and the runner are injectable, so the tests never run `gh`.
+
+A GitLab merge request (a PR item whose URL is one: .plan/gitlab.md) is fetched by `glab api`,
+one REST call each, its answer read into the same row (`mr_row`), so status, light and the
+cache are shared. glab holds the host's login and token (its config, or GITLAB_TOKEN in the
+environment, both its own): none is read, passed on or logged here, and errors are scrubbed.
+A problem with GitLab is a warning, never the error that blanks the table; All is GitHub's.
+Its own runner is injectable too (`glab`).
 """
 
 import json
+import os
+import re
 import sqlite3
 import subprocess
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Callable
+from urllib.parse import quote
 
 from claude_wheelhouse import api
 
@@ -62,6 +73,21 @@ SAID = {"PullRequestReview": {"APPROVED": "approved", "CHANGES_REQUESTED": "aske
         "HeadRefForcePushedEvent": "force-pushed", "ClosedEvent": "closed it", "ReopenedEvent": "reopened it",
         "MergedEvent": "merged it", "IssueComment": "commented"}
 COMMENTS = 10        # the newest comments shown
+
+
+# GitLab (.plan/gitlab.md)
+GITLAB_AT_ONCE = 4   # merge requests fetched in parallel
+GITLAB_MOST = 30     # merge requests fetched in one go: the rest keep their last row
+NOTES = 40           # a merge request's newest notes asked for
+CHECKS = {"success": "SUCCESS", "skipped": "SUCCESS", "manual": "SUCCESS", "failed": "FAILURE", "canceled": "FAILURE",
+          "canceling": "FAILURE", "running": "PENDING", "pending": "PENDING", "created": "PENDING",
+          "preparing": "PENDING", "waiting_for_resource": "PENDING", "scheduled": "PENDING",
+          "waiting_for_callback": "PENDING"}   # a pipeline's status as GitHub's rollup says it
+STATE = {"opened": "OPEN", "locked": "OPEN", "merged": "MERGED", "closed": "CLOSED"}
+DRAFT_MARK = re.compile(r"^\s*(?:\[draft\]|\(draft\)|draft:)\s*", re.IGNORECASE)
+TOKENS = re.compile(r"\bgl[a-z]{2,6}-[A-Za-z0-9_.-]{8,}")   # GitLab's token prefixes (glpat-, gldt-, glcbt-...)
+SECRETS = ("GITLAB_TOKEN", "GITLAB_ACCESS_TOKEN", "OAUTH_TOKEN")   # glab's token variables
+NO_MR_ACTIONS = "merge requests can't be merged, closed or made draft or ready from here yet: use GitLab"
 
 
 def login(node: dict | None, key: str = "author") -> str:
@@ -229,6 +255,108 @@ def answer(code: int, out: str, err: str) -> dict:
     raise RuntimeError((err or out).strip().splitlines()[-1] if (err or out).strip() else f"gh exited {code}")
 
 
+# GitLab merge requests (.plan/gitlab.md)
+
+def scrub(text: str) -> str:
+    """text without any GitLab token in it: one in glab's output, or the value of a token
+    variable in this process's environment."""
+    for var in SECRETS:
+        if len(secret := os.environ.get(var) or "") >= 8:
+            text = text.replace(secret, "[token]")
+    return TOKENS.sub("[token]", text)
+
+
+def glab(argv: list[str]) -> tuple[int, str, str]:
+    """The real runner for GitLab: `glab` itself, Unavailable if it isn't installed. Never asked
+    anything (no input, NO_PROMPT), and given the CA the person named, for the process alone
+    (SSL_CERT_FILE, which a Go program reads); its token it finds itself."""
+    env = {**os.environ, "NO_PROMPT": "1"}
+    if ca := api.gitlab_ca_cert():
+        env["SSL_CERT_FILE"] = ca
+    try:
+        done = subprocess.run(argv, capture_output=True, text=True, timeout=TIMEOUT, env=env, stdin=subprocess.DEVNULL)
+    except FileNotFoundError:
+        raise Unavailable("glab isn't installed: GitLab merge requests need the GitLab CLI") from None
+    return done.returncode, done.stdout, scrub(done.stderr)
+
+
+def mr_path(path: str, n: int) -> str:
+    """A merge request's endpoint, under the API root: the project's path as one encoded segment."""
+    return f"projects/{quote(path, safe='')}/merge_requests/{n}"
+
+
+def mr_failure(host: str, code: int, out: str, err: str) -> Exception:
+    """What `glab api` failing says, as Unavailable (not logged in) or RuntimeError (any other)."""
+    text = scrub(err or out)
+    if re.search(r"\b401\b|unauthori[sz]ed|not logged in|no token|authenticat", text, re.IGNORECASE):
+        return Unavailable(f"{host}: glab isn't logged in: run glab auth login --hostname {host}")
+    line = last_line(text) or f"glab exited {code}"
+    hint = " (the host's CA: set GITLAB_CA_CERT, or glab's ca_cert)" if "x509" in line or "certificate" in line else ""
+    return RuntimeError(f"{host}: {line}{hint}")
+
+
+def mr_json(host: str, endpoint: str, runner: Runner):
+    """What `glab api --hostname <host> <endpoint>` answers, read as JSON; Unavailable or RuntimeError as mr_failure says."""
+    code, out, err = runner(["glab", "api", "--hostname", host, endpoint])
+    if code != 0:
+        raise mr_failure(host, code, out, err)
+    try:
+        return json.loads(out)
+    except ValueError:
+        raise RuntimeError(f"{host}: GitLab's answer isn't JSON") from None
+
+
+def mr_mergeable(data: dict) -> str:
+    """GitHub's word for whether a merge request can merge now: MERGEABLE, CONFLICTING or UNKNOWN."""
+    detailed = data.get("detailed_merge_status")
+    if data.get("has_conflicts") or detailed == "conflict":
+        return "CONFLICTING"
+    if detailed is None:   # a GitLab before detailed_merge_status
+        return {"can_be_merged": "MERGEABLE", "cannot_be_merged": "CONFLICTING"}.get(data.get("merge_status"), "UNKNOWN")
+    return "MERGEABLE" if detailed == "mergeable" else "UNKNOWN"
+
+
+def mr_row(url: str, data: dict) -> dict | None:
+    """A merge request as GitLab's REST answer gives it, as a cached row (row's shape, so
+    status and light read it as they read a PR's); None for no merge request. url is the
+    item's own, the row's key."""
+    if not isinstance(data, dict) or not data.get("iid"):
+        return None
+    draft = bool(data["draft"] if data.get("draft") is not None else data.get("work_in_progress"))   # an older GitLab's name
+    title = data.get("title") or ""
+    pipeline = data.get("head_pipeline") or {}
+    detailed = data.get("detailed_merge_status")
+    full = ((data.get("references") or {}).get("full") or "").rpartition("!")[0]
+    return {"url": url, "number": data["iid"], "title": DRAFT_MARK.sub("", title) if draft else title, "draft": draft,
+            "state": STATE.get(data.get("state"), ""), "updated": data.get("updated_at") or "",
+            "branch": data.get("source_branch") or "",
+            "review": {"not_approved": "REVIEW_REQUIRED", "requested_changes": "CHANGES_REQUESTED"}.get(detailed),
+            "mergeable": mr_mergeable(data), "checks": CHECKS.get(pipeline.get("status")),
+            "repo": full or api.parse_mr(url)[1]}
+
+
+def mr_detail(url: str, runner: Runner) -> dict:
+    """A merge request's detail, as `detail` gives a PR's: its description, its head pipeline as
+    the one check, its notes as history (the system's: approved, merged, commits added...) and as
+    comments (the people's). Unavailable or RuntimeError as mr_failure says."""
+    host, path, n = api.parse_mr(url)
+    data = mr_json(host, mr_path(path, n), runner)
+    if not isinstance(data, dict) or not data.get("iid"):
+        raise RuntimeError("GitLab has no such merge request")
+    notes = mr_json(host, f"{mr_path(path, n)}/notes?order_by=created_at&sort=desc&per_page={NOTES}", runner)
+    notes = [x for x in reversed(notes if isinstance(notes, list) else []) if isinstance(x, dict)]
+    who = lambda note: (note.get("author") or {}).get("username") or "someone"   # noqa: E731
+    history = [{"at": x.get("created_at") or "", "what": f"{who(x)} {((x.get('body') or '').strip().splitlines() or [''])[0]}".strip()}
+               if x.get("system") else {"at": x.get("created_at") or "", "what": f"{who(x)} commented"}
+               for x in notes]
+    comments = [{"author": who(x), "at": x.get("created_at") or "", "body": x.get("body") or "",
+                 "url": f"{url}#note_{x.get('id')}"} for x in notes if not x.get("system") and (x.get("body") or "").strip()]
+    pipeline = data.get("head_pipeline") or {}
+    state = {"SUCCESS": "passed", "FAILURE": "failing", "PENDING": "running"}.get(CHECKS.get(pipeline.get("status")))
+    checks = [{"name": f"pipeline #{pipeline.get('id')}", "url": pipeline.get("web_url") or "", "state": state}] if state else []
+    return {"body": data.get("description") or "", "checks": checks, "history": history, "comments": comments[-COMMENTS:]}
+
+
 class Cache:
     """`<state dir>/prs.db`: one row per PR from the last fetch, its JSON and when it was
     fetched. A connection a call, as routes run on worker threads."""
@@ -266,8 +394,9 @@ class Fetcher:
     """The route's state, one per daemon: the cache, the last fetch, and the lock that keeps
     a second fetch from starting while one runs (its asker answered from the cache)."""
 
-    def __init__(self, ctx: api.Context, runner: Runner = gh, clock: Callable[[], float] = time.time):
-        self.ctx, self.runner, self.clock = ctx, runner, clock
+    def __init__(self, ctx: api.Context, runner: Runner = gh, clock: Callable[[], float] = time.time,
+                 glab_runner: Runner = glab):
+        self.ctx, self.runner, self.clock, self.glab = ctx, runner, clock, glab_runner
         self.cache = Cache(Path(ctx.state_dir) / "prs.db")
         self.last = self.cache.fetched_at()   # a restart keeps the GAP
         self.lock = threading.Lock()
@@ -284,28 +413,66 @@ class Fetcher:
         return out
 
     def fetch(self) -> None:
-        tracked = [(url, p) for url, it in self.items().items()
-                   if it["status"] not in ("merged", "closed") and (p := api.parse_pr(url))]
+        open_urls = [url for url, it in self.items().items() if it["status"] not in ("merged", "closed")]
+        tracked = [(url, p) for url in open_urls if not api.is_mr(url) and (p := api.parse_pr(url))]
+        merges = [url for url in open_urls if api.is_mr(url)]
+        gitlab, kept, notes = self.fetch_gitlab(merges)
         try:
             data = run(query([p for _, p in tracked]), self.runner)
         except Unavailable as e:
-            self.error, self.last = str(e), self.clock()
-            return
+            if not merges:
+                self.error, self.last = str(e), self.clock()
+                return
+            data, notes = None, [str(e), *notes]   # GitLab's merge requests still show
         except (RuntimeError, OSError, subprocess.SubprocessError) as e:
-            self.error, self.warning, self.last = None, str(e) or type(e).__name__, self.clock()
-            return
-        mine, found = parse(data, len(tracked))
+            if not merges:
+                self.error, self.warning, self.last = None, str(e) or type(e).__name__, self.clock()
+                return
+            data, notes = None, [str(e) or type(e).__name__, *notes]
+        if data is None:   # GitHub's last rows stay
+            mine, found, old = gitlab, [], [r for r in self.cache.rows() if not api.is_mr(r["url"])]
+        else:
+            mine, found = parse(data, len(tracked))
+            mine, old = mine + gitlab, []
         for r in mine:
             r["tracked"] = True
-        by_url = {r["url"]: r for r in found}
+        by_url = {r["url"]: r for r in [*old, *found]}
         by_url.update({r["url"]: {**by_url.get(r["url"], {}), **r} for r in mine})
         for r in found:
             by_url[r["url"]].setdefault("searched", True)
+        last = {r["url"]: r for r in self.cache.rows()}
+        by_url.update({url: last[url] for url in kept if url in last and url not in by_url})   # GitLab didn't answer: its last row
         self.last = self.clock()
         self.cache.replace(list(by_url.values()), self.last)
-        self.error = self.warning = None
+        self.error, self.warning = None, "; ".join(notes) or None
         if mine and self.ctx.set_pr_states is not None:
             self.ctx.set_pr_states({r["url"]: status(r) for r in mine})
+
+    def fetch_gitlab(self, urls: list[str]) -> tuple[list[dict], list[str], list[str]]:
+        """The open merge requests (urls) fetched through glab, a few at a time: (their rows,
+        those that didn't answer, so their last rows are kept, and what went wrong, said once
+        a way). Never raises."""
+        if not urls:
+            return [], [], []
+        rows, kept, notes = [], urls[GITLAB_MOST:], []
+
+        def one(url: str):
+            host, path, n = api.parse_mr(url)
+            try:
+                return url, mr_row(url, mr_json(host, mr_path(path, n), self.glab)), None
+            except Unavailable as e:
+                return url, None, str(e)
+            except (RuntimeError, OSError, subprocess.SubprocessError) as e:
+                return url, None, scrub(str(e) or type(e).__name__)
+        with ThreadPoolExecutor(max_workers=GITLAB_AT_ONCE) as pool:
+            for url, got, why in pool.map(one, urls[:GITLAB_MOST]):
+                if got is not None:
+                    rows.append(got)
+                    continue
+                kept.append(url)
+                if why and why not in notes:
+                    notes.append(why)
+        return rows, kept, notes
 
     def answer(self, scope: str, fresh: bool) -> dict:
         """The route's answer: a fetch first if one is due and none is running, then the
@@ -333,6 +500,8 @@ class Fetcher:
         marked merged so the pane drops it; {"error"} with why not, as gh says it."""
         if not isinstance(url, str) or api.pr_url(url) != url:   # the whole of it, nothing gh could take as a flag
             raise api.Refused(400, f"not a pull request URL: {url!r}")
+        if api.is_mr(url):
+            return {"failed": NO_MR_ACTIONS}
         owner, repo, _ = api.parse_pr(url)
         try:
             how = method(f"{owner}/{repo}", self.runner)
@@ -371,6 +540,8 @@ class Fetcher:
         """`gh pr <verb> -- <url>` run: None once it's done, else {"error"} with why not."""
         if not isinstance(url, str) or api.pr_url(url) != url:   # the whole of it, nothing gh could take as a flag
             raise api.Refused(400, f"not a pull request URL: {url!r}")
+        if api.is_mr(url):
+            return {"failed": NO_MR_ACTIONS}
         try:
             code, out, err = self.runner(["gh", "pr", *verb, "--", url])
         except Unavailable as e:
@@ -406,11 +577,14 @@ class Fetcher:
         at, kept = self.details.get(url, (None, None))
         if at is not None and now - at < (DETAIL_GAP if fresh else DETAIL_EVERY):
             return kept
-        owner, repo, n = api.parse_pr(url)
         try:
-            code, out, err = self.runner(["gh", "api", "graphql", "-f", f"query={DETAIL}",
-                                          "-f", f"owner={owner}", "-f", f"name={repo}", "-F", f"number={n}"])
-            got = detail(answer(code, out, err))
+            if api.is_mr(url):
+                got = mr_detail(url, self.glab)
+            else:
+                owner, repo, n = api.parse_pr(url)
+                code, out, err = self.runner(["gh", "api", "graphql", "-f", f"query={DETAIL}",
+                                              "-f", f"owner={owner}", "-f", f"name={repo}", "-F", f"number={n}"])
+                got = detail(answer(code, out, err))
         except Unavailable as e:
             return {**(kept or {}), "error": str(e)}
         except (RuntimeError, OSError, subprocess.SubprocessError) as e:

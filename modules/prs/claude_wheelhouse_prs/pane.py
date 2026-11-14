@@ -42,6 +42,7 @@ DIM = "#5a3500"   # an orange light, flashed off
 LOOKS = {"red": "#ff3b30", "orange": "#ff9500", "yellow": "#ffd300", "green": "#00ff9f", "grey": "#8c8c8c"}
 SCOPES = ("mine", "all")
 RUNNER: fetch.Runner = fetch.gh          # gh itself; the tests put a stub here
+GLAB_RUNNER: fetch.Runner = fetch.glab   # glab itself, for GitLab merge requests; the tests put a stub here
 CLOCK = time.time                        # the route's clock; the tests move it on
 SHORT = {"Request review": "Review", "Mark ready": "Ready", "Make draft": "Draft"}   # a caption's shorter form, where a bar is too narrow for its own
 TARGETS = "prs.review_targets"           # settings: Request review's past targets, most recent first, a JSON list
@@ -75,7 +76,8 @@ GREY, HEAD = "#777777", "bold steel_blue1"
 # the daemon side: the route the pane asks
 
 def routes(ctx: api.Context) -> list[api.Route]:
-    fetcher = fetch.Fetcher(ctx, lambda argv: RUNNER(argv), lambda: CLOCK())   # asked once a daemon (served.Served)
+    fetcher = fetch.Fetcher(ctx, lambda argv: RUNNER(argv), lambda: CLOCK(),   # asked once a daemon (served.Served)
+                            lambda argv: GLAB_RUNNER(argv))
 
     def listed(call: api.Call):
         scope = call.query.get("scope", "mine")
