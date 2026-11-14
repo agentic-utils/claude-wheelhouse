@@ -35,9 +35,10 @@ anything here seems to conflict with them, follow yours.
   message on its ref, which may quote the line it's about. Reply on that ref with `reply`
   and no status; if the comment leads you to change the doc, post its path again.
 - A pull request you make with `gh pr create` (yours or a subagent's) shows in the
-  wheelhouse by itself, as `PR` and its number. Post one you made some other way (the web,
-  another tool) with `post_item(kind="pr", title, url)`, and post its url again with
-  `parent` to file it under the task it was made for. Its status is GitHub's: never set one.
+  wheelhouse by itself, as `PR` and its number. So does a GitLab merge request you make
+  with `glab mr create`, where the person has named its host. Post one you made some other
+  way (the web, another tool) with `post_item(kind="pr", title, url)`, and post its url again with
+  `parent` to file it under the task it was made for. Its status is GitHub's or GitLab's: never set one.
   The person may write on a PR ("fix the failing lint"): a message on its ref. Reply on that
   ref with `reply` and no status.
 - When you want the person to run a shell command themselves (one that needs their

@@ -1802,17 +1802,21 @@ class Store:
 
     def post_pr(self, sid: str, url: str, title: str, parent: str | None = None, pinned: bool = False,
                 detected: bool = False) -> str | None:
-        """A pull request the session made: its GitHub URL, kept canonical as the item's body
-        (prs.canonical), and its ref the PR's number, PR108 (then PR108b, c... for another
+        """A pull request the session made: its GitHub URL (or its GitLab merge request's, on a
+        host of features.gitlab_hosts()), kept canonical as the item's body (prs.canonical), and
+        its ref the PR's number, PR108 (then PR108b, c... for another
         repo's same number in this session, so refs stay unique). The same URL posted again
         in the session is the same item: its title (and parent, if given) updated, its status
-        left to GitHub. parent: a task, question or decision of the session's to list it under.
+        left to GitHub (or GitLab). parent: a task, question or decision of the session's to list it under.
         detected: found in a transcript (prs.PrWatcher), not posted by the session: nothing
         is made when any session already has the URL, and an existing item keeps its title.
         Returns the item's ref, or None for a detected PR passed over."""
         canon = prs.canonical(url)
         if canon is None or canon != url.strip().rstrip("/"):
-            raise ValueError(f"url must be a GitHub pull request, https://github.com/<owner>/<repo>/pull/<n>, not {url!r}")
+            gitlab = sorted(features.gitlab_hosts())
+            more = (f", or a GitLab merge request, https://<host>/<group>/<project>/-/merge_requests/<n>, on {' or '.join(gitlab)}"
+                    if gitlab else "")
+            raise ValueError(f"url must be a GitHub pull request, https://github.com/<owner>/<repo>/pull/<n>{more}, not {url!r}")
         with self.tx() as db:
             self._require(db, sid)
             if parent:
