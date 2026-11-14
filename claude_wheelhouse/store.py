@@ -128,7 +128,9 @@ DECISION_FIELDS = (("why", "Why"),)
 # brief tells a subagent that will be quiet on purpose to call quiet: an older MCP server has neither.
 # 29: suggest_command's sign-in check (#361), and the protocol rule to suggest a CLI's login when
 # its result says the CLI may need signing in: an older MCP server checks nothing.
-PROTOCOL_VERSION = 29
+# 30: GitLab merge requests as PR items: an older MCP server refuses a merge request's URL in post_item,
+# and an older session isn't told of `glab mr create`.
+PROTOCOL_VERSION = 30
 # the least time between two compactions a session asks for itself (request_compact), so a
 # confused one can't loop: seconds since its last accepted request
 MODEL_COMPACT_GAP = 30 * 60
