@@ -122,10 +122,10 @@ async def pick_in_inbox(app, pilot, key):
 
 
 async def none_picked(app, pilot, sid, q):
-    """The PRs pane's highlight hidden on PR109: PR109 picked in the inbox, then question q,
+    """The PRs pane's highlight hidden on wheelhouse#PR109: wheelhouse#PR109 picked in the inbox, then question q,
     which the pane doesn't list (#148)."""
     p = await on_first(app, pilot)
-    for ref in ("PR109", q):
+    for ref in ("wheelhouse#PR109", q):
         await pick_in_inbox(app, pilot, f"{sid}|{ref}")
         await until(pilot, lambda: p.in_detail == ("item", sid, ref), f"Detail on {ref}")
     return p
@@ -147,7 +147,7 @@ async def test_the_pane_lists_the_sessions_prs_then_all(store, sid, github):
         assert cells(app) == ["PR108", "PR109"], "red before green"
         assert len(app.query_one("#pr-list").columns) == 3, "one repo: no Repo column"
         assert github.calls == 1, "fresh as it's shown, once"
-        assert {i["ref"]: i["status"] for i in store.pr_items()} == {"PR108": "open", "PR109": "open"}, \
+        assert {i["ref"]: i["status"] for i in store.pr_items()} == {"wheelhouse#PR108": "open", "wheelhouse#PR109": "open"}, \
             "GitHub's state written back"
         app.query_one("#pr-list").focus()
         await pilot.pause()
@@ -175,19 +175,19 @@ async def test_selecting_shows_an_item_or_a_card_and_enter_opens(store, sid, git
         await pilot.pause()
         await pilot.press("down")   # none picked here yet: the first key brings the highlight back where it is
         await pilot.pause()
-        assert table.show_cursor and shown == [(sid, "PR109")], "the first key: the hidden highlight's row picked"
+        assert table.show_cursor and shown == [(sid, "wheelhouse#PR109")], "the first key: the hidden highlight's row picked"
         await pilot.press("up")
         await pilot.pause()
         card = app.query_one("#prs-card")
         text = str(app.query_one("#prs-card-text").render())
         assert card.display and "doug/7" in text and "success" in text, \
             "a PR that isn't an item: a card with its branch and checks"
-        assert shown == [(sid, "PR109")], "nothing more in Detail"
+        assert shown == [(sid, "wheelhouse#PR109")], "nothing more in Detail"
         await pilot.press("enter")
         await pilot.pause()
         await pilot.press("up")
         await pilot.pause()
-        assert shown == [(sid, "PR109"), (sid, "PR108")], "an item: shown in Detail"
+        assert shown == [(sid, "wheelhouse#PR109"), (sid, "wheelhouse#PR108")], "an item: shown in Detail"
         assert not app.query_one("#prs-card").display, "no card for an item"
         assert opened == ["https://github.com/doug/mizpah/pull/7"], "Enter: the browser"
 
@@ -231,7 +231,7 @@ async def test_a_hovered_or_highlighted_row_keeps_its_colours(store, sid, github
         table = app.query_one(list_id)
         kept = await keeps_colours(pilot, table, desc, first_item(app) if list_id == "#items" else 0)
         if list_id == "#pr-list":
-            assert pane.LOOKS["red"] in kept, f"{desc}: PR108's light red"
+            assert pane.LOOKS["red"] in kept, f"{desc}: wheelhouse#PR108's light red"
 
 
 @pytest.mark.anyio
@@ -242,9 +242,9 @@ async def test_detail_s_pr_is_highlighted_though_the_list_lands_after_it(store, 
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await until(pilot, lambda: any(not k.endswith("|") for k in app.items_table.keys()), "the inbox listed")
-        await to_first_item(app, pilot)   # PR109, under the conversation row (#236)
-        await until(pilot, lambda: app.query("#prs") and app.query_one("#prs").in_detail == ("item", sid, "PR109"),
-                    "Detail on PR109, the list not landed")
+        await to_first_item(app, pilot)   # wheelhouse#PR109, under the conversation row (#236)
+        await until(pilot, lambda: app.query("#prs") and app.query_one("#prs").in_detail == ("item", sid, "wheelhouse#PR109"),
+                    "Detail on wheelhouse#PR109, the list not landed")
         table = app.query_one("#pr-list")
         assert not table.show_cursor and not table.row_count, "nothing listed to highlight yet"
         github.gate.set()
@@ -455,9 +455,9 @@ async def test_the_selected_pr_has_its_actions_and_open_opens_it(store, sid, git
 @pytest.mark.anyio
 @pytest.mark.parametrize("n, answer, merged, said, desc", [
     (109, "alt+n", None, None, "No: nothing merged"),
-    (109, "alt+y", (0, ""), "Merged PR109 (squash).", "Yes: merged the way the repo allows, gone from the list"),
+    (109, "alt+y", (0, ""), "Merged wheelhouse#PR109 (squash).", "Yes: merged the way the repo allows, gone from the list"),
     (109, "alt+y", (1, "X Pull request #109 is not mergeable: the base branch policy prohibits the merge."),
-     "Couldn't merge PR109: gh says: X Pull request #109 is not mergeable", "a failure says why"),
+     "Couldn't merge wheelhouse#PR109: gh says: X Pull request #109 is not mergeable", "a failure says why"),
 ])
 async def test_merge_asks_first_and_says_what_came_of_it(store, sid, github, n, answer, merged, said, desc):
     app = WheelhouseApp(store)
@@ -482,10 +482,10 @@ async def test_merge_asks_first_and_says_what_came_of_it(store, sid, github, n, 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("draft, button, ready, argv, caption, said, desc", [
-    (True, "#pr-ready", (0, ""), ["--", URL.format(109)], "Make draft", "Marked PR109 ready", "a draft: marked ready"),
-    (False, "#pr-ready", (0, ""), ["--undo", "--", URL.format(109)], "Mark ready", "Made PR109 a draft", "made a draft"),
+    (True, "#pr-ready", (0, ""), ["--", URL.format(109)], "Make draft", "Marked wheelhouse#PR109 ready", "a draft: marked ready"),
+    (False, "#pr-ready", (0, ""), ["--undo", "--", URL.format(109)], "Mark ready", "Made wheelhouse#PR109 a draft", "made a draft"),
     (True, "#prd-ready", (1, "X not allowed"), ["--", URL.format(109)], "Mark ready",
-     "Couldn't mark PR109 ready: gh says: X not allowed", "from Detail; gh's refusal said, the caption kept"),
+     "Couldn't mark wheelhouse#PR109 ready: gh says: X not allowed", "from Detail; gh's refusal said, the caption kept"),
 ])
 async def test_draft_ready_runs_gh_pr_ready_busy_then_refreshed(store, sid, github, draft, button, ready,
                                                                argv, caption, said, desc):
@@ -514,7 +514,7 @@ async def test_draft_ready_runs_gh_pr_ready_busy_then_refreshed(store, sid, gith
 
 @pytest.mark.anyio
 async def test_a_merge_that_cant_apply_is_off_and_its_tooltip_says_why(store, sid, github):
-    """#212: PR108 fails its checks, so Merge is off, in the bar and the menu, saying why."""
+    """#212: wheelhouse#PR108 fails its checks, so Merge is off, in the bar and the menu, saying why."""
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await settled(app, pilot)
@@ -535,14 +535,14 @@ async def test_a_merge_that_cant_apply_is_off_and_its_tooltip_says_why(store, si
 
 @pytest.mark.anyio
 async def test_draft_ready_on_marked_prs_acts_on_the_drafts_alone_and_review_skips_them(store, sid, github, monkeypatch):
-    """#212: PR108 a draft, PR109 not, both marked: Mark ready, for PR108 alone; Request
-    review asks for PR109 alone and says why it skipped PR108."""
+    """#212: wheelhouse#PR108 a draft, wheelhouse#PR109 not, both marked: Mark ready, for wheelhouse#PR108 alone; Request
+    review asks for wheelhouse#PR109 alone and says why it skipped wheelhouse#PR108."""
     github.tracked[0] = github.found[0] = node(108, draft=True)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await settled(app, pilot)
         p = await on_pr(app, pilot, URL.format(108))
-        app.query_one("#pr-list").set_marks({URL.format(108), URL.format(109)})   # the draft's grey sorts it after PR109
+        app.query_one("#pr-list").set_marks({URL.format(108), URL.format(109)})   # the draft's grey sorts it after wheelhouse#PR109
         p.marks_changed()
         await pilot.pause()
         button = app.query_one("#pr-ready", Button)
@@ -555,11 +555,11 @@ async def test_draft_ready_on_marked_prs_acts_on_the_drafts_alone_and_review_ski
         sent = []
         p.ctx = dataclasses.replace(p.ctx, ask=lambda q, past, then: then("#reviews"),
                                     send=lambda s, ref, text: sent.append(ref))
-        p.rows = [{**r, "draft": r["number"] == 108} for r in p.rows]   # as before the refresh: PR108 still a draft
+        p.rows = [{**r, "draft": r["number"] == 108} for r in p.rows]   # as before the refresh: wheelhouse#PR108 still a draft
         p.act("review", [r for r in p.rows])
         await pilot.pause()
-        assert sent == ["PR109"], sent
-        assert "Not asked for PR108 (still a draft: mark it ready first)." in p.outcome, p.outcome
+        assert sent == ["wheelhouse#PR109"], sent
+        assert "Not asked for wheelhouse#PR108 (still a draft: mark it ready first)." in p.outcome, p.outcome
 
 
 @pytest.mark.anyio
@@ -578,7 +578,7 @@ async def test_request_review_asks_the_session_that_made_the_pr_and_remembers_th
         app.screen.query_one(Input).value = "#eng-reviews"
         await pilot.press("enter")
         await pilot.pause()
-        assert sent == [((sid, "PR109"), pane.request({"url": URL.format(109), "title": "Change 109"}, "#eng-reviews"))], \
+        assert sent == [((sid, "wheelhouse#PR109"), pane.request({"url": URL.format(109), "title": "Change 109"}, "#eng-reviews"))], \
             "the session that made it, on its item"
         assert sent[0][1].endswith(f'PR: {URL.format(109)}\nTitle: "Change 109"\nTo: "#eng-reviews"'), "the values quoted, last"
         assert json.loads(store.setting(pane.TARGETS)) == ["#eng-reviews", "@sam"], "most recent first"
@@ -669,8 +669,8 @@ async def test_the_buttons_fit_the_pane_and_each_click_acts(store, sid, github, 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("status, error, said, desc", [
-    (404, "no route POST /m/prs/merge", "Couldn't merge PR109: the hub is older: update it", "an older hub"),
-    (503, "the daemon couldn't be reached", "Couldn't merge PR109: the daemon couldn't be reached", "no hub: not gh's"),
+    (404, "no route POST /m/prs/merge", "Couldn't merge wheelhouse#PR109: the hub is older: update it", "an older hub"),
+    (503, "the daemon couldn't be reached", "Couldn't merge wheelhouse#PR109: the daemon couldn't be reached", "no hub: not gh's"),
 ])
 async def test_a_merge_the_hub_refuses_says_so_not_gh(store, sid, github, status, error, said, desc):
     app = WheelhouseApp(store)
@@ -712,9 +712,9 @@ async def test_request_review_shows_a_title_and_past_targets_as_text_not_markup(
 @pytest.mark.parametrize("size", [(160, 40), (100, 30)])
 @pytest.mark.parametrize("pick, inbox_lit, prs_lit, shown, desc", [
     ("question", True, False, "question", "an inbox item the PRs pane doesn't list: its highlight hidden"),
-    ("PR109", True, True, "PR109", "a PR item in both: both highlight it"),
-    ("hidden PR108", False, True, "PR108", "a PR item the inbox doesn't list (its parent shut): the inbox's hidden"),
-    ("PR7", False, True, None, "a PR no session made: nothing selected, the inbox's hidden, Detail says why"),
+    ("wheelhouse#PR109", True, True, "wheelhouse#PR109", "a PR item in both: both highlight it"),
+    ("hidden wheelhouse#PR108", False, True, "wheelhouse#PR108", "a PR item the inbox doesn't list (its parent shut): the inbox's hidden"),
+    ("mizpah#PR7", False, True, None, "a PR no session made: nothing selected, the inbox's hidden, Detail says why"),
 ])
 async def test_a_pick_in_one_pane_clears_the_others_highlight(store, sid, github, size, pick, inbox_lit, prs_lit,
                                                                shown, desc):
@@ -725,18 +725,18 @@ async def test_a_pick_in_one_pane_clears_the_others_highlight(store, sid, github
     app = WheelhouseApp(store)
     async with app.run_test(size=size) as pilot:
         await settled(app, pilot)
-        app.toggle_children(f"{sid}|{task}")   # PR108 out of the inbox, under its shut parent
+        app.toggle_children(f"{sid}|{task}")   # wheelhouse#PR108 out of the inbox, under its shut parent
         await pilot.pause()
         if pick == "question":
             await on_pr(app, pilot, URL.format(108))
             await pick_in_inbox(app, pilot, f"{sid}|{q}")
-        elif pick == "PR109":
+        elif pick == "wheelhouse#PR109":
             await pick_in_inbox(app, pilot, f"{sid}|{q}")
             await on_pr(app, pilot, URL.format(109))
         else:
             await pick_in_inbox(app, pilot, f"{sid}|{q}")
-            await on_pr(app, pilot, URL.format(108) if pick == "hidden PR108" else "https://github.com/doug/mizpah/pull/7",
-                        scope="mine" if pick == "hidden PR108" else "all")
+            await on_pr(app, pilot, URL.format(108) if pick == "hidden wheelhouse#PR108" else "https://github.com/doug/mizpah/pull/7",
+                        scope="mine" if pick == "hidden wheelhouse#PR108" else "all")
         await pilot.pause()
         table = app.query_one("#pr-list")
         assert app.selected == ((sid, {"question": q}.get(pick, shown)) if shown else None), desc
@@ -746,9 +746,9 @@ async def test_a_pick_in_one_pane_clears_the_others_highlight(store, sid, github
             assert app.items_table.cursor_key() == f"{sid}|{app.selected[1]}", f"{desc}: on the item shown"
         if prs_lit:
             assert table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value.endswith(
-                {"PR7": "/7"}.get(pick, pick[-3:])), f"{desc}: on the PR shown"
+                {"mizpah#PR7": "/7"}.get(pick, pick[-3:])), f"{desc}: on the PR shown"
         if shown is None:
-            assert "PR7 in mizpah isn't an item" in app._detail_text, f"{desc}: Detail says why"
+            assert "mizpah#PR7 isn't an item" in app._detail_text, f"{desc}: Detail says why"
         if not inbox_lit:   # Delete in the inbox closes nothing: no row there is picked
             before = [(i["ref"], i["status"]) for i in store.items(sid)]
             app.items_table.focus()
@@ -791,8 +791,8 @@ async def test_a_decision_shown_hides_the_prs_highlight(store, sid, github, tmp_
         if first == "prs":
             await on_pr(app, pilot, URL.format(109))
         else:
-            await pick_in_inbox(app, pilot, f"{sid}|PR109")
-        await until(pilot, lambda: table.show_cursor, f"{desc}: PR109 lit")
+            await pick_in_inbox(app, pilot, f"{sid}|wheelhouse#PR109")
+        await until(pilot, lambda: table.show_cursor, f"{desc}: wheelhouse#PR109 lit")
         if then == "adr":
             await pilot.click("#decision-list", offset=(2, 1))
             await pilot.pause()
@@ -804,16 +804,16 @@ async def test_a_decision_shown_hides_the_prs_highlight(store, sid, github, tmp_
         assert not table.show_cursor, f"{desc}: the PRs pane's highlight hidden"
         await pilot.click("#pr-list", offset=(2, 1 + table.get_row_index(URL.format(109))))
         await pilot.pause()
-        assert app.selected == (sid, "PR109") and "Write-ahead" not in app._detail_text, f"{desc}: PR109 back"
-        assert table.show_cursor and pane.Prs.key_at(table) == URL.format(109), f"{desc}: PR109 lit again"
+        assert app.selected == (sid, "wheelhouse#PR109") and "Write-ahead" not in app._detail_text, f"{desc}: wheelhouse#PR109 back"
+        assert table.show_cursor and pane.Prs.key_at(table) == URL.format(109), f"{desc}: wheelhouse#PR109 lit again"
         assert not decisions.show_cursor, f"{desc}: the Decisions' hidden in turn"
-        assert app.items_table.show_cursor, f"{desc}: the inbox on PR109 too"
+        assert app.items_table.show_cursor, f"{desc}: the inbox on wheelhouse#PR109 too"
 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("leave, desc", [
-    ("prs", "left by the PRs table's cursor onto PR109"),
-    ("inbox", "left by a pick of PR109 in the inbox"),
+    ("prs", "left by the PRs table's cursor onto wheelhouse#PR109"),
+    ("inbox", "left by a pick of wheelhouse#PR109 in the inbox"),
     ("adr", "left by a pick of another decision in the Decisions pane"),
 ])
 async def test_keep_editing_lights_only_the_decision(store, sid, github, tmp_path, monkeypatch, leave, desc):
@@ -841,7 +841,7 @@ async def test_keep_editing_lights_only_the_decision(store, sid, github, tmp_pat
         if leave == "prs":
             await on_pr(app, pilot, URL.format(109))
         elif leave == "inbox":
-            await pick_in_inbox(app, pilot, f"{sid}|PR109")
+            await pick_in_inbox(app, pilot, f"{sid}|wheelhouse#PR109")
         else:
             await pilot.click("#decision-list", offset=(2, 1 + decisions.get_row_index(gc)))
         await until(pilot, lambda: isinstance(app.screen, tui.LeaveEdits), f"{desc}: asked")
@@ -909,7 +909,7 @@ async def test_detail_shows_a_prs_buttons_and_detail_as_text(store, sid, github,
         assert not bar.display and not body.display, f"{size}: no PR in Detail, no parts"
         await on_pr(app, pilot, URL.format(109))
         await landed(app, pilot)
-        assert app.selected == (sid, "PR109") and bar.display and body.display, f"{size}: Detail's PR, its parts"
+        assert app.selected == (sid, "wheelhouse#PR109") and bar.display and body.display, f"{size}: Detail's PR, its parts"
         assert github.details.count(109) == 1, f"{size}: its detail fetched once: {github.details}"
         assert "Why: [b]bold[/b] isn't markup" in body.render().plain, f"{size}: the description as written"
         detail = app.query_one("#detail-pane").content_region
@@ -981,9 +981,9 @@ async def marked_both(app, pilot):
 @pytest.mark.anyio
 @pytest.mark.parametrize("answer, closed, said, desc", [
     ("alt+n", {}, None, "No: nothing closed"),
-    ("alt+y", {}, "Closed PR108.\nClosed PR109.", "Yes: each closed, each said"),
+    ("alt+y", {}, "Closed wheelhouse#PR108.\nClosed wheelhouse#PR109.", "Yes: each closed, each said"),
     ("alt+y", {URL.format(109): (1, "X Could not close: not allowed")},
-     "Closed PR108.\nCouldn't close PR109: gh says: X Could not close: not allowed", "one refused: said, the other closed"),
+     "Closed wheelhouse#PR108.\nCouldn't close wheelhouse#PR109: gh says: X Could not close: not allowed", "one refused: said, the other closed"),
 ])
 async def test_close_asks_naming_every_pr_marked_and_says_what_came_of_each(store, sid, github, answer, closed, said, desc):
     github.closed = closed
@@ -994,7 +994,7 @@ async def test_close_asks_naming_every_pr_marked_and_says_what_came_of_each(stor
         await pilot.click("#pr-close")
         await pilot.pause()
         assert isinstance(app.screen, tui.Confirm) and app.screen.focused.id == "no", f"{desc}: asked, No focused"
-        assert all(f"PR{n} (Change {n}) in wheelhouse" in app.screen.prompt for n in (108, 109)), app.screen.prompt
+        assert all(f"wheelhouse#PR{n} (Change {n})" in app.screen.prompt for n in (108, 109)), app.screen.prompt
         await pilot.press(answer)
         await landed(app, pilot)
         await settled(app, pilot)
@@ -1019,7 +1019,7 @@ async def test_merge_and_the_menu_act_on_every_pr_marked(store, sid, github):
         await pilot.click(f"#{next(b.id for b in menu.query(Button) if str(b.label) == 'Merge')}")
         await pilot.pause()
         assert isinstance(app.screen, tui.Confirm) and "Merge these 2 PRs" in app.screen.prompt, "asked first"
-        assert "PR108 (Change 108) in wheelhouse: checks are failing" in app.screen.prompt \
+        assert "wheelhouse#PR108 (Change 108): checks are failing" in app.screen.prompt \
             and "are tried too" in app.screen.prompt, f"what blocks each named: {app.screen.prompt}"
         await pilot.press("alt+y")
         await landed(app, pilot)
@@ -1040,7 +1040,7 @@ async def test_arrowing_past_prs_fetches_only_the_one_it_rests_on_and_a_failure_
         await on_first(app, pilot)
         p = await on_pr(app, pilot, URL.format(108))
         await until(pilot, lambda: URL.format(108) in p.detail_asked and p.detail_timer is None and not p.detail_asking,
-                    "PR108's detail fetched, none other waited on")
+                    "wheelhouse#PR108's detail fetched, none other waited on")
         github.details.clear()
         clock = Clock()   # the highlight's rest on the test's own time, however long six keys take
         monkeypatch.setattr(p, "set_timer", clock.after)
@@ -1108,8 +1108,8 @@ async def test_a_bulk_action_tries_every_pr_and_says_what_each_came_to(store, si
         p.ctx = dataclasses.replace(p.ctx, call=hub)
         await asyncio.to_thread(p.done_each, "merge", [p.row(URL.format(108)), p.row(URL.format(109))])
         await pilot.pause()
-        assert p.outcome.splitlines() == ["Merged PR108 (squash).",
-                                          "Couldn't merge PR109: gh says: X Pull request #109 is not mergeable"], p.outcome
+        assert p.outcome.splitlines() == ["Merged wheelhouse#PR108 (squash).",
+                                          "Couldn't merge wheelhouse#PR109: gh says: X Pull request #109 is not mergeable"], p.outcome
         assert said == {"busy": 0, "pending": 0}, "sent again while busy; asked again while pending"
         tokens = {path.partition("token=")[2] for path in asked}
         assert tokens == {sent_tokens[0]} and len(set(sent_tokens)) == 2, \
@@ -1123,9 +1123,9 @@ async def test_a_hub_without_the_result_route_says_the_outcome_is_unknown_at_onc
     async with app.run_test(size=(160, 40)) as pilot:
         await settled(app, pilot)
         p = await on_pr(app, pilot, URL.format(109))
-        # its detail fetched first: the highlight reaches PR109 from the 💬 row (#236), so later
+        # its detail fetched first: the highlight reaches wheelhouse#PR109 from the 💬 row (#236), so later
         await until(pilot, lambda: URL.format(109) in p.detail_asked and p.detail_timer is None and not p.detail_asking,
-                    "PR109's detail fetched")
+                    "wheelhouse#PR109's detail fetched")
         monkeypatch.setattr(pane, "PAUSE", 0)
         asked = []
 
@@ -1150,7 +1150,7 @@ async def test_actions_on_different_prs_at_once_keep_each_outcome(store, sid, gi
         a, b = p.row(URL.format(108)), p.row(URL.format(109))
         p.acted("merge", [(a, {"method": "squash"})])
         p.acted("close", [(b, {"closed": True})])
-        assert p.outcome == "Merged PR108 (squash).\nClosed PR109.", p.outcome
+        assert p.outcome == "Merged wheelhouse#PR108 (squash).\nClosed wheelhouse#PR109.", p.outcome
 
 
 @pytest.fixture
@@ -1216,7 +1216,7 @@ async def test_a_compacting_sessions_pr_in_detail_dims_and_its_buttons_lock(stor
         monkeypatch.setattr(p, "act", lambda a, rows: acted.append((a, [r["number"] for r in rows])))
         parts = [app.query_one("#detail-more"), app.query_one("#detail-bar")]
         await compacting(app, pilot, store, sid, hosted)
-        assert app.selected == (sid, "PR109") and app.detail.has_class("compacting"), f"{button}: Detail dimmed"
+        assert app.selected == (sid, "wheelhouse#PR109") and app.detail.has_class("compacting"), f"{button}: Detail dimmed"
         assert all(w.styles.opacity == 0.5 for w in parts), f"{button}: the PR's parts dimmed with it"
         assert app.query_one(f"#{button}", Button).is_disabled, f"{button}: off while compacting"
         await pilot.click(f"#{button}")
@@ -1233,7 +1233,7 @@ async def test_a_compacting_sessions_pr_in_detail_dims_and_its_buttons_lock(stor
 @pytest.mark.anyio
 @pytest.mark.parametrize("start, lit, desc", [
     ("Q1", None, "Detail on an item the pane doesn't list: its highlight hidden (#148)"),
-    ("PR108", "/108", "Detail on a PR: its highlight back there"),
+    ("wheelhouse#PR108", "/108", "Detail on a PR: its highlight back there"),
 ])
 async def test_picking_a_compacting_sessions_pr_in_the_pane(store, sid, github, hosted, monkeypatch, start, lit, desc):
     """#165: the PRs pane's pick of a PR item whose session is compacting leaves Detail on
@@ -1260,7 +1260,7 @@ async def test_picking_a_compacting_sessions_pr_in_the_pane(store, sid, github, 
         await compacting(app, pilot, store, sid, hosted, "compacted")
         await on_pr(app, pilot, URL.format(109))
         await landed(app, pilot)
-        assert app.selected == (sid, "PR109"), f"{desc}: compacted, picked as ever"
+        assert app.selected == (sid, "wheelhouse#PR109"), f"{desc}: compacted, picked as ever"
 
 
 def dimmed(cell) -> bool:

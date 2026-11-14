@@ -441,7 +441,7 @@ def ref_text(item, child: bool = False, dim: bool = False) -> Text | str:
 def titled(item, style: str = "") -> Text | str:
     """An inbox row's title: a PR's with its repo's short name before it, dimmed; plain
     text, as ever, for any other with no style."""
-    repo = prs.repo_of(ordering.field(item, "body")) if item["kind"] == "pr" else ""
+    repo = prs.repo_of(ordering.field(item, "body")) if item["kind"] == "pr" and "#" not in item["ref"] else ""
     if not repo:
         return Text(item["title"], style=style) if style else item["title"]
     return Text.assemble(*([(f"{repo} · ", "dim")] if repo else []), (item["title"], style))
@@ -449,7 +449,7 @@ def titled(item, style: str = "") -> Text | str:
 
 def item_tip(item) -> str:
     """An inbox row's hover text: its ref and full title, a PR's with its repo."""
-    repo = prs.repo_of(ordering.field(item, "body")) if item["kind"] == "pr" else ""
+    repo = prs.repo_of(ordering.field(item, "body")) if item["kind"] == "pr" and "#" not in item["ref"] else ""
     return f"{item['ref']}  {repo + ' · ' if repo else ''}{item['title']}"
 
 

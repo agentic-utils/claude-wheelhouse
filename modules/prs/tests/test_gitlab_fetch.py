@@ -348,8 +348,8 @@ def test_draft_that_gitlab_does_not_apply_says_so(tmp_path):
 
 
 def test_the_pane_says_who_refused(tmp_path):
-    assert pane.said("merge", {"number": 2, "url": URL.format(2)}, {"error": "it's a draft"}).endswith("glab says: it's a draft")
-    assert pane.said("merge", {"number": 2, "url": GITHUB.format(2)}, {"error": "x"}).endswith("gh says: x")
+    assert pane.said("merge", {"number": 2, "url": URL.format(2), "repo": "autonomous-piloting/av"}, {"error": "it's a draft"}).endswith("glab says: it's a draft")
+    assert pane.said("merge", {"number": 2, "url": GITHUB.format(2), "repo": "two-inc/wheelhouse"}, {"error": "x"}).endswith("gh says: x")
 
 
 def test_an_action_still_takes_only_a_listed_url(tmp_path):

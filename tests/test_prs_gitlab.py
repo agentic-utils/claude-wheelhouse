@@ -119,15 +119,17 @@ def test_link_shows_the_url_and_opens_the_whole_of_it(url, shown, desc):
 # the store
 
 def test_post_pr_takes_a_merge_request(store, sid):
-    assert store.post_pr(sid, MR, "Inbox pins") == "PR12"
-    item = store.item(sid, "PR12")
+    assert store.post_pr(sid, MR, "Inbox pins") == "av#PR12"
+    item = store.item(sid, "av#PR12")
     assert (item["kind"], item["status"], item["body"]) == ("pr", "open", MR)
-    assert store.post_pr(sid, NESTED, "t") == "PR7"
-    assert store.post_pr(sid, MR, "renamed") == "PR12" and len(store.pr_items()) == 2, "the same URL, the same item"
+    assert store.post_pr(sid, NESTED, "t") == "tools#PR7"
+    assert store.post_pr(sid, MR, "renamed") == "av#PR12" and len(store.pr_items()) == 2, "the same URL, the same item"
 
 
-def test_a_merge_request_and_a_pull_request_of_one_number_get_their_own_refs(store, sid):
-    assert [store.post_pr(sid, u, "t") for u in (GITHUB, GITHUB.replace("108", "12"), MR)] == ["PR108", "PR12", "PR12b"]
+def test_a_merge_request_and_a_pull_request_of_one_repo_name_and_number_get_a_letter(store, sid):
+    github = "https://github.com/agentic-utils/av/pull/12"
+    assert [store.post_pr(sid, u, "t") for u in (GITHUB, MR, github)] == ["claude-wheelhouse#PR108", "av#PR12", "av#PR12b"]
+    assert sorted(r["url"] for r in store.pr_items()) == sorted([GITHUB, MR, github])
 
 
 @pytest.mark.parametrize("url, error, desc", [
@@ -151,14 +153,14 @@ def test_the_refusal_without_hosts_is_githubs_as_ever(store, sid, monkeypatch):
 
 def test_a_merge_requests_status_is_gitlabs_to_set_through_the_pane(store, sid):
     store.post_pr(sid, MR, "t")
-    assert store.set_pr_states({MR: "merged"}) == 1 and store.item(sid, "PR12")["status"] == "merged"
+    assert store.set_pr_states({MR: "merged"}) == 1 and store.item(sid, "av#PR12")["status"] == "merged"
     assert store.pr_items()[0]["url"] == MR
 
 
 def test_mcp_posts_a_merge_request(store, sid):
     mcp_server._store, mcp_server._sid = store, sid
     tool = next(t for t in mcp_server.TOOLS if t.__name__ == "post_item")
-    assert tool(kind="pr", title="Pins", url=MR) == "PR12"
+    assert tool(kind="pr", title="Pins", url=MR) == "av#PR12"
     assert "merge request" in tool.__doc__
 
 
@@ -184,15 +186,15 @@ def write(path, *recs):
 
 @pytest.mark.parametrize("records, expected, desc", [
     ([rec("assistant", 9, bash("a", 'glab mr create --title "Pins" --fill')), rec("user", 8, result("a", f"...\n{MR}\n"))],
-     [("PR12", "Pins")], "glab mr create, its title from --title"),
+     [("av#PR12", "Pins")], "glab mr create, its title from --title"),
     ([rec("assistant", 9, bash("a", "glab mr create -t 'Pins' -d x")), rec("user", 8, result("a", MR))],
-     [("PR12", "Pins")], "-t"),
+     [("av#PR12", "Pins")], "-t"),
     ([rec("assistant", 9, bash("a", "glab mr create --fill")), rec("user", 8, result("a", MR))],
-     [("PR12", "MR 12")], "no title given: MR <n>"),
+     [("av#PR12", "MR 12")], "no title given: MR <n>"),
     ([rec("assistant", 9, {"type": "tool_use", "id": "m", "name": "mcp__gitlab__create_merge_request",
                            "input": {"title": "Via MCP"}}),
       rec("user", 8, result("m", json.dumps({"web_url": MR})))],
-     [("PR12", "Via MCP")], "the GitLab MCP server's tool"),
+     [("av#PR12", "Via MCP")], "the GitLab MCP server's tool"),
     ([rec("assistant", 9, bash("a", "glab mr create --fill")),
       rec("user", 8, result("a", MR.replace(HOST, "other.internal")))],
      [], "a host the person didn't name makes nothing"),
@@ -201,7 +203,7 @@ def write(path, *recs):
     ([rec("assistant", 9, bash("a", "glab mr view 12")), rec("user", 8, result("a", MR))],
      [], "a URL from another command makes nothing"),
     ([rec("assistant", 9, bash("a", "gh pr create -t Hub")), rec("user", 8, result("a", GITHUB))],
-     [("PR108", "Hub")], "a pull request is found as before"),
+     [("claude-wheelhouse#PR108", "Hub")], "a pull request is found as before"),
 ])
 def test_watcher_finds_merge_requests(store, sid, tmp_path, records, expected, desc):
     main = tmp_path / "main.jsonl"
@@ -216,7 +218,7 @@ def test_a_subagents_merge_request_is_filed_under_its_task(store, sid, tmp_path)
     main.write_text("")
     write(sub, rec("assistant", 9, bash("a", "glab mr create -t Sub")), rec("user", 8, result("a", MR)))
     prs.PrWatcher(sid).sync(store, main, {sub: "T1"}, EPOCH)
-    item = store.item(sid, "PR12")
+    item = store.item(sid, "av#PR12")
     assert (item["title"], item["parent_ref"], item["body"]) == ("Sub", "T1", MR)
 
 
@@ -238,9 +240,13 @@ def test_watcher_notes_glab_activity(store, sid, tmp_path, command, acts, desc):
 
 # the inbox's rows
 
-def test_a_merge_requests_row_carries_its_project():
-    item = {"kind": "pr", "ref": "PR12", "title": "Pins", "body": MR}
-    assert titled(item).plain == "av · Pins" and item_tip(item) == "PR12  av · Pins"
+@pytest.mark.parametrize("ref, title, tip, desc", [
+    ("av#PR12", "Pins", "av#PR12  Pins", "a ref that names its repo: the title doesn't repeat it"),
+    ("PR12", "av · Pins", "PR12  av · Pins", "an old ref (an older daemon's): the title carries the repo as before"),
+])
+def test_a_merge_requests_row(ref, title, tip, desc):
+    item = {"kind": "pr", "ref": ref, "title": "Pins", "body": MR}
+    assert (str(titled(item)), item_tip(item)) == (title, tip), desc
 
 
 def test_the_detail_names_a_merge_request_by_its_bang():

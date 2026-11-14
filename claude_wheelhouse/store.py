@@ -25,7 +25,8 @@ DEFAULT_DB = Path.home() / ".local/state/claude-wheelhouse/wheelhouse.db"
 # permission: a tool call waiting for the person's approval, posted by a session's SDK host
 # (never by the session itself). Allow or Deny answer it; a message on it denies with that text.
 # doc: a markdown document the session declares for the person to read (post_doc), M for markdown
-# pr: a pull request the session made (post_pr, prs.py), its ref the repo's PR number (PR108)
+# pr: a pull request (or GitLab merge request) the session made (post_pr, prs.py), its ref its repo's
+# name and number, repo#PR108 (the same name and number in another repo, host or owner: repo#PR108b)
 # command: a shell command the session asks the person to run themselves (suggest_command, #257),
 # its title the one-line why and its body the command, run from the app's Run dialog
 KINDS = {"task": "T", "question": "Q", "agent": "A", "decision": "D", "permission": "P", "doc": "M", "pr": "PR",
@@ -525,6 +526,8 @@ AGENTS_SINCE = "agents_since"
 # settings: when this database was first opened by code that finds PRs in transcripts (prs.py).
 # A PR made before then (or before its session joined) is never found (#111)
 PRS_SINCE = "prs_since"
+PR_REFS = "migrated_pr_refs"   # settings: the PR items' refs made repo#PR<n> (below) once
+OLD_PR_REF = re.compile(r"^PR(\d+)[a-z]?$")   # a PR item's ref before then: PR108, PR108b
 # seconds: how long before a subagent starts the session's own A item for it may be made
 AGENT_MATCH_BEFORE = 600
 AGENT_MATCH_AFTER = 15   # subagents.GRACE: by then the wheelhouse makes its own
@@ -724,6 +727,7 @@ class Store:
                     db.execute(f'DROP TRIGGER "{name}"')
             for trigger in TRIGGERS:
                 db.execute(trigger)
+            self._migrate_pr_refs(db)
             # a decision used to be finished once seen, and now stays until closed: those
             # seen before then are closed, once, rather than come back to the inbox
             if db.execute("SELECT 1 FROM settings WHERE key = ?", (DECISIONS_CLOSE,)).fetchone() is None:
@@ -1832,10 +1836,7 @@ class Store:
             row = db.execute("SELECT ref FROM items WHERE session_id = ? AND kind = 'pr' AND body = ? ORDER BY id LIMIT 1",
                              (sid, canon)).fetchone()
             if row is None:
-                base = f"{KINDS['pr']}{prs.parse(canon)[2]}"
-                taken = {r["ref"] for r in db.execute("SELECT ref FROM items WHERE session_id = ? AND ref LIKE ?",
-                                                      (sid, base + "%"))}
-                ref = next(base + s for s in ("", *"bcdefghijklmnopqrstuvwxyz") if base + s not in taken)
+                ref = self._pr_ref(db, sid, canon)
                 db.execute("""INSERT INTO items (session_id, ref, kind, title, body, status, created_at, updated_at,
                               session_at, pinned, parent_ref) VALUES (?, ?, 'pr', ?, ?, ?, ?, ?, ?, ?, ?)""",
                            (sid, ref, title, canon, INITIAL_STATUS["pr"], now(), now(), now(), int(pinned), parent))
@@ -1843,6 +1844,39 @@ class Store:
             db.execute("UPDATE items SET title = ?, parent_ref = coalesce(?, parent_ref), updated_at = ?, session_at = ? "
                        "WHERE session_id = ? AND ref = ?", (title, parent, now(), now(), sid, row["ref"]))
             return row["ref"]
+
+    @staticmethod
+    def _pr_ref(db, sid: str, url: str) -> str:
+        """The ref a PR item of url takes in session sid: its repo's name and number, repo#PR108,
+        with a letter after it (repo#PR108b) if another repo's PR of that name and number is already there."""
+        base = f"{prs.repo_of(url)}#{KINDS['pr']}{prs.parse(url)[2]}"
+        taken = {r["ref"] for r in db.execute("SELECT ref FROM items WHERE session_id = ? AND kind = 'pr'", (sid,))}
+        return next(base + s for s in ("", *"bcdefghijklmnopqrstuvwxyz") if base + s not in taken)
+
+    def _migrate_pr_refs(self, db) -> None:
+        """Once: each PR item's ref PR108 becomes repo#PR108 (_pr_ref), in the item, its children's
+        parent_ref and its messages: PR numbers are per repo, so PR108 named two PRs once a second
+        host or repo was in use. Nothing is dropped; resolve_ref still finds one by its old ref."""
+        if db.execute("SELECT 1 FROM settings WHERE key = ?", (PR_REFS,)).fetchone() is None:
+            for row in db.execute("SELECT session_id, ref, body FROM items WHERE kind = 'pr' ORDER BY id").fetchall():
+                if OLD_PR_REF.match(row["ref"]) and prs.repo_of(row["body"]):
+                    new = self._pr_ref(db, row["session_id"], row["body"])
+                    for table, column in (("items", "ref"), ("items", "parent_ref"), ("messages", "item_ref")):
+                        db.execute(f"UPDATE {table} SET {column} = ? WHERE session_id = ? AND {column} = ?",
+                                   (new, row["session_id"], row["ref"]))
+            db.execute("INSERT INTO settings (key, value) VALUES (?, '1')", (PR_REFS,))
+
+    def resolve_ref(self, sid: str, ref: str) -> str:
+        """The ref an item is under: ref itself if the session has it, else, for an old PR ref (PR108),
+        the one PR item of that number; ValueError naming them if several have it."""
+        if not isinstance(ref, str) or not (old := OLD_PR_REF.match(ref)) or self.item(sid, ref) is not None:
+            return ref
+        number = re.compile(rf"^[^#]+#PR{old[1]}[a-z]?$")
+        found = [r["ref"] for r in self._all("SELECT ref FROM items WHERE session_id = ? AND kind = 'pr'", (sid,))
+                 if number.match(r["ref"])]
+        if len(found) > 1:
+            raise ValueError(f"{ref} is more than one PR here, name its repo: {', '.join(found)}")
+        return found[0] if found else ref
 
     def pr_items(self) -> list[dict]:
         """Every PR item in the store, any session's: its url, session, ref, status and title."""

@@ -470,7 +470,7 @@ def listed_row(n=1, item=True, **kw):
     ([{"mergeable": "UNKNOWN"}], {}, "merge", False, None, "mergeability unknown: left on"),
     ([{"draft": True}, {}], {}, "merge", False, None, "one of two marked can merge: on, the confirm names the rest"),
     ([{"draft": True}, {"checks": "FAILURE"}], {}, "merge", True,
-     "None of these can merge:\nPR1: it's a draft\nPR2: checks are failing", "none of two can: each PR's reason"),
+     "None of these can merge:\nwheelhouse#PR1: it's a draft\nwheelhouse#PR2: checks are failing", "none of two can: each PR's reason"),
     ([{}], {1: "close"}, "merge", True, "Under way: wait for it to finish", "busy"),
     ([{"review": None}], {}, "review", False, None, "no review yet: Request review on"),
     ([{"draft": True, "review": None}], {}, "review", True, "Still a draft: mark it ready first", "a draft"),
