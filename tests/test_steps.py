@@ -218,12 +218,12 @@ def test_pr_merged_is_told_or_held(store, sid, running, parked, told, desc):
     if parked:
         store.set_parked(sid, True)
     def said():   # the merge told, and held, as the store has them now
-        told_ = [m["body"] for m in store.pending(sid) if m["kind"] == "notice" and "repo#5 (PR5) has merged" in m["body"]]
+        told_ = [m["body"] for m in store.pending(sid) if m["kind"] == "notice" and "repo#PR5 has merged" in m["body"]]
         return len(told_), [list(p) for p in steps.held(store, sid)]
     hub.set_pr_states({url: "open"})
     hub.set_pr_states({url: "merged"})
     first = said()
-    assert first == ((1, []) if told else (0, [["repo#5 (PR5)", "PR5"]])), f"{desc}: {first}"
+    assert first == ((1, []) if told else (0, [["repo#PR5", "repo#PR5"]])), f"{desc}: {first}"
     hub.set_pr_states({url: "merged"})
     assert said() == first, f"{desc}: once, not at every fetch"
 
