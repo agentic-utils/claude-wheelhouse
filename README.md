@@ -422,8 +422,14 @@ session.
   GitLab calls it mergeable (green), and Detail shows its description, pipeline and notes.
   A problem with GitLab (`glab` missing or logged out, a certificate it doesn't trust) is a
   line above the table keeping the last rows, and without `gh` the merge requests still
-  show. For a merge request, Merge, Close and Mark ready or Make draft say they can't yet
-  (use GitLab), and `M` (All) lists GitHub PRs only.
+  show. `M` (All) lists GitHub PRs only.
+  The buttons act on a merge request through `glab api`, asking first as for a PR. **Merge**
+  merges it as its project does (squashed where the project always squashes), leaves its source
+  branch to the project's own rule, and never queues a merge for a pipeline to finish: while
+  GitLab says something stands in its way (a draft, an approval or changes requested, a
+  conflict, a pipeline running or not passed, open discussions, a rebase) it refuses, saying
+  which. **Close** closes it unmerged. **Mark ready** and **Make draft** take the `Draft: `
+  prefix off or put it on the title (GitLab's update call has no draft field).
   Mark PRs to act on several at once, as in the inbox: `Ctrl+click` toggles one,
   `Shift+click` (or `Alt+click`) takes the range, `Ctrl+Space` and `Shift+Up`/`Shift+Down` do
   the same from the keyboard, and a plain click or `Esc` drops the marks; the pane's

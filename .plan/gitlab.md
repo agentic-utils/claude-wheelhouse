@@ -50,10 +50,18 @@ the error it always was.
 Detail (`mr_detail`): the description, the head pipeline as the one check, and the newest 40 notes as
 history (system notes' first lines) and comments (people's).
 
+## Actions
+
+Through `glab api`, as the status is. Merge: one GET of the MR, refused in words by `detailed_merge_status`
+(`BLOCKED`: a draft, approval, conflict, pipeline running or failed, discussions, rebase...), then
+`PUT .../merge` (`squash=true` where the project's `squash_option` is `always`); no branch deletion asked for
+and no merge-when-pipeline-succeeds, as the GitHub path has neither. Marked merged only if GitLab answers
+`state: merged`. Close: `PUT state_event=close`. Draft and ready: the title's `Draft: ` prefix put on or cut
+(`PUT title=`): GitLab 19.5's update call refuses a `draft` field. glab gets `GLAB_NO_PROMPT` (`NO_PROMPT` is
+deprecated).
+
 ## Not done
 
-- Merge, Close and Mark ready or Make draft refuse an MR (`NO_MR_ACTIONS`): GitLab's merge options and
-  draft toggle differ per project, and these mutate.
 - The All scope (`author:@me`) is GitHub's.
 - `authcheck.py` doesn't know glab.
 - The detail's notes are one page (no pagination).

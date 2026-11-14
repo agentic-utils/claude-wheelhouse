@@ -1181,7 +1181,7 @@ def said(action: str, r: dict, got: dict) -> str:
         return f"Couldn't {verb}: {got['failed']}"
     if "error" in got:
         why = blockers(r) if action == "merge" else []
-        return f"Couldn't {verb}: {'; '.join(why) + '. ' if why else ''}gh says: {got['error']}"
+        return f"Couldn't {verb}: {'; '.join(why) + '. ' if why else ''}{'glab' if api.is_mr(r['url']) else 'gh'} says: {got['error']}"
     if action == "merge":
         return f"Merged PR{r['number']} ({got.get('method', 'merge')})."
     return {"close": f"Closed PR{r['number']}.", "ready": f"Marked PR{r['number']} ready for review.",

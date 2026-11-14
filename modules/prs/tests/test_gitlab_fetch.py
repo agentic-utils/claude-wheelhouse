@@ -136,6 +136,7 @@ class Fake:
     def __init__(self, tmp_path, items=(), gh=None, merges=None, notes=None):
         self.items, self.states, self.gh_calls, self.glab_calls, self.activity = list(items), {}, [], [], None
         self.gh, self.merges, self.notes, self.now = gh or {"data": {"search": {"nodes": []}}}, merges or {}, notes, 1000.0
+        self.project, self.writes, self.put = {"squash_option": "default_off"}, [], None
         self.ctx = api.Context(tmp_path, lambda: [], lambda: None, pr_items=lambda: self.items,
                                set_pr_states=self.states.update, pr_activity=lambda: self.activity)
 
@@ -148,7 +149,12 @@ class Fake:
     def glab(self, argv):
         self.glab_calls.append(argv)
         assert argv[:4] == ["glab", "api", "--hostname", HOST], "glab asked for the host's API, nothing else"
-        endpoint = argv[4]
+        endpoint, options = argv[-1], argv[4:-1]
+        if options:   # a write: recorded, answered by self.put(endpoint, options) else as GitLab does
+            self.writes.append((endpoint, options))
+            return self.put(endpoint, options) if self.put else (0, json.dumps({"state": "merged"}), "")
+        if "/merge_requests/" not in endpoint:
+            return 0, json.dumps(self.project), ""
         if endpoint.endswith("/notes") or "/notes?" in endpoint:
             return 0, json.dumps(self.notes if self.notes is not None else []), ""
         n = int(endpoint.rsplit("/", 1)[1])
@@ -256,14 +262,94 @@ def test_only_so_many_merge_requests_are_fetched_at_once_and_the_rest_keep_their
 
 # acting on one
 
-@pytest.mark.parametrize("act", ["merge", "close", "ready", "draft"])
-def test_a_merge_request_isnt_acted_on_from_the_pane_yet(tmp_path, act):
-    f = Fake(tmp_path, [item(2)])
+def acting(tmp_path, status="mergeable", state="opened", title="MR number 12", project=None, put=None, **kw):
+    """A Fake with merge request 12 listed, as GitLab answers it, and a fetcher that has fetched it."""
+    f = Fake(tmp_path, [item(12)], merges={12: mr(12, detailed_merge_status=status, state=state, title=title, **kw)})
+    f.project = {"squash_option": "default_off", **(project or {})}
+    f.put = put
     fetcher = f.fetcher()
-    got = {"merge": fetcher.merge, "close": fetcher.close, "ready": fetcher.ready,
-           "draft": lambda url: fetcher.ready(url, draft=True)}[act](URL.format(2))
-    assert got == {"failed": fetch.NO_MR_ACTIONS} and f.gh_calls == [] and f.glab_calls == [], act
-    assert "Couldn't" in pane.said(act, {"number": 2}, got) and "gh says" not in pane.said(act, {"number": 2}, got)
+    fetcher.answer("mine", True)
+    f.writes.clear()
+    return f, fetcher
+
+
+@pytest.mark.parametrize("status, project, put, want, writes, desc", [
+    ("mergeable", {}, None, {"method": "merge"}, [["-X", "PUT"]], "a mergeable one, as the project merges"),
+    ("mergeable", {"squash_option": "always"}, None, {"method": "squash"}, [["-X", "PUT", "-F", "squash=true"]],
+     "a project that always squashes"),
+    ("checking", {}, None, {"method": "merge"}, [["-X", "PUT"]], "still checking: GitLab is asked"),
+    ("mergeable", {}, lambda e, o: (0, json.dumps({"state": "opened"}), ""), {"error": "is opened: check it"}, [["-X", "PUT"]],
+     "GitLab took it but it didn't merge: not marked merged"),
+    ("mergeable", {}, lambda e, o: (1, "", "glab: 405 Method Not Allowed (HTTP 405)"), {"error": "405 Method Not Allowed"},
+     [["-X", "PUT"]], "GitLab refused: its words"),
+    ("draft_status", {}, None, {"error": "it's a draft"}, [], "a draft"),
+    ("not_approved", {}, None, {"error": "an approval is required"}, [], "approval required"),
+    ("requested_changes", {}, None, {"error": "changes were requested"}, [], "changes requested"),
+    ("conflict", {}, None, {"error": "it has conflicts with its target branch"}, [], "a conflict"),
+    ("ci_still_running", {}, None, {"error": "its pipeline is still running"}, [], "no auto-merge: a running pipeline is refused"),
+    ("ci_must_pass", {}, None, {"error": "its pipeline hasn't passed"}, [], "a pipeline that hasn't passed"),
+    ("discussions_not_resolved", {}, None, {"error": "its discussions aren't all resolved"}, [], "open discussions"),
+    ("need_rebase", {}, None, {"error": "it needs a rebase"}, [], "a rebase"),
+])
+def test_merging_a_merge_request(tmp_path, status, project, put, want, writes, desc):
+    f, fetcher = acting(tmp_path, status, project=project, put=put)
+    got = fetcher.merge(URL.format(12))
+    assert all(want[k] in got[k] if k == "error" else got[k] == want[k] for k in want), f"{desc}: {got}"
+    assert [w[1][:len(o)] for w, o in zip(f.writes, writes)] == writes and len(f.writes) == len(writes), desc
+    assert all(w[0] == ENDPOINT.format(12) + "/merge" for w in f.writes), "the merge endpoint, nothing else"
+    assert f.gh_calls[1:] == [] and (f.states.get(URL.format(12)) == "merged") == ("method" in want), f"{desc}: marked merged only when merged"
+
+
+def test_a_merge_request_that_merged_leaves_the_list(tmp_path):
+    f, fetcher = acting(tmp_path)
+    fetcher.merge(URL.format(12))
+    assert fetcher.answer("mine", False)["prs"] == []
+
+
+def test_a_merge_that_is_no_longer_open_says_so(tmp_path):
+    f, fetcher = acting(tmp_path, "not_open", state="merged")
+    assert fetcher.merge(URL.format(12))["error"].endswith("it is merged") and f.writes == []
+
+
+def test_closing_a_merge_request(tmp_path):
+    f, fetcher = acting(tmp_path, put=lambda e, o: (0, json.dumps({"state": "closed"}), ""))
+    assert fetcher.close(URL.format(12)) == {"closed": True}
+    assert f.writes == [(ENDPOINT.format(12), ["-X", "PUT", "-f", "state_event=close"])]
+    assert f.states == {URL.format(12): "closed"} and fetcher.answer("mine", False)["prs"] == []
+
+
+def test_a_close_that_fails_says_why(tmp_path):
+    f, fetcher = acting(tmp_path, put=lambda e, o: (1, "", "glab: 403 Forbidden (HTTP 403)"))
+    got = fetcher.close(URL.format(12))
+    assert "403 Forbidden" in got["error"] and f.states.get(URL.format(12)) != "closed"
+
+
+@pytest.mark.parametrize("title, draft, new, desc", [
+    ("MR number 12", True, "Draft: MR number 12", "made a draft: the prefix"),
+    ("Draft: MR number 12", False, "MR number 12", "made ready: the prefix cut"),
+    ("[Draft] MR number 12", False, "MR number 12", "the bracketed form too"),
+    ("WIP: MR number 12", False, "MR number 12", "and WIP"),
+    ("Draft: MR number 12", True, "Draft: MR number 12", "already a draft: not prefixed twice"),
+    ("draft:MR number 12", True, "Draft: MR number 12", "another spelling normalised"),
+])
+def test_draft_and_ready_are_the_titles_prefix(tmp_path, title, draft, new, desc):
+    def put(endpoint, options):
+        sent = options[-1].removeprefix("title=")
+        return 0, json.dumps({"title": sent, "draft": sent.lower().startswith("draft:")}), ""
+    f, fetcher = acting(tmp_path, title=title, draft=title.lower().startswith(("draft", "[draft", "wip")), put=put)
+    assert fetcher.ready(URL.format(12), draft=draft) == {"draft": draft}, desc
+    assert f.writes == [(ENDPOINT.format(12), ["-X", "PUT", "-f", f"title={new}"])], desc
+    assert f.states == {URL.format(12): "draft" if draft else "open"}, desc
+
+
+def test_draft_that_gitlab_does_not_apply_says_so(tmp_path):
+    f, fetcher = acting(tmp_path, put=lambda e, o: (0, json.dumps({"title": "x", "draft": False}), ""))
+    assert "didn't make it a draft" in fetcher.ready(URL.format(12), draft=True)["error"]
+
+
+def test_the_pane_says_who_refused(tmp_path):
+    assert pane.said("merge", {"number": 2, "url": URL.format(2)}, {"error": "it's a draft"}).endswith("glab says: it's a draft")
+    assert pane.said("merge", {"number": 2, "url": GITHUB.format(2)}, {"error": "x"}).endswith("gh says: x")
 
 
 def test_an_action_still_takes_only_a_listed_url(tmp_path):
@@ -345,7 +431,7 @@ def test_glab_runs_with_no_input_and_the_given_ca_alone(monkeypatch, tmp_path):
     seen = fake_run(monkeypatch, subprocess.CompletedProcess([], 0, "{}", ""))
     assert fetch.glab(["glab", "api", "--hostname", HOST, "version"]) == (0, "{}", "")
     env = seen.kw["env"]
-    assert (env["SSL_CERT_FILE"], env["NO_PROMPT"], env["GITLAB_TOKEN"]) == (str(ca), "1", TOKEN), "glab finds its token itself"
+    assert (env["SSL_CERT_FILE"], env["GLAB_NO_PROMPT"], env["GITLAB_TOKEN"]) == (str(ca), "1", TOKEN), "glab finds its token itself"
     assert seen.kw["stdin"] == subprocess.DEVNULL and seen.kw["timeout"] == fetch.TIMEOUT
     assert TOKEN not in " ".join(seen.argv), "the token is never on the command line"
     assert "SSL_CERT_FILE" not in os.environ, "this process's own environment is left as it was"

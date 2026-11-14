@@ -87,7 +87,16 @@ STATE = {"opened": "OPEN", "locked": "OPEN", "merged": "MERGED", "closed": "CLOS
 DRAFT_MARK = re.compile(r"^\s*(?:\[draft\]|\(draft\)|draft:)\s*", re.IGNORECASE)
 TOKENS = re.compile(r"\bgl[a-z]{2,6}-[A-Za-z0-9_.-]{8,}")   # GitLab's token prefixes (glpat-, gldt-, glcbt-...)
 SECRETS = ("GITLAB_TOKEN", "GITLAB_ACCESS_TOKEN", "OAUTH_TOKEN")   # glab's token variables
-NO_MR_ACTIONS = "merge requests can't be merged, closed or made draft or ready from here yet: use GitLab"
+DRAFT_PREFIX = re.compile(r"^\s*(?:\[draft\]|\(draft\)|draft:|\[wip\]|wip:)\s*", re.IGNORECASE)   # as GitLab reads one
+# what stands in a merge request's way, by detailed_merge_status: the words a refused merge says
+BLOCKED = {"draft_status": "it's a draft", "not_approved": "an approval is required",
+           "requested_changes": "changes were requested", "conflict": "it has conflicts with its target branch",
+           "ci_must_pass": "its pipeline hasn't passed", "ci_still_running": "its pipeline is still running",
+           "discussions_not_resolved": "its discussions aren't all resolved", "need_rebase": "it needs a rebase",
+           "jira_association": "it needs a Jira issue", "external_status_checks": "its external checks haven't passed",
+           "merge_request_blocked": "another merge request blocks it", "locked_paths": "files it changes are locked",
+           "locked_lfs_files": "LFS files it changes are locked", "title_regex": "its title doesn't fit the project's rule",
+           "security_policy_violations": "a security policy blocks it", "not_open": "it isn't open"}
 
 
 def login(node: dict | None, key: str = "author") -> str:
@@ -268,9 +277,9 @@ def scrub(text: str) -> str:
 
 def glab(argv: list[str]) -> tuple[int, str, str]:
     """The real runner for GitLab: `glab` itself, Unavailable if it isn't installed. Never asked
-    anything (no input, NO_PROMPT), and given the CA the person named, for the process alone
+    anything (no input, GLAB_NO_PROMPT), and given the CA the person named, for the process alone
     (SSL_CERT_FILE, which a Go program reads); its token it finds itself."""
-    env = {**os.environ, "NO_PROMPT": "1"}
+    env = {**os.environ, "GLAB_NO_PROMPT": "1"}
     if ca := api.gitlab_ca_cert():
         env["SSL_CERT_FILE"] = ca
     try:
@@ -295,15 +304,39 @@ def mr_failure(host: str, code: int, out: str, err: str) -> Exception:
     return RuntimeError(f"{host}: {line}{hint}")
 
 
-def mr_json(host: str, endpoint: str, runner: Runner):
-    """What `glab api --hostname <host> <endpoint>` answers, read as JSON; Unavailable or RuntimeError as mr_failure says."""
-    code, out, err = runner(["glab", "api", "--hostname", host, endpoint])
+def mr_json(host: str, endpoint: str, runner: Runner, *options: str):
+    """What `glab api --hostname <host> [options] <endpoint>` answers, read as JSON (options such as
+    `-X PUT -f title=x`); Unavailable or RuntimeError as mr_failure says."""
+    code, out, err = runner(["glab", "api", "--hostname", host, *options, endpoint])
     if code != 0:
         raise mr_failure(host, code, out, err)
     try:
         return json.loads(out)
     except ValueError:
         raise RuntimeError(f"{host}: GitLab's answer isn't JSON") from None
+
+
+def mr_blocker(data) -> str | None:
+    """Why a merge request can't merge as it stands, in words; None if GitLab would take it (or may:
+    still checking). Read from the MR GitLab answered."""
+    if not isinstance(data, dict) or not data.get("iid"):
+        return "GitLab has no such merge request"
+    if data.get("state") not in ("opened", "locked"):
+        return f"it is {data.get('state') or 'not open'}"
+    status = data.get("detailed_merge_status")
+    if status in BLOCKED:
+        return BLOCKED[status]
+    if status is None and (data.get("draft") or data.get("work_in_progress")):
+        return BLOCKED["draft_status"]
+    if status is None and (data.get("has_conflicts") or data.get("merge_status") == "cannot_be_merged"):
+        return BLOCKED["conflict"]
+    return None
+
+
+def mr_title(title: str, draft: bool) -> str:
+    """A merge request's title as a draft (a `Draft: ` prefix) or as ready (any such prefix cut)."""
+    plain = DRAFT_PREFIX.sub("", title)
+    return f"Draft: {plain}" if draft else plain
 
 
 def mr_mergeable(data: dict) -> str:
@@ -448,6 +481,57 @@ class Fetcher:
         if mine and self.ctx.set_pr_states is not None:
             self.ctx.set_pr_states({r["url"]: status(r) for r in mine})
 
+    def mr_act(self, url: str, act: Callable[[str, str], dict]) -> dict:
+        """What act(host, endpoint) comes to for a merge request, its failures as {"error"} in the
+        words glab gave (scrubbed), as the gh path's are."""
+        host, path, n = api.parse_mr(url)
+        try:
+            return act(host, mr_path(path, n))
+        except Unavailable as e:
+            return {"error": str(e)}
+        except (RuntimeError, OSError, subprocess.SubprocessError) as e:
+            return {"error": scrub(str(e) or type(e).__name__)}
+
+    def merge_mr(self, url: str) -> dict:
+        """A merge request merged, as `merge` merges a PR: refused in words while GitLab says something stands in
+        its way (a draft, an approval, a conflict, a pipeline); squashed where the project always squashes, else
+        as the project merges; its source branch left to the project's own rule, as gh leaves it. {"method"}, its
+        row marked merged; {"error"} with why not."""
+        def act(host: str, endpoint: str) -> dict:
+            if why := mr_blocker(mr_json(host, endpoint, self.glab)):
+                return {"error": f"{host}: {why}"}
+            squash = mr_json(host, endpoint.rsplit("/merge_requests/", 1)[0], self.glab).get("squash_option") == "always"
+            done = mr_json(host, f"{endpoint}/merge", self.glab, "-X", "PUT", *(["-F", "squash=true"] if squash else []))
+            if (done or {}).get("state") != "merged":
+                return {"error": f"{host}: GitLab took the merge but the merge request is {(done or {}).get('state')}: check it"}
+            return {"method": "squash" if squash else "merge"}
+        got = self.mr_act(url, act)
+        if "method" in got:
+            self.ended(url, "MERGED")
+        return got
+
+    def close_mr(self, url: str) -> dict:
+        """A merge request closed unmerged: {"closed": True} (`close` marks its row); {"error"}."""
+        def act(host: str, endpoint: str) -> dict:
+            done = mr_json(host, endpoint, self.glab, "-X", "PUT", "-f", "state_event=close")
+            if (done or {}).get("state") != "closed":
+                return {"error": f"{host}: the merge request is {(done or {}).get('state')}, not closed"}
+            return {"closed": True}
+        return self.mr_act(url, act)
+
+    def draft_mr(self, url: str, draft: bool) -> dict | None:
+        """A merge request made a draft, or ready (its title's `Draft: ` prefix put on or cut: the update
+        call has no draft field): None once it's done, else {"error"}."""
+        def act(host: str, endpoint: str) -> dict:
+            now = mr_json(host, endpoint, self.glab)
+            if not isinstance(now, dict) or not now.get("iid"):
+                return {"error": "GitLab has no such merge request"}
+            done = mr_json(host, endpoint, self.glab, "-X", "PUT", "-f", f"title={mr_title(now.get('title') or '', draft)}")
+            if bool((done or {}).get("draft")) != draft:
+                return {"error": f"{host}: GitLab didn't make it {'a draft' if draft else 'ready'}: check it"}
+            return {}
+        return self.mr_act(url, act) or None
+
     def fetch_gitlab(self, urls: list[str]) -> tuple[list[dict], list[str], list[str]]:
         """The open merge requests (urls) fetched through glab, a few at a time: (their rows,
         those that didn't answer, so their last rows are kept, and what went wrong, said once
@@ -501,7 +585,7 @@ class Fetcher:
         if not isinstance(url, str) or api.pr_url(url) != url:   # the whole of it, nothing gh could take as a flag
             raise api.Refused(400, f"not a pull request URL: {url!r}")
         if api.is_mr(url):
-            return {"failed": NO_MR_ACTIONS}
+            return self.merge_mr(url)
         owner, repo, _ = api.parse_pr(url)
         try:
             how = method(f"{owner}/{repo}", self.runner)
@@ -541,7 +625,9 @@ class Fetcher:
         if not isinstance(url, str) or api.pr_url(url) != url:   # the whole of it, nothing gh could take as a flag
             raise api.Refused(400, f"not a pull request URL: {url!r}")
         if api.is_mr(url):
-            return {"failed": NO_MR_ACTIONS}
+            if verb == ["close"]:
+                return None if "closed" in (got := self.close_mr(url)) else got
+            return self.draft_mr(url, draft=verb == ["ready", "--undo"])
         try:
             code, out, err = self.runner(["gh", "pr", *verb, "--", url])
         except Unavailable as e:
