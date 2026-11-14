@@ -1,4 +1,4 @@
-<!-- fact sheet stamp: version 251, 2026-11-14T16:20:14Z, source a667c1c6c5587e81 (make facts restamps it: AGENTS.md) -->
+<!-- fact sheet stamp: version 253, 2026-11-14T16:31:46Z, source 49d0bf51137038bf (make facts restamps it: AGENTS.md) -->
 # Wheelhouse fact sheet
 
 What the helper chat knows before any question. The guide below is written by hand; the
@@ -372,6 +372,7 @@ The app's command line args (make args). Give them to make run in ARGS, for exam
 - A doc has a thread of its own: comment on it below the doc (split) or on a Thread tab (tabbed); Ctrl+L switches the two, Ctrl+PgUp and Ctrl+PgDn the tabs.
 - An inbox item's ref is coloured by its kind (a task green, a question yellow, a decision purple, a PR light blue), and resting the pointer on a row, there or in the session list, shows it in full.
 - A pull request a session makes shows in the inbox as PR and its number, under the task it was made for, with GitHub's status: merged and closed ones dim.
+- A GitLab merge request is a PR too, on a host named in GITLAB_HOSTS: found after glab mr create, or posted with its URL, and polled with glab (its pipeline, approval and conflicts the light).
 - The PRs pane lists the open PRs your sessions made, or with M every open PR you authored, each with a traffic light for checks, review and conflicts; with a session selected, its PRs alone.
 - Right-click a session in the session list for a menu of its buttons, acting on that session.
 - Alt+S sends the answer in the box at once, even in Queued mode; the rest of the queue waits.

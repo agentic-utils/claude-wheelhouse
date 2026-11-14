@@ -183,6 +183,9 @@ FEATURES: tuple[Feature, ...] = (
     Feature("pr-items", UNRELEASED, ADVANCED,
             note="A pull request a session makes shows in the inbox as PR and its number, under the task it was "
                  "made for, with GitHub's status: merged and closed ones dim."),
+    Feature("gitlab-merge-requests", UNRELEASED, ADVANCED,
+            note="A GitLab merge request is a PR too, on a host named in GITLAB_HOSTS: found after glab mr create, "
+                 "or posted with its URL, and polled with glab (its pipeline, approval and conflicts the light)."),
     Feature("prs-pane", UNRELEASED, "prs",
             note="The PRs pane lists the open PRs your sessions made, or with M every open PR you authored, each "
                  "with a traffic light for checks, review and conflicts; with a session selected, its PRs alone.",
