@@ -563,3 +563,57 @@ def test_a_detail_is_only_for_a_listed_pr_and_kept_no_longer_than_needed(tmp_pat
     fetcher.runner = detailed
     fetcher.detail(URL.format(4), False)
     assert set(fetcher.details) == {URL.format(4)}, "one kept past DETAIL_EVERY dropped"
+
+
+# a PR GitHub says is gone leaves the open set; a failure that isn't that never does
+
+def lost(*paths, kind="NOT_FOUND"):
+    return {"errors": [{"type": kind, "path": [p, "pullRequest"], "message": "Could not resolve to a PullRequest"} for p in paths]}
+
+
+@pytest.mark.parametrize("out, expected, desc", [
+    (json.dumps(lost("p0")), {"p0"}, "an alias not found"),
+    (json.dumps(lost("p0", "p3")), {"p0", "p3"}, "two"),
+    (json.dumps(lost("p0", kind="FORBIDDEN")), set(), "forbidden is no word on whether it exists"),
+    (json.dumps(lost("p0", kind="RATE_LIMITED")), set(), "a rate limit isn't either"),
+    (json.dumps({"errors": [{"type": "NOT_FOUND", "message": "no path"}]}), set(), "no path says which"),
+    (json.dumps({"data": {}}), set(), "no errors"),
+    ("", set(), "no answer"),
+    ("not json", set(), "not JSON"),
+])
+def test_not_found(out, expected, desc):
+    assert fetch.not_found(out) == expected, desc
+
+
+@pytest.mark.parametrize("extra, code, gone, desc", [
+    (lost("p0"), 1, True, "GitHub can't find the PR: gone"),
+    (lost("p0", kind="FORBIDDEN"), 1, False, "forbidden: still open"),
+    ({"errors": [{"type": "INTERNAL", "message": "boom"}]}, 1, False, "a server error: still open"),
+    ({}, 0, False, "no error and no PR: unknown, as before"),
+])
+def test_a_pr_github_cannot_find_is_marked_gone(tmp_path, extra, code, gone, desc):
+    f = Fake(tmp_path, [item(1), item(2)], {"data": {"p0": None, "p1": {"pullRequest": node(2)}, "search": {"nodes": []}}, **extra},
+             code=code)
+    fetcher = f.fetcher()
+    got = fetcher.answer("mine", True)
+    assert f.states == {URL.format(2): "open", **({URL.format(1): "gone"} if gone else {})}, desc
+    assert [r["number"] for r in got["prs"]] == [2], f"{desc}: it's out of the pane either way, as ever"
+    f.items[0]["status"] = "gone" if gone else "open"
+    f.now += fetch.EVERY
+    fetcher.answer("mine", True)
+    assert ("pullRequest(number: 1)" in f.calls[-1][-1]) != gone, f"{desc}: a gone PR isn't asked about again"
+
+
+@pytest.mark.parametrize("said, gone, desc", [
+    ("GraphQL: Could not resolve to a PullRequest with the number of 1. (repository.pullRequest)", True, "no such PR"),
+    ("GraphQL: Could not resolve to a Repository with the name 'two-inc/wheelhouse'.", True, "no such repo"),
+    ("error connecting to api.github.com", False, "a network failure"),
+    ("HTTP 502: Bad Gateway", False, "a 5xx"),
+    ("To get started with GitHub CLI, please run:  gh auth login", False, "not logged in"),
+])
+def test_closing_a_pr_that_is_gone_says_so(tmp_path, said, gone, desc):
+    f = Fake(tmp_path, [item(1)])
+    got = fetch.Fetcher(f.ctx, lambda argv: (1, "", said), lambda: f.now).close(URL.format(1))
+    assert ("no longer exists" in got["error"]) == gone and (f.states == {URL.format(1): "gone"}) == gone, f"{desc}: {got}"
+    if not gone:
+        assert said in got["error"], desc

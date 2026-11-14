@@ -1,4 +1,4 @@
-<!-- fact sheet stamp: version 258, 2026-11-14T19:40:25Z, source c087249653ea14ca (make facts restamps it: AGENTS.md) -->
+<!-- fact sheet stamp: version 259, 2026-11-14T20:39:50Z, source 3b63e7d73dc17161 (make facts restamps it: AGENTS.md) -->
 # Wheelhouse fact sheet
 
 What the helper chat knows before any question. The guide below is written by hand; the
@@ -373,6 +373,7 @@ The app's command line args (make args). Give them to make run in ARGS, for exam
 - An inbox item's ref is coloured by its kind (a task green, a question yellow, a decision purple, a PR light blue), and resting the pointer on a row, there or in the session list, shows it in full.
 - A pull request a session makes shows in the inbox as its repo and PR number (repo#PR12), under the task it was made for, with GitHub's status: merged and closed ones dim. Write one that way and the wheelhouse links it.
 - A GitLab merge request is a PR too, on a host named in GITLAB_HOSTS: found after glab mr create, or posted with its URL, and polled with glab (its pipeline, approval and conflicts the light).
+- A PR or merge request its forge says no longer exists (deleted, or its repo or project is) shows as gone, dimmed with a note, instead of staying open; Close and Merge say so rather than show a 404.
 - Merge, Close and Mark ready or Make draft act on a GitLab merge request too (through glab): a merge is refused saying what stands in its way, and draft is the title's Draft: prefix.
 - The PRs pane lists the open PRs your sessions made, or with M every open PR you authored, each with a traffic light for checks, review and conflicts; with a session selected, its PRs alone.
 - Right-click a session in the session list for a menu of its buttons, acting on that session.

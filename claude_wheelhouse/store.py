@@ -42,7 +42,7 @@ STATUSES = {
     # the person's too: new until viewed, read once viewed, updated when posted again after that
     "doc": {"new", "updated", "read"},
     # GitHub's, never the session's or the person's (set_pr_states, from the PRs pane's fetch)
-    "pr": {"draft", "open", "merged", "closed"},
+    "pr": {"draft", "open", "merged", "closed", "gone"},
     # the person's: open until run (as an open question: the person's move, #335), running from
     # the run's start till its tab says how it ended (Run disabled, #339), run once a run ended
     # well, failed when its last run ended with an error or never said (Run kept), closed if dismissed
@@ -64,7 +64,7 @@ def is_closed(item) -> bool:
 # off the inbox until F shows it (closed, a permission answered, or dismissed by the person).
 SETTLED = {"task": {"done", "dropped"}, "question": {"answered"}, "decision": {"seen"},
            "agent": {"done", "failed"}, "permission": {"split"}, "doc": {"read"},
-           "pr": {"merged", "closed"}, "command": {"run"}}
+           "pr": {"merged", "closed", "gone"}, "command": {"run"}}
 # kinds whose settled items the person dismisses (Delete), recorded in items.dismissed; a
 # question or a decision is closed instead. A PR is dismissed whatever its state (never on GitHub)
 DISMISSABLE = ("task", "agent", "doc", "pr", "permission")   # a permission only once split, the one settled
@@ -529,6 +529,7 @@ AGENTS_SINCE = "agents_since"
 # settings: when this database was first opened by code that finds PRs in transcripts (prs.py).
 # A PR made before then (or before its session joined) is never found (#111)
 PRS_SINCE = "prs_since"
+GONE_NOTE = "No longer exists: its forge answers 404 for it (deleted, or its repo or project is)."
 PR_REFS = "migrated_pr_refs"   # settings: the PR items' refs made repo#PR<n> (below) once
 OLD_PR_REF = re.compile(r"^PR(\d+)[a-z]?$")   # a PR item's ref before then: PR108, PR108b
 # seconds: how long before a subagent starts the session's own A item for it may be made
@@ -1887,13 +1888,19 @@ class Store:
                  "title": r["title"]} for r in self._all("SELECT * FROM items WHERE kind = 'pr' ORDER BY id")]
 
     def set_pr_states(self, states: dict[str, str]) -> int:
-        """GitHub's state for each PR, {url: draft, open, merged or closed}, on every item of
-        it, any session's (the PRs pane's fetch). Only a change is written. One the person
-        dismissed or deleted stays so, whatever its new state. Returns the items changed."""
+        """GitHub's (or GitLab's) state for each PR, {url: draft, open, merged, closed or gone}, on
+        every item of it, any session's (the PRs pane's fetch). Gone: the forge says it no longer
+        exists (its PR or merge request, or its repo or project, is not found); a note on the item says
+        so. Only a change is written. One the person dismissed or deleted stays so, whatever its new
+        state. Returns the items changed."""
         changed = 0
         with self.tx() as db:
             for url, status in states.items():
                 self._check_status("pr", status)
+                if status == "gone":
+                    for r in db.execute("SELECT session_id, ref FROM items WHERE kind = 'pr' AND body = ? AND status != ?",
+                                        (url, status)).fetchall():
+                        self._said(db, r["session_id"], r["ref"], GONE_NOTE, "note")
                 changed += db.execute(
                     f"""UPDATE items SET status = ?, updated_at = ?, dismissed = CASE WHEN dismissed IS NULL
                         THEN NULL WHEN dismissed = '{DELETED}' THEN dismissed ELSE ? END

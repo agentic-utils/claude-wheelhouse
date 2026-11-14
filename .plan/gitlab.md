@@ -71,6 +71,15 @@ and no merge-when-pipeline-succeeds, as the GitHub path has neither. Marked merg
 (`PUT title=`): GitLab 19.5's update call refuses a `draft` field. glab gets `GLAB_NO_PROMPT` (`NO_PROMPT` is
 deprecated).
 
+## Gone
+
+A PR the forge says no longer exists leaves the open set: status `gone` (settled, dimmed, a note on its
+thread, no longer polled; `Store.set_pr_states`). GitLab: a 404 for the MR (or its project) counts only if
+`glab api user` then succeeds (GitLab also answers 404 to a login that can't see it), so a refused login,
+a 5xx, a timeout or a TLS error stay warnings with the last row kept (`fetch.Gone`, `mr_json`). GitHub: a
+NOT_FOUND error on a tracked alias (`fetch.not_found`), or gh's "Could not resolve to a" on Close, Merge
+or Ready. Close, Merge and Draft/Ready on one say "no longer exists" and mark it, not show the raw 404.
+
 ## Not done
 
 - The All scope (`author:@me`) is GitHub's.

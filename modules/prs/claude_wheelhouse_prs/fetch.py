@@ -76,6 +76,7 @@ COMMENTS = 10        # the newest comments shown
 
 
 # GitLab (.plan/gitlab.md)
+GONE = object()      # fetch_gitlab's word for a merge request the forge says is gone
 GITLAB_AT_ONCE = 4   # merge requests fetched in parallel
 GITLAB_MOST = 30     # merge requests fetched in one go: the rest keep their last row
 NOTES = 40           # a merge request's newest notes asked for
@@ -245,10 +246,25 @@ def gh(argv: list[str]) -> tuple[int, str, str]:
     return done.returncode, done.stdout, done.stderr
 
 
-def run(q: str, runner: Runner) -> dict:
+def run(q: str, runner: Runner, gone: set | None = None) -> dict:
     """The query sent through `gh api graphql`: its data. A partial answer (one alias GitHub
-    couldn't resolve) still counts. Unavailable when not logged in; RuntimeError otherwise."""
-    return answer(*runner(["gh", "api", "graphql", "-f", f"query={q}"]))
+    couldn't resolve) still counts, and the aliases GitHub says it can't find (a NOT_FOUND error)
+    are added to gone, if given. Unavailable when not logged in; RuntimeError otherwise."""
+    code, out, err = runner(["gh", "api", "graphql", "-f", f"query={q}"])
+    if gone is not None:
+        gone.update(not_found(out))
+    return answer(code, out, err)
+
+
+def not_found(out: str) -> set[str]:
+    """The aliases a GraphQL answer says it couldn't find: the first segment of the path of each
+    NOT_FOUND error (a PR, or its repo, that isn't there). Any other error, or no error, adds none."""
+    try:
+        errors = json.loads(out).get("errors") if out.strip() else None
+    except (ValueError, AttributeError):
+        return set()
+    return {e["path"][0] for e in errors or [] if isinstance(e, dict) and e.get("type") == "NOT_FOUND"
+            and isinstance(e.get("path"), list) and e["path"] and isinstance(e["path"][0], str)}
 
 
 def answer(code: int, out: str, err: str) -> dict:
@@ -294,9 +310,17 @@ def mr_path(path: str, n: int) -> str:
     return f"projects/{quote(path, safe='')}/merge_requests/{n}"
 
 
+class Gone(RuntimeError):
+    """The forge says a PR or merge request, or its repo or project, no longer exists (a 404 that
+    isn't the login's doing): never a network error, a 5xx or a refused login."""
+
+
 def mr_failure(host: str, code: int, out: str, err: str) -> Exception:
-    """What `glab api` failing says, as Unavailable (not logged in) or RuntimeError (any other)."""
+    """What `glab api` failing says, as Unavailable (not logged in), Gone (a 404: the caller
+    confirms the login is good, mr_json) or RuntimeError (any other)."""
     text = scrub(err or out)
+    if re.search(r"\b404\b", text) and not re.search(r"\b401\b|unauthori[sz]ed", text, re.IGNORECASE):
+        return Gone(f"{host}: this merge request no longer exists (GitLab answers 404)")
     if re.search(r"\b401\b|unauthori[sz]ed|not logged in|no token|authenticat", text, re.IGNORECASE):
         return Unavailable(f"{host}: glab isn't logged in: run glab auth login --hostname {host}")
     line = last_line(text) or f"glab exited {code}"
@@ -309,7 +333,10 @@ def mr_json(host: str, endpoint: str, runner: Runner, *options: str):
     `-X PUT -f title=x`); Unavailable or RuntimeError as mr_failure says."""
     code, out, err = runner(["glab", "api", "--hostname", host, *options, endpoint])
     if code != 0:
-        raise mr_failure(host, code, out, err)
+        failure = mr_failure(host, code, out, err)
+        if isinstance(failure, Gone):   # GitLab also answers 404 to a login that can't see it: that login must be good
+            mr_json(host, "user", runner)
+        raise failure
     try:
         return json.loads(out)
     except ValueError:
@@ -409,6 +436,10 @@ class Cache:
             db.executemany("INSERT OR REPLACE INTO prs VALUES (?, ?, ?)",
                            [(r["url"], json.dumps(r), at) for r in rows])
 
+    def drop(self, url: str) -> None:
+        with self.db() as db:
+            db.execute("DELETE FROM prs WHERE url = ?", (url,))
+
     def update(self, row: dict) -> None:
         """One row written again, as fetched when it was: the others left as they are."""
         with self.db() as db:
@@ -435,6 +466,7 @@ class Fetcher:
         self.lock = threading.Lock()
         self.details: dict[str, tuple[float, dict]] = {}   # each PR's detail as last fetched (detail), and when
         self.results: dict[str, dict] = {}   # what each merge, close, ready or draft came to, until asked (pane's result route)
+        self.gone: set[str] = set()       # PRs the last fetch found no longer exist, until it has marked them
         self.error: str | None = None     # gh unavailable: shown in place of the table
         self.warning: str | None = None   # the last fetch failed otherwise: the cache shown, and why
 
@@ -446,12 +478,15 @@ class Fetcher:
         return out
 
     def fetch(self) -> None:
-        open_urls = [url for url, it in self.items().items() if it["status"] not in ("merged", "closed")]
+        open_urls = [url for url, it in self.items().items() if it["status"] not in ("merged", "closed", "gone")]
+        self.gone = set()
         tracked = [(url, p) for url in open_urls if not api.is_mr(url) and (p := api.parse_pr(url))]
         merges = [url for url in open_urls if api.is_mr(url)]
         gitlab, kept, notes = self.fetch_gitlab(merges)
         try:
-            data = run(query([p for _, p in tracked]), self.runner)
+            missing: set[str] = set()
+            data = run(query([p for _, p in tracked]), self.runner, missing)
+            self.gone |= {tracked[int(a[1:])][0] for a in missing if re.fullmatch(r"p\d+", a) and int(a[1:]) < len(tracked)}
         except Unavailable as e:
             if not merges:
                 self.error, self.last = str(e), self.clock()
@@ -478,8 +513,8 @@ class Fetcher:
         self.last = self.clock()
         self.cache.replace(list(by_url.values()), self.last)
         self.error, self.warning = None, "; ".join(notes) or None
-        if mine and self.ctx.set_pr_states is not None:
-            self.ctx.set_pr_states({r["url"]: status(r) for r in mine})
+        if (mine or self.gone) and self.ctx.set_pr_states is not None:
+            self.ctx.set_pr_states({**{r["url"]: status(r) for r in mine}, **dict.fromkeys(self.gone, "gone")})
 
     def mr_act(self, url: str, act: Callable[[str, str], dict]) -> dict:
         """What act(host, endpoint) comes to for a merge request, its failures as {"error"} in the
@@ -487,10 +522,27 @@ class Fetcher:
         host, path, n = api.parse_mr(url)
         try:
             return act(host, mr_path(path, n))
+        except Gone as e:
+            return self.vanished(url, str(e))
         except Unavailable as e:
             return {"error": str(e)}
         except (RuntimeError, OSError, subprocess.SubprocessError) as e:
             return {"error": scrub(str(e) or type(e).__name__)}
+
+    def lost(self, url: str, said: str) -> dict | None:
+        """gh saying the PR or its repo isn't there (it can't resolve it): the PR vanished; else None."""
+        if "Could not resolve to a" in said:
+            return self.vanished(url, "this pull request no longer exists (GitHub can't find it)")
+        return None
+
+    def vanished(self, url: str, why: str) -> dict:
+        """A PR the forge says is gone: its row out of the list, its items marked gone (with a note),
+        its detail dropped; {"error"} saying so."""
+        self.cache.drop(url)
+        if self.ctx.set_pr_states is not None and url in self.items():
+            self.ctx.set_pr_states({url: "gone"})
+        self.details.pop(url, None)
+        return {"error": f"{why}: marked gone"}
 
     def merge_mr(self, url: str) -> dict:
         """A merge request merged, as `merge` merges a PR: refused in words while GitLab says something stands in
@@ -544,6 +596,8 @@ class Fetcher:
             host, path, n = api.parse_mr(url)
             try:
                 return url, mr_row(url, mr_json(host, mr_path(path, n), self.glab)), None
+            except Gone:
+                return url, None, GONE
             except Unavailable as e:
                 return url, None, str(e)
             except (RuntimeError, OSError, subprocess.SubprocessError) as e:
@@ -552,10 +606,12 @@ class Fetcher:
             for url, got, why in pool.map(one, urls[:GITLAB_MOST]):
                 if got is not None:
                     rows.append(got)
-                    continue
-                kept.append(url)
-                if why and why not in notes:
-                    notes.append(why)
+                elif why is GONE:
+                    self.gone.add(url)
+                else:
+                    kept.append(url)
+                    if why and why not in notes:
+                        notes.append(why)
         return rows, kept, notes
 
     def answer(self, scope: str, fresh: bool) -> dict:
@@ -593,9 +649,9 @@ class Fetcher:
         except Unavailable as e:
             return {"error": str(e)}
         except (RuntimeError, OSError, subprocess.SubprocessError) as e:
-            return {"error": str(e) or type(e).__name__}
+            return self.lost(url, str(e)) or {"error": str(e) or type(e).__name__}
         if code != 0:
-            return {"error": last_line(err or out) or f"gh exited {code}"}
+            return self.lost(url, err or out) or {"error": last_line(err or out) or f"gh exited {code}"}
         self.ended(url, "MERGED")
         return {"method": how}
 
@@ -633,9 +689,9 @@ class Fetcher:
         except Unavailable as e:
             return {"error": str(e)}
         except (RuntimeError, OSError, subprocess.SubprocessError) as e:
-            return {"error": str(e) or type(e).__name__}
+            return self.lost(url, str(e)) or {"error": str(e) or type(e).__name__}
         if code != 0:
-            return {"error": last_line(err or out) or f"gh exited {code}"}
+            return self.lost(url, err or out) or {"error": last_line(err or out) or f"gh exited {code}"}
         return None
 
     def ended(self, url: str, state: str) -> None:

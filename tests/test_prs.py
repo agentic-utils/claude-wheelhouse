@@ -9,7 +9,7 @@ import pytest
 
 from claude_wheelhouse import mcp_server, prs
 from claude_wheelhouse.hub import Hub
-from claude_wheelhouse.store import PR_REFS, PRS_SINCE, Store, inbox_rank, standing
+from claude_wheelhouse.store import GONE_NOTE, PR_REFS, PRS_SINCE, Store, inbox_rank, standing
 from claude_wheelhouse.tui import closable, family_prompt, item_tip, ref_text, titled
 
 URL = "https://github.com/agentic-utils/claude-wheelhouse/pull/108"
@@ -346,3 +346,17 @@ def test_a_session_still_uses_an_old_ref_through_mcp(store, sid):
     assert store.item(sid, "mizpah#PR7")["title"] == "renamed"
     assert call("reply", ref="PR7", text="done") == "replied on mizpah#PR7"
     assert call("get_input", ref="PR7").startswith("mizpah#PR7 [open] renamed")
+
+
+def test_a_gone_pr_is_settled_with_a_note_saying_why(store, sid, tmp_path):
+    other = store.create_session(str(tmp_path), name="other")
+    store.post_pr(sid, URL, "t")
+    store.post_pr(other, URL, "t")
+    assert store.set_pr_states({URL: "gone"}) == 2
+    assert store.set_pr_states({URL: "gone"}) == 0, "once"
+    item = store.item(sid, "claude-wheelhouse#PR108")
+    assert (item["status"], standing(item)) == ("gone", "settled"), "dimmed, in sight, not open"
+    assert [m["body"] for m in store.thread(sid, "claude-wheelhouse#PR108")] == [GONE_NOTE], "the reason, on its thread"
+    assert [m["body"] for m in store.thread(other, "claude-wheelhouse#PR108")] == [GONE_NOTE], "every session's item of it"
+    with pytest.raises(ValueError, match="its status comes from GitHub"):
+        store.update_item(sid, "claude-wheelhouse#PR108", status="open", declares=True)

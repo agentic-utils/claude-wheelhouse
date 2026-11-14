@@ -41,7 +41,7 @@ PULL = re.compile(r"https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/pull
 # a merge request's, as GitLab gives it: host (with its port, if any), the project's full path (a
 # group, subgroups and the project, so at least two segments), number
 MERGE = re.compile(r"https://([A-Za-z0-9.-]+(?::\d+)?)/((?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+)/-/merge_requests/(\d+)")
-STATES = ("draft", "open", "merged", "closed")   # a PR item's statuses: the forge's, never the session's
+STATES = ("draft", "open", "merged", "closed", "gone")   # a PR item's statuses: the forge's, never the session's
 CREATES = re.compile(rb"pr create|create_pull_request|mr create|create_merge_request")
 ACTS = re.compile(r"\b(?:git\s+push|gh\s+pr\s+(?:merge|ready|close)|glab\s+mr\s+(?:merge|close|reopen|update|approve|rebase))\b")
 ACTS_BYTES = re.compile(rb"git push|gh pr (?:merge|ready|close)|glab mr (?:merge|close|reopen|update|approve|rebase)")

@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from claude_wheelhouse import api, features
+from claude_wheelhouse.store import GONE_NOTE
 
 prs = pytest.importorskip("claude_wheelhouse_prs", reason="installed without the prs module")
 from claude_wheelhouse_prs import fetch, pane  # noqa: E402
@@ -104,7 +105,8 @@ def test_no_merge_request_no_row(data, desc):
     (1, "", "ERROR: no token found for host", fetch.Unavailable, "isn't logged in", "no login"),
     (1, "", "Get \"https://gitlab.tufu.internal/api/v4/x\": tls: failed to verify certificate: x509: certificate signed by unknown authority",
      RuntimeError, "GITLAB_CA_CERT", "a CA glab doesn't know: told how to give it one"),
-    (1, '{"message":"404 Project Not Found"}', "glab: 404 Not Found (HTTP 404)", RuntimeError, "404 Not Found", "not found: glab's last line"),
+    (1, '{"message":"404 Project Not Found"}', "glab: 404 Not Found (HTTP 404)", fetch.Gone, "no longer exists", "a 404: gone, if the login is good"),
+    (1, "", "glab: 500 Internal Server Error (HTTP 500)", RuntimeError, "500 Internal Server Error", "a 5xx: glab's last line"),
     (1, "", "", RuntimeError, "glab exited 1", "silence"),
     (1, "", f"bad token {TOKEN} sent", RuntimeError, "[token]", "a token in the output never reaches the warning"),
 ])
@@ -136,7 +138,7 @@ class Fake:
     def __init__(self, tmp_path, items=(), gh=None, merges=None, notes=None):
         self.items, self.states, self.gh_calls, self.glab_calls, self.activity = list(items), {}, [], [], None
         self.gh, self.merges, self.notes, self.now = gh or {"data": {"search": {"nodes": []}}}, merges or {}, notes, 1000.0
-        self.project, self.writes, self.put = {"squash_option": "default_off"}, [], None
+        self.project, self.writes, self.put, self.user = {"squash_option": "default_off"}, [], None, (0, "{}", "")
         self.ctx = api.Context(tmp_path, lambda: [], lambda: None, pr_items=lambda: self.items,
                                set_pr_states=self.states.update, pr_activity=lambda: self.activity)
 
@@ -153,6 +155,8 @@ class Fake:
         if options:   # a write: recorded, answered by self.put(endpoint, options) else as GitLab does
             self.writes.append((endpoint, options))
             return self.put(endpoint, options) if self.put else (0, json.dumps({"state": "merged"}), "")
+        if endpoint == "user":
+            return self.user
         if "/merge_requests/" not in endpoint:
             return 0, json.dumps(self.project), ""
         if endpoint.endswith("/notes") or "/notes?" in endpoint:
@@ -460,3 +464,67 @@ def test_the_route_builds_its_fetcher_with_glab(tmp_path, monkeypatch):
     listed = next(r for r in pane.routes(ctx) if r.path == "list")
     got = listed.handler(api.Call({}, {"scope": "mine"}))
     assert calls and calls[0][:4] == ["glab", "api", "--hostname", HOST] and got["prs"][0]["number"] == 2
+
+
+# a merge request GitLab says is gone leaves the open set; a failure that isn't that never does
+
+NOT_FOUND = (1, '{"message":"404 Not found"}', "glab: 404 Not found (HTTP 404)")
+
+
+@pytest.mark.parametrize("answer, user, gone, desc", [
+    (NOT_FOUND, (0, "{}", ""), True, "404 for the MR, the login good: gone"),
+    ((1, '{"message":"404 Project Not Found"}', "glab: 404 Project Not Found (HTTP 404)"), (0, "{}", ""), True,
+     "its project gone: the same"),
+    (NOT_FOUND, (1, "", "glab: 401 Unauthorized (HTTP 401)"), False, "404 but the login is refused: not gone"),
+    (NOT_FOUND, (1, "", "glab: 502 Bad Gateway (HTTP 502)"), False, "404 but GitLab is failing: not gone"),
+    (NOT_FOUND, (1, "", "dial tcp: connection refused"), False, "404 but unreachable: not gone"),
+    ((1, "", "glab: 401 Unauthorized (HTTP 401)"), (0, "{}", ""), False, "unauthorised: not gone"),
+    ((1, "", "glab: 500 Internal Server Error (HTTP 500)"), (0, "{}", ""), False, "a 5xx: not gone"),
+    ((1, "", "glab: 502 Bad Gateway (HTTP 502)"), (0, "{}", ""), False, "a 502: not gone"),
+    ((1, "", "Get \"https://gitlab.tufu.internal/x\": dial tcp: i/o timeout"), (0, "{}", ""), False, "a network error: not gone"),
+    ((1, "", "x509: certificate signed by unknown authority"), (0, "{}", ""), False, "a CA problem: not gone"),
+    ((0, "<html>", ""), (0, "{}", ""), False, "not JSON: not gone"),
+])
+def test_a_merge_request_gitlab_cannot_find_is_marked_gone(tmp_path, answer, user, gone, desc):
+    f = Fake(tmp_path, [item(1), item(2)], merges={1: mr(1)})
+    fetcher = f.fetcher()
+    fetcher.answer("mine", True)
+    f.states.clear()
+    f.merges[1], f.user, f.now = answer, user, f.now + fetch.EVERY
+    got = fetcher.answer("mine", True)
+    assert (f.states.get(URL.format(1)) == "gone") == gone, f"{desc}: {f.states}"
+    assert (1 in [r["number"] for r in got["prs"]]) != gone, f"{desc}: out of the pane only when gone, else its last row stays"
+    assert bool(got.get("warning")) != gone, f"{desc}: a failure is a warning, a gone MR is no failure"
+
+
+def test_a_gone_merge_request_is_not_asked_about_again(tmp_path):
+    f = Fake(tmp_path, [item(1)], merges={1: NOT_FOUND})
+    fetcher = f.fetcher()
+    fetcher.answer("mine", True)
+    f.items[0]["status"] = "gone"   # as the store has it once the pane has said so
+    f.glab_calls.clear()
+    f.now += fetch.EVERY
+    fetcher.answer("mine", True)
+    assert [c for c in f.glab_calls if "merge_requests" in c[-1]] == [], "no longer asked about"
+
+
+@pytest.mark.parametrize("act", ["merge", "close", "ready", "draft"])
+def test_acting_on_a_merge_request_that_is_gone_says_so_and_marks_it(tmp_path, act):
+    f, fetcher = acting(tmp_path, put=lambda e, o: NOT_FOUND)
+    f.merges[12] = NOT_FOUND
+    got = {"merge": fetcher.merge, "close": fetcher.close, "ready": fetcher.ready,
+           "draft": lambda url: fetcher.ready(url, draft=True)}[act](URL.format(12))
+    assert "no longer exists" in got["error"] and "404" not in got["error"].replace("answers 404", ""), got
+    assert f.states[URL.format(12)] == "gone" and fetcher.answer("mine", False)["prs"] == [], act
+    assert all(w[1][-1] == "state_event=close" for w in f.writes), "only the attempt itself was sent"
+
+
+@pytest.mark.parametrize("answer, desc", [
+    ((1, "", "glab: 502 Bad Gateway (HTTP 502)"), "a 5xx"),
+    ((1, "", "glab: 401 Unauthorized (HTTP 401)"), "a refused login"),
+])
+def test_acting_through_a_failing_gitlab_is_no_vanishing(tmp_path, answer, desc):
+    f, fetcher = acting(tmp_path, put=lambda e, o: answer)
+    f.merges[12] = answer
+    got = fetcher.close(URL.format(12))
+    assert "no longer exists" not in got["error"] and f.states[URL.format(12)] == "open", desc
