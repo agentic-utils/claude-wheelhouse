@@ -238,8 +238,12 @@ session.
   has gone (or isn't a regular file) the pane says so.
 - **Pull requests.** A PR a session makes with `gh pr create` (or the GitHub MCP server),
   itself or through a subagent, shows in the inbox by itself, found in its transcript: its
-  ref is `PR` and the repo's PR number (`PR108`), and its title starts with the repo's
-  short name, dimmed. A subagent's PR sits under the task the subagent was made for. A
+  ref is its repo's name, `#PR` and the PR number (`claude-wheelhouse#PR108`: numbers are
+  per repo, so the repo is part of the name; the same name and number from another owner or
+  host takes a letter after it, `claude-wheelhouse#PR108b`). A PR's identity is its URL.
+  Write one as `<repo>#PR<n>` in a doc or a message and the wheelhouse links it to the item (a
+  bare `PR108` names no repo and isn't linked, though a session may still use it as a ref
+  while only one PR has that number). A subagent's PR sits under the task the subagent was made for. A
   session posts one it made another way with `post_item(kind="pr", url=...)`. Its status
   is GitHub's (`draft`, `open`, `merged`, `closed`), which the PRs pane brings in; merged
   and closed ones dim. `Delete` takes one off the inbox, asking first while it's open: it
@@ -247,7 +251,7 @@ session.
   request is a PR too, on a host you name (`GITLAB_HOSTS`, below): made with `glab mr create`
   (or a GitLab MCP server's `create_merge_request`) it shows by itself, otherwise a session
   posts `post_item(kind="pr", url="https://<host>/<group>/<project>/-/merge_requests/<n>")`.
-  Its ref is `PR` and the merge request's number (`PR12`), and its status is GitLab's.
+  Its ref is the project's name, `#PR` and the number (`av#PR12`), and its status is GitLab's.
 - **Colour by kind.** Each inbox row's ref is coloured by its kind: a task green, a
   question yellow, a decision purple, a PR light blue, a doc the theme's text colour, a
   subagent grey and a permission orange. Resting the pointer on a row shows its full title

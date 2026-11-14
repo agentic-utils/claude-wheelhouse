@@ -16,7 +16,18 @@ found, posted and polled as a GitHub pull request is. With no GitLab host named,
 and `post_item` accept) requires a named host and returns the lower-case-host form with no trailing path,
 query or fragment. Reading a stored URL (`prs.parse`, `parse_mr`, `repo_of`, `link`, `is_mr`, `forge`) is
 structural and takes any host: the body was vetted when stored, and a `--connect` app may not have the
-setting. `parse` keeps its `(owner, repo, number)` shape (owner the namespace). The ref stays `PR<n>`.
+setting. `parse` keeps its `(owner, repo, number)` shape (owner the namespace).
+
+## Refs
+
+An item's ref is `<repo>#PR<n>` (`Store._pr_ref`; `av#PR12`), repo the project's last path segment; the
+same name and number from another owner or host takes a letter (`av#PR12b`). Identity stays the canonical
+URL (host, full path, number), and the PRs module's `prs.db` is keyed by URL, so it needed no migration.
+Opening a database renames each old `PR<n>` item once (`_migrate_pr_refs`, a settings mark), with its
+messages and children's `parent_ref`. `Store.resolve_ref` (used by `update_item`, `reply`, `get_input`)
+finds an item by a bare `PR<n>` where one PR has that number. A ref has `#` in it: `client.py` quotes refs
+in daemon paths. `search.ITEM_ID` links a PR only as `<repo>#PR<n>`. The PRs pane's lines say
+`<repo>#PR<n>` (`pane.label`); its table keeps `PR<n>` beside the Repo column. `PROTOCOL_VERSION` 31.
 
 ## Detection and post_item
 

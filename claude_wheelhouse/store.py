@@ -131,7 +131,10 @@ DECISION_FIELDS = (("why", "Why"),)
 # its result says the CLI may need signing in: an older MCP server checks nothing.
 # 30: GitLab merge requests as PR items: an older MCP server refuses a merge request's URL in post_item,
 # and an older session isn't told of `glab mr create`.
-PROTOCOL_VERSION = 30
+# 31: a PR's ref is repo#PR<n> (av#PR12), not PR<n>, and a protocol rule to write a pull or merge request
+# as <repo>#PR<n> and an issue as <repo>#issue<n>: an older MCP server and an older monitor make and
+# show the bare PR<n>, which collides across repos.
+PROTOCOL_VERSION = 31
 # the least time between two compactions a session asks for itself (request_compact), so a
 # confused one can't loop: seconds since its last accepted request
 MODEL_COMPACT_GAP = 30 * 60
