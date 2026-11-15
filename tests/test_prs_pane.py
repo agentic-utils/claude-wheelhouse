@@ -279,6 +279,25 @@ async def test_no_gh_says_so_in_place_of_the_table(store, sid, github):
 
 
 @pytest.mark.anyio
+async def test_the_note_is_updated_only_when_its_text_changes(store, sid, github, monkeypatch):
+    """#366: the note is painted each second; an unchanged one costs no update (a layout)."""
+    github.fail = fetch.Unavailable("gh isn't installed: the PRs pane needs the GitHub CLI")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await settled(app, pilot)
+        p, note = app.query_one("#prs"), app.query_one("#prs-note")
+        updates = []
+        real = note.update
+        monkeypatch.setattr(note, "update", lambda content="", **kw: updates.append(content) or real(content, **kw))
+        p.paint_note()
+        p.paint_note()
+        assert updates == [], "the same note: not updated"
+        p.outcomes["merge"] = "Merged #108."
+        p.paint_note()
+        assert len(updates) == 1 and "Merged #108." in str(note.render()), "a changed note: updated once"
+
+
+@pytest.mark.anyio
 async def test_tab_stops_at_the_prs_after_the_inbox(store, sid, github):
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:

@@ -6001,6 +6001,49 @@ async def test_session_names_keep_sixteen_cells(store, tmp_path, size, desc):
         assert t.virtual_size.width <= t.scrollable_content_region.width, desc
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize("target, lit, desc", [
+    ("#items", "items-pane", "the inbox's list lights the inbox"),
+    ("#session-list", "sessions-pane", "the session list lights its pane"),
+    ("#answer", "detail-pane", "the answer box lights Detail"),
+])
+async def test_the_pane_holding_focus_alone_is_lit(store, sid, target, lit, desc):
+    """#366: the lit border is a class on the pane (mark_panel), set as focus moves, not
+    `:focus-within`, which restyles every widget in the pane at each move."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.query_one(target).focus()
+        await pilot.pause()
+        await pilot.pause()
+        panels = list(app.screen.query(".panel"))
+        assert [p.id for p in panels if p.has_class("-focus-within")] == [lit], desc
+        border = {p.id: (p.styles.border_top[0], p.styles.border_top[1].hex.lower()) for p in panels}
+        assert border[lit] == ("round", "#ff2a6d"), f"{desc}: pink, as before"
+        assert all(b == ("round", "#7b61ff") for i, b in border.items() if i != lit), f"{desc}: the rest purple, {border}"
+
+
+@pytest.mark.anyio
+async def test_the_footer_is_rebuilt_only_when_its_keys_change(store, sid, monkeypatch):
+    """#366: Textual rebuilds the footer at every focus move; SteadyFooter only when what it
+    shows differs."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        footer = app.screen.query_one(tui.SteadyFooter)
+        builds, real = [], footer.recompose
+        monkeypatch.setattr(footer, "recompose", lambda: builds.append(1) or real())
+        for target in ("#answer", "#session-list", "#items"):   # the same keys wherever focus is
+            app.query_one(target).focus()
+            await pilot.pause()
+            await pilot.pause()
+        assert builds == [], "focus moved, the same keys: no rebuild"
+        await pilot.press("alt+v")   # Show finished becomes Hide finished
+        await pilot.pause()
+        await pilot.pause()
+        assert builds and "Hide finished" in footer_labels(app), "the keys changed: rebuilt, showing them"
+
+
 def footer_labels(app) -> list[str]:
     from textual.widgets._footer import FooterKey
     return [k.description for k in app.screen.query(FooterKey)]

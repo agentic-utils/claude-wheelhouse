@@ -989,7 +989,8 @@ class Prs(Vertical):
     def paint_note(self) -> None:
         note = self.query_one("#prs-note", Static)
         said = self.note()
-        note.update(said)
+        if note.content != said:   # painted each second: only a changed note costs a layout (#366)
+            note.update(said)
         note.display = bool(said)
 
     def on_data_table_header_selected(self, event: DataTable.HeaderSelected) -> None:
