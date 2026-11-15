@@ -507,7 +507,7 @@ class Fetcher:
         open_urls = [url for url, it in items.items() if it["status"] not in settled]
         self.gone = set()
         tracked = [(url, p) for url in open_urls if not api.is_mr(url) and (p := api.parse_pr(url))]
-        merges = [url for url in open_urls if api.is_mr(url)]
+        merges = sorted((url for url in open_urls if api.is_mr(url)), key=lambda u: items[u]["status"] == "gone")   # live first: GITLAB_MOST
         gitlab, kept, notes = self.fetch_gitlab(merges)
         try:
             missing: set[str] = set()

@@ -1890,8 +1890,8 @@ class Store:
     def set_pr_states(self, states: dict[str, str]) -> int:
         """GitHub's (or GitLab's) state for each PR, {url: draft, open, merged, closed or gone}, on
         every item of it, any session's (the PRs pane's fetch). Gone: the forge says it no longer
-        exists (its PR or merge request, or its repo or project, is not found); a note on the item says
-        so. Only a change is written. One the person dismissed or deleted stays so, whatever its new
+        exists (GitHub finds its repo without the PR; GitLab answers 404 to a login that works); a note
+        on the item says so. Only a change is written. One the person dismissed or deleted stays so, whatever its new
         state. Returns the items changed."""
         changed = 0
         with self.tx() as db:
