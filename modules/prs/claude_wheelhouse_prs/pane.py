@@ -965,7 +965,7 @@ class Prs(Vertical):
                 self.outcomes["review"] = "Not asked for " + "; ".join(skipped) + "."
                 self.paint_note()
         what = f"{label(rows[0])} ({clean(rows[0]['title'])})" if len(rows) == 1 \
-            else f"{len(asking)} PRs ({', '.join('PR' + str(r['number']) for r, _, _ in asking)})"
+            else f"{len(asking)} PRs ({', '.join(label(r) for r, _, _ in asking)})"
         self.ctx.ask(f"Request a review of {what} on Slack, from: a channel or a name, such as #channel or @name",
                      past, then)
 

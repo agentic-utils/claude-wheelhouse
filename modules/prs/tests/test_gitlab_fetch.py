@@ -478,6 +478,7 @@ NOT_FOUND = (1, '{"message":"404 Not found"}', "glab: 404 Not found (HTTP 404)")
     (NOT_FOUND, (1, "", "glab: 401 Unauthorized (HTTP 401)"), False, "404 but the login is refused: not gone"),
     (NOT_FOUND, (1, "", "glab: 502 Bad Gateway (HTTP 502)"), False, "404 but GitLab is failing: not gone"),
     (NOT_FOUND, (1, "", "dial tcp: connection refused"), False, "404 but unreachable: not gone"),
+    (NOT_FOUND, NOT_FOUND, False, "404 for the login too (no GitLab API there): not gone"),
     ((1, "", "glab: 401 Unauthorized (HTTP 401)"), (0, "{}", ""), False, "unauthorised: not gone"),
     ((1, "", "glab: 500 Internal Server Error (HTTP 500)"), (0, "{}", ""), False, "a 5xx: not gone"),
     ((1, "", "glab: 502 Bad Gateway (HTTP 502)"), (0, "{}", ""), False, "a 502: not gone"),
@@ -506,6 +507,22 @@ def test_a_gone_merge_request_is_not_asked_about_again(tmp_path):
     f.now += fetch.EVERY
     fetcher.answer("mine", True)
     assert [c for c in f.glab_calls if "merge_requests" in c[-1]] == [], "no longer asked about"
+    f.merges[1] = mr(1, state="merged")
+    f.now += fetch.RECHECK
+    fetcher.answer("mine", True)
+    assert f.states[URL.format(1)] == "merged", f"asked again after RECHECK, back to its real status: {f.states}"
+
+
+def test_a_host_that_answers_404_to_everything_is_never_gone_and_never_loops():
+    calls = []
+
+    def runner(argv):
+        calls.append(argv)
+        return NOT_FOUND
+
+    with pytest.raises(RuntimeError) as got:
+        fetch.mr_json(HOST, fetch.mr_path("group/project", 1), runner)
+    assert not isinstance(got.value, fetch.Gone) and len(calls) == 2, f"the MR, then the login once: {calls}"
 
 
 @pytest.mark.parametrize("act", ["merge", "close", "ready", "draft"])

@@ -32,6 +32,7 @@ EVERY = 300        # seconds: a fetch at least this often while a pane asks
 SETTLE = 20        # seconds after a push before the fetch it cues (GitHub registers it, starts checks)
 GAP = 30           # seconds: no fetch within this of the last, whoever asks (the person's r included)
 TIMEOUT = 9        # seconds a fetch may take: a route is waited on 10 (daemon.MODULE_WAIT)
+RECHECK = 3600     # seconds: a gone PR is asked about again this often (gone may be the login's view, and pass)
 SEARCH = "is:pr is:open author:@me"
 LIGHTS = ("red", "orange", "yellow", "green", "grey")   # most urgent first: the default order
 FAILED = ("FAILURE", "ERROR")
@@ -246,25 +247,35 @@ def gh(argv: list[str]) -> tuple[int, str, str]:
     return done.returncode, done.stdout, done.stderr
 
 
-def run(q: str, runner: Runner, gone: set | None = None) -> dict:
+def run(q: str, runner: Runner, gone: set | None = None, unseen: set | None = None) -> dict:
     """The query sent through `gh api graphql`: its data. A partial answer (one alias GitHub
-    couldn't resolve) still counts, and the aliases GitHub says it can't find (a NOT_FOUND error)
-    are added to gone, if given. Unavailable when not logged in; RuntimeError otherwise."""
+    couldn't resolve) still counts; the aliases whose repo GitHub found without the PR are added
+    to gone, and those whose repo it couldn't resolve to unseen, if given (not_found).
+    Unavailable when not logged in; RuntimeError otherwise."""
     code, out, err = runner(["gh", "api", "graphql", "-f", f"query={q}"])
+    found_no_pr, no_repo = not_found(out)
     if gone is not None:
-        gone.update(not_found(out))
+        gone.update(found_no_pr)
+    if unseen is not None:
+        unseen.update(no_repo)
     return answer(code, out, err)
 
 
-def not_found(out: str) -> set[str]:
-    """The aliases a GraphQL answer says it couldn't find: the first segment of the path of each
-    NOT_FOUND error (a PR, or its repo, that isn't there). Any other error, or no error, adds none."""
+def not_found(out: str) -> tuple[set[str], set[str]]:
+    """The aliases a GraphQL answer says it couldn't find, by its NOT_FOUND errors' paths: (those
+    whose repo resolved and whose pullRequest is null, a PR that isn't there; those whose repo
+    didn't resolve, which a login without access to it is told too, so no word on the PR). Any
+    other error, or no error, adds none."""
     try:
-        errors = json.loads(out).get("errors") if out.strip() else None
+        got = json.loads(out) if out.strip() else {}
+        errors, data = got.get("errors") or [], got.get("data") or {}
     except (ValueError, AttributeError):
-        return set()
-    return {e["path"][0] for e in errors or [] if isinstance(e, dict) and e.get("type") == "NOT_FOUND"
-            and isinstance(e.get("path"), list) and e["path"] and isinstance(e["path"][0], str)}
+        return set(), set()
+    paths = [e["path"] for e in errors if isinstance(e, dict) and e.get("type") == "NOT_FOUND"
+             and isinstance(e.get("path"), list) and e["path"] and isinstance(e["path"][0], str)]
+    gone = {p[0] for p in paths if p[1:] == ["pullRequest"] and isinstance(data, dict)
+            and isinstance(data.get(p[0]), dict) and data[p[0]].get("pullRequest") is None}
+    return gone, {p[0] for p in paths if len(p) == 1}
 
 
 def answer(code: int, out: str, err: str) -> dict:
@@ -334,13 +345,23 @@ def mr_json(host: str, endpoint: str, runner: Runner, *options: str):
     code, out, err = runner(["glab", "api", "--hostname", host, *options, endpoint])
     if code != 0:
         failure = mr_failure(host, code, out, err)
-        if isinstance(failure, Gone):   # GitLab also answers 404 to a login that can't see it: that login must be good
-            mr_json(host, "user", runner)
+        if isinstance(failure, Gone):   # GitLab also answers 404 to a login that can't see it
+            mr_login(host, runner)
         raise failure
     try:
         return json.loads(out)
     except ValueError:
         raise RuntimeError(f"{host}: GitLab's answer isn't JSON") from None
+
+
+def mr_login(host: str, runner: Runner) -> None:
+    """Nothing if `glab api user` answers (the login is good); else what its failure says, but never
+    Gone: a host whose API answers 404 even for the login proves nothing about a merge request."""
+    code, out, err = runner(["glab", "api", "--hostname", host, "user"])
+    if code != 0:
+        failure = mr_failure(host, code, out, err)
+        raise RuntimeError(f"{host}: GitLab answers 404 even for the login: check GITLAB_HOSTS") \
+            if isinstance(failure, Gone) else failure
 
 
 def mr_blocker(data) -> str | None:
@@ -467,6 +488,7 @@ class Fetcher:
         self.details: dict[str, tuple[float, dict]] = {}   # each PR's detail as last fetched (detail), and when
         self.results: dict[str, dict] = {}   # what each merge, close, ready or draft came to, until asked (pane's result route)
         self.gone: set[str] = set()       # PRs the last fetch found no longer exist, until it has marked them
+        self.rechecked: float | None = None   # when a fetch last asked about the gone PRs too (RECHECK)
         self.error: str | None = None     # gh unavailable: shown in place of the table
         self.warning: str | None = None   # the last fetch failed otherwise: the cache shown, and why
 
@@ -478,15 +500,25 @@ class Fetcher:
         return out
 
     def fetch(self) -> None:
-        open_urls = [url for url, it in self.items().items() if it["status"] not in ("merged", "closed", "gone")]
+        items = self.items()
+        if recheck := self.rechecked is None or self.clock() - self.rechecked >= RECHECK:   # gone ones too, now and then
+            self.rechecked = self.clock()
+        settled = ("merged", "closed") if recheck else ("merged", "closed", "gone")
+        open_urls = [url for url, it in items.items() if it["status"] not in settled]
         self.gone = set()
         tracked = [(url, p) for url in open_urls if not api.is_mr(url) and (p := api.parse_pr(url))]
         merges = [url for url in open_urls if api.is_mr(url)]
         gitlab, kept, notes = self.fetch_gitlab(merges)
         try:
             missing: set[str] = set()
-            data = run(query([p for _, p in tracked]), self.runner, missing)
-            self.gone |= {tracked[int(a[1:])][0] for a in missing if re.fullmatch(r"p\d+", a) and int(a[1:]) < len(tracked)}
+            unseen: set[str] = set()
+            data = run(query([p for _, p in tracked]), self.runner, missing, unseen)
+            aliased = lambda aliases: [tracked[int(a[1:])][0] for a in aliases   # noqa: E731
+                                       if re.fullmatch(r"p\d+", a) and int(a[1:]) < len(tracked)]
+            self.gone |= set(aliased(missing))
+            if hidden := [url for url in aliased(unseen) if items[url]["status"] != "gone"]:
+                notes.append(f"GitHub can't resolve the repo of {', '.join(items[u]['ref'] for u in hidden)}: "
+                             "deleted, renamed, or not visible to gh's login")
         except Unavailable as e:
             if not merges:
                 self.error, self.last = str(e), self.clock()
@@ -530,8 +562,9 @@ class Fetcher:
             return {"error": scrub(str(e) or type(e).__name__)}
 
     def lost(self, url: str, said: str) -> dict | None:
-        """gh saying the PR or its repo isn't there (it can't resolve it): the PR vanished; else None."""
-        if "Could not resolve to a" in said:
+        """gh saying the PR isn't there in a repo it found: the PR vanished; else None. A repo it can't
+        resolve isn't: a login without access to it is told the same."""
+        if "Could not resolve to a PullRequest" in said:
             return self.vanished(url, "this pull request no longer exists (GitHub can't find it)")
         return None
 

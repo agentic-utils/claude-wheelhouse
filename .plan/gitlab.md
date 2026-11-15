@@ -74,11 +74,15 @@ deprecated).
 ## Gone
 
 A PR the forge says no longer exists leaves the open set: status `gone` (settled, dimmed, a note on its
-thread, no longer polled; `Store.set_pr_states`). GitLab: a 404 for the MR (or its project) counts only if
-`glab api user` then succeeds (GitLab also answers 404 to a login that can't see it), so a refused login,
-a 5xx, a timeout or a TLS error stay warnings with the last row kept (`fetch.Gone`, `mr_json`). GitHub: a
-NOT_FOUND error on a tracked alias (`fetch.not_found`), or gh's "Could not resolve to a" on Close, Merge
-or Ready. Close, Merge and Draft/Ready on one say "no longer exists" and mark it, not show the raw 404.
+thread; `Store.set_pr_states`). Gone is the login's view (a login without access is told the same), so a
+gone PR is still asked about once every `fetch.RECHECK` (an hour, and at the first fetch after a start)
+and takes its real status again if it answers. GitLab: a 404 for the MR (or its project) counts only if
+`glab api user` then succeeds (`mr_login`; any failure there, a 404 included, is a plain failure), so a
+refused login, a 5xx, a timeout or a TLS error stay warnings with the last row kept (`fetch.Gone`,
+`mr_json`). GitHub: a NOT_FOUND error at `<alias>.pullRequest` with the repository resolved
+(`fetch.not_found`), or gh's "Could not resolve to a PullRequest" on Close, Merge or Ready; a repository
+that doesn't resolve is a warning, never gone. Close, Merge and Draft/Ready on one say "no longer exists"
+and mark it, not show the raw 404.
 
 ## Not done
 

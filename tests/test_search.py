@@ -232,7 +232,7 @@ async def test_the_glass_opens_it_and_esc_puts_focus_on_the_inbox(store, sid):
 # #274: ids in Detail's text link to their items
 
 
-REFS = {"T3", "Q252", "PR276", "M2", "P4", "av#PR12", "ci-base#PR1", "a.b_c#PR7"}
+REFS = {"T3", "Q252", "PR276", "M2", "P4", "av#PR12", "ci-base#PR1", "a.b_c#PR7", "av#PR108b"}
 
 
 @pytest.mark.parametrize("text, linked, desc", [
@@ -258,7 +258,8 @@ REFS = {"T3", "Q252", "PR276", "M2", "P4", "av#PR12", "ci-base#PR1", "a.b_c#PR7"
     ("(a.b_c#PR7)", ["a.b_c#PR7"], "dots and underscores in a repo's name"),
     ("av#PR99 and zz#PR12", [], "a PR the session hasn't got, whatever its number"),
     ("PR12 and #PR12", [], "a bare number names no repo, so no PR"),
-    ("xav#PR12 av#PR12b av#PR12x", [], "inside a longer word"),
+    ("xav#PR12 av#PR12bc av#PR12x", [], "inside a longer word"),
+    ("av#PR108b, av#PR108", ["av#PR108b"], "a PR written with a collision's letter, and not without it"),
     ("https://x/av#PR12 docs/av#PR12", [], "in a URL or a path"),
     ("`av#PR12`", [], "inline code"),
 ])

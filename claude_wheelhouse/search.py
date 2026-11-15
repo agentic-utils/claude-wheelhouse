@@ -55,9 +55,9 @@ def find(items, query: str, limit: int = LIMIT) -> tuple[list, int]:
 # word or a path (T2a, T206.md, docs/T3); inline code and code blocks are left alone. The link
 # goes through the markdown as a link to LINK, which the renderer turns into a click (tui).
 LINK = "wheelhouse-item:"
-# any kind's (KINDS), as Doug asked; a PR's only as <repo>#PR<n>, the way it is written (a bare PR12 is no one repo's)
+# any kind's (KINDS), as Doug asked; a PR's only as <repo>#PR<n>, the way it is written (a bare PR12 is no one repo's), a letter after one two PRs shared (repo#PR108b)
 ITEM_ID = re.compile(rf"(?<![\w#/\\.\-])(?:{KIND_LETTERS})\d+(?![\w/\\\-]|\.\w)"
-                     rf"|(?<![\w/\\.\-])[\w.\-]+#PR\d+(?![\w/\\\-]|\.\w)")
+                     rf"|(?<![\w/\\.\-])[\w.\-]+#PR\d+[a-z]?(?![\w/\\\-]|\.\w)")
 # what's never linked into, in a line: inline code, a markdown link or image, an autolink
 KEEP = re.compile(r"(`+).*?\1|!?\[[^\]]*\]\([^)]*\)|<[^>\s]+>")
 PARSER = MarkdownIt().enable("strikethrough").enable("table")   # as Rich's Markdown parses

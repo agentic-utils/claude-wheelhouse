@@ -188,8 +188,8 @@ FEATURES: tuple[Feature, ...] = (
             note="A GitLab merge request is a PR too, on a host named in GITLAB_HOSTS: found after glab mr create, "
                  "or posted with its URL, and polled with glab (its pipeline, approval and conflicts the light)."),
     Feature("pr-gone", UNRELEASED, ADVANCED,
-            note="A PR or merge request its forge says no longer exists (deleted, or its repo or project is) shows as "
-                 "gone, dimmed with a note, instead of staying open; Close and Merge say so rather than show a 404."),
+            note="A PR or merge request its forge says no longer exists shows as gone, dimmed with a note, instead of "
+                 "staying open, and is checked again hourly; Close and Merge say so rather than show a 404."),
     Feature("gitlab-mr-actions", UNRELEASED, ADVANCED,
             note="Merge, Close and Mark ready or Make draft act on a GitLab merge request too (through glab): a "
                  "merge is refused saying what stands in its way, and draft is the title's Draft: prefix."),

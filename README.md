@@ -246,9 +246,13 @@ session.
   while only one PR has that number). A subagent's PR sits under the task the subagent was made for. A
   session posts one it made another way with `post_item(kind="pr", url=...)`. Its status
   is GitHub's (`draft`, `open`, `merged`, `closed`), which the PRs pane brings in; merged
-  and closed ones dim. One its forge says no longer exists (the PR, or its repo or project, is
-  deleted: a 404 with the login good) is `gone`: dimmed too, with a note on its thread, and no
-  longer polled; a failing network, a 5xx or a refused login never makes one gone. `Delete` takes one off the inbox, asking first while it's open: it
+  and closed ones dim. One its forge says no longer exists is `gone`: dimmed too, with a note on
+  its thread, and polled only once an hour, so one that comes back takes its real status again.
+  Gone means your login can't see it: on GitHub, a repo gh finds without the PR (a repo gh can't
+  resolve is a warning instead, as it is when gh is logged in as someone without access); on
+  GitLab, a 404 for the merge request or its project while the login itself is accepted, which is
+  also what a login without access to the project gets. A failing network, a 5xx or a refused
+  login never makes one gone. `Delete` takes one off the inbox, asking first while it's open: it
   stays open on GitHub. A message on a PR goes to its session, as on any item. A GitLab merge
   request is a PR too, on a host you name (`GITLAB_HOSTS`, below): made with `glab mr create`
   (or a GitLab MCP server's `create_merge_request`) it shows by itself, otherwise a session
