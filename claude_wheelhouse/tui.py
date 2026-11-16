@@ -2464,6 +2464,28 @@ class RunButtons(Horizontal):
         yield BarButton("Run", "success", id="run-command", compact=True, tooltip=BUTTONS["run-command"])
 
 
+class SteadyFooter(Footer):
+    """Textual's Footer, rebuilt only when the keys it shows change: Textual rebuilds it on every
+    focus move, which a busy machine feels as lag moving to the answer box (#366)."""
+    shown: tuple | None = None   # the keys of its last build: None before the first
+
+    def keys_shown(self) -> tuple:
+        """What a build would show: each shown binding's key, label, action, state and tip."""
+        active = self.screen.active_bindings
+        palette = active.get(self.app.COMMAND_PALETTE_BINDING) if self.show_command_palette else None
+        return tuple((b.key, self.app.get_key_display(b), b.description, b.action, b.group, enabled, tip)
+                     for _, b, enabled, tip in active.values() if b.show) + (palette and palette[1:],)
+
+    def compose(self) -> ComposeResult:
+        self.shown = self.keys_shown() if self._bindings_ready else None
+        yield from super().compose()
+
+    def bindings_changed(self, screen: Screen) -> None:
+        if self.shown is not None and self.is_attached and screen is self.screen and self.keys_shown() == self.shown:
+            return
+        super().bindings_changed(screen)
+
+
 class ThreadView(Screen):
     """One item full screen: its detail, the whole conversation and a compose box. The app's
     refresh tick repaints it, so a reply shows up while it's open; typed text is untouched."""
@@ -2488,7 +2510,7 @@ class ThreadView(Screen):
         yield Compose(id="thread-answer")
         yield Hint(classes="answer-hint")
         yield SendBar(conversation=True)
-        yield Footer()
+        yield SteadyFooter()
 
     def on_mount(self) -> None:
         self.box = self.query_one(Compose)
@@ -2716,7 +2738,7 @@ class DocView(Screen):
             yield Compose(id="docview-answer")
             yield Hint(classes="answer-hint")
             yield SendBar(conversation=True)
-        yield Footer()
+        yield SteadyFooter()
 
     def on_mount(self) -> None:
         self.query_one("#docview-scroll").can_focus = False   # the transcript's keys scroll it
@@ -5116,7 +5138,7 @@ class WheelhouseApp(App):
     #tour-badge {{ width: auto; height: 1; padding: 0 1; color: #ffd300; display: none; }}
     #main {{ height: 1fr; }}   /* leaves room for the send bar and footer: no screen scroll */
     .panel {{ background: #000000; color: {MATRIX}; border: round #7b61ff; }}
-    .panel:focus-within {{ border: round #ff2a6d; }}
+    .panel.-focus-within {{ border: round #ff2a6d; }}   /* mark_panel: not :focus-within, which restyles the whole pane (#366) */
     DataTable {{ background: #000000; color: {MATRIX}; }}
     DataTable > .datatable--header {{ background: #12122a; color: #05d9e8; text-style: bold; }}
     DataTable > .datatable--cursor {{ background: #004466; color: #ffffff; }}   /* deep cyan: clear on black, apart from the marked purple and the grey hover, green and status text readable on it */
@@ -5488,7 +5510,7 @@ class WheelhouseApp(App):
                     yield Hint(classes="answer-hint")
                     yield CompactorOverlay(id="compactor-overlay")   # a compaction's art, over the conversation (#324)
         yield SendBar()
-        yield Footer()
+        yield SteadyFooter()
 
     async def on_mount(self) -> None:
         await self.mount_panes()
@@ -9944,11 +9966,33 @@ class WheelhouseApp(App):
             self.screen.set_focus(box, scroll_visible=False)
         return box is not None
 
+    def mark_panel(self, widget: Widget) -> None:
+        """The pane holding focus gets `-focus-within`, its border lit: restyling the pane
+        alone, where `:focus-within` restyles every widget in it at each focus move, which a
+        busy machine feels as lag (#366). Read from where focus is now, so a blur and a focus
+        arriving in either order agree, and a pane lit for a widget since removed (no blur
+        reaches it) goes dark at the next move. Removing the last focusable widget leaves the
+        pane lit until then: Textual's blur reaches it detached, with no ancestor to tell.
+        Only the panes are restyled, so a `-focus-within` rule may set their own border and
+        the like, not inherited properties or descendants' styles."""
+        panels = {w for w in widget.ancestors_with_self if isinstance(w, Widget) and w.has_class("panel")}
+        if widget.is_attached:
+            panels.update(widget.screen.query(".panel.-focus-within"))
+        changed = [p for p in panels if p.has_class("-focus-within") != p.has_focus_within]
+        for panel in changed:
+            panel.set_class(not panel.has_class("-focus-within"), "-focus-within", update=False)
+        if changed:
+            self.stylesheet.update_nodes(changed, animate=True)
+
+    def on_descendant_focus(self, event: events.DescendantFocus) -> None:
+        self.mark_panel(event.widget)
+
     def on_descendant_blur(self, event: events.DescendantBlur) -> None:
         """A focused button disabled or hidden (Send, once its queue has gone) loses focus to
         the answer box, or with none showing to the next Tab stop: not to a sibling, or to
         nothing, as Textual would (#77). Not when its going put focus somewhere itself (Deny,
         in its reason)."""
+        self.mark_panel(event.widget)
         if not self.screen_stack:   # the app closing: no screen left to put focus on
             return
         lost, screen = event.widget, self.screen
