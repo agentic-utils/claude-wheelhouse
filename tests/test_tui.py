@@ -6033,10 +6033,13 @@ async def test_the_footer_is_rebuilt_only_when_its_keys_change(store, sid, monke
         footer = app.screen.query_one(tui.SteadyFooter)
         builds, real = [], footer.recompose
         monkeypatch.setattr(footer, "recompose", lambda: builds.append(1) or real())
+        signals, keys = [], footer.keys_shown   # bindings_changed reads it on each signal
+        monkeypatch.setattr(footer, "keys_shown", lambda: signals.append(1) or keys())
         for target in ("#answer", "#session-list", "#items"):   # the same keys wherever focus is
             app.query_one(target).focus()
             await pilot.pause()
             await pilot.pause()
+        assert len(signals) >= 3, f"each focus move signals the footer: {len(signals)}"
         assert builds == [], "focus moved, the same keys: no rebuild"
         await pilot.press("alt+v")   # Show finished becomes Hide finished
         await pilot.pause()

@@ -9971,7 +9971,10 @@ class WheelhouseApp(App):
         alone, where `:focus-within` restyles every widget in it at each focus move, which a
         busy machine feels as lag (#366). Read from where focus is now, so a blur and a focus
         arriving in either order agree, and a pane lit for a widget since removed (no blur
-        reaches it) goes dark at the next move."""
+        reaches it) goes dark at the next move. Removing the last focusable widget leaves the
+        pane lit until then: Textual's blur reaches it detached, with no ancestor to tell.
+        Only the panes are restyled, so a `-focus-within` rule may set their own border and
+        the like, not inherited properties or descendants' styles."""
         panels = {w for w in widget.ancestors_with_self if isinstance(w, Widget) and w.has_class("panel")}
         if widget.is_attached:
             panels.update(widget.screen.query(".panel.-focus-within"))
