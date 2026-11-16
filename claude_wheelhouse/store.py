@@ -25,7 +25,8 @@ DEFAULT_DB = Path.home() / ".local/state/claude-wheelhouse/wheelhouse.db"
 # permission: a tool call waiting for the person's approval, posted by a session's SDK host
 # (never by the session itself). Allow or Deny answer it; a message on it denies with that text.
 # doc: a markdown document the session declares for the person to read (post_doc), M for markdown
-# pr: a pull request the session made (post_pr, prs.py), its ref the repo's PR number (PR108)
+# pr: a pull request (or GitLab merge request) the session made (post_pr, prs.py), its ref its repo's
+# name and number, repo#PR108 (the same name and number in another repo, host or owner: repo#PR108b)
 # command: a shell command the session asks the person to run themselves (suggest_command, #257),
 # its title the one-line why and its body the command, run from the app's Run dialog
 KINDS = {"task": "T", "question": "Q", "agent": "A", "decision": "D", "permission": "P", "doc": "M", "pr": "PR",
@@ -41,7 +42,7 @@ STATUSES = {
     # the person's too: new until viewed, read once viewed, updated when posted again after that
     "doc": {"new", "updated", "read"},
     # GitHub's, never the session's or the person's (set_pr_states, from the PRs pane's fetch)
-    "pr": {"draft", "open", "merged", "closed"},
+    "pr": {"draft", "open", "merged", "closed", "gone"},
     # the person's: open until run (as an open question: the person's move, #335), running from
     # the run's start till its tab says how it ended (Run disabled, #339), run once a run ended
     # well, failed when its last run ended with an error or never said (Run kept), closed if dismissed
@@ -63,7 +64,7 @@ def is_closed(item) -> bool:
 # off the inbox until F shows it (closed, a permission answered, or dismissed by the person).
 SETTLED = {"task": {"done", "dropped"}, "question": {"answered"}, "decision": {"seen"},
            "agent": {"done", "failed"}, "permission": {"split"}, "doc": {"read"},
-           "pr": {"merged", "closed"}, "command": {"run"}}
+           "pr": {"merged", "closed", "gone"}, "command": {"run"}}
 # kinds whose settled items the person dismisses (Delete), recorded in items.dismissed; a
 # question or a decision is closed instead. A PR is dismissed whatever its state (never on GitHub)
 DISMISSABLE = ("task", "agent", "doc", "pr", "permission")   # a permission only once split, the one settled
@@ -128,7 +129,12 @@ DECISION_FIELDS = (("why", "Why"),)
 # brief tells a subagent that will be quiet on purpose to call quiet: an older MCP server has neither.
 # 29: suggest_command's sign-in check (#361), and the protocol rule to suggest a CLI's login when
 # its result says the CLI may need signing in: an older MCP server checks nothing.
-PROTOCOL_VERSION = 29
+# 30: GitLab merge requests as PR items: an older MCP server refuses a merge request's URL in post_item,
+# and an older session isn't told of `glab mr create`.
+# 31: a PR's ref is repo#PR<n> (av#PR12), not PR<n>, and a protocol rule to write a pull or merge request
+# as <repo>#PR<n> and an issue as <repo>#issue<n>: an older MCP server and an older monitor make and
+# show the bare PR<n>, which collides across repos.
+PROTOCOL_VERSION = 31
 # the least time between two compactions a session asks for itself (request_compact), so a
 # confused one can't loop: seconds since its last accepted request
 MODEL_COMPACT_GAP = 30 * 60
@@ -523,6 +529,9 @@ AGENTS_SINCE = "agents_since"
 # settings: when this database was first opened by code that finds PRs in transcripts (prs.py).
 # A PR made before then (or before its session joined) is never found (#111)
 PRS_SINCE = "prs_since"
+GONE_NOTE = "No longer exists: its forge answers 404 for it (deleted, or its repo or project is)."
+PR_REFS = "migrated_pr_refs"   # settings: the PR items' refs made repo#PR<n> (below) once
+OLD_PR_REF = re.compile(r"^PR(\d+)[a-z]?$")   # a PR item's ref before then: PR108, PR108b
 # seconds: how long before a subagent starts the session's own A item for it may be made
 AGENT_MATCH_BEFORE = 600
 AGENT_MATCH_AFTER = 15   # subagents.GRACE: by then the wheelhouse makes its own
@@ -722,6 +731,7 @@ class Store:
                     db.execute(f'DROP TRIGGER "{name}"')
             for trigger in TRIGGERS:
                 db.execute(trigger)
+            self._migrate_pr_refs(db)
             # a decision used to be finished once seen, and now stays until closed: those
             # seen before then are closed, once, rather than come back to the inbox
             if db.execute("SELECT 1 FROM settings WHERE key = ?", (DECISIONS_CLOSE,)).fetchone() is None:
@@ -1802,17 +1812,21 @@ class Store:
 
     def post_pr(self, sid: str, url: str, title: str, parent: str | None = None, pinned: bool = False,
                 detected: bool = False) -> str | None:
-        """A pull request the session made: its GitHub URL, kept canonical as the item's body
-        (prs.canonical), and its ref the PR's number, PR108 (then PR108b, c... for another
+        """A pull request the session made: its GitHub URL (or its GitLab merge request's, on a
+        host of features.gitlab_hosts()), kept canonical as the item's body (prs.canonical), and
+        its ref the PR's number, PR108 (then PR108b, c... for another
         repo's same number in this session, so refs stay unique). The same URL posted again
         in the session is the same item: its title (and parent, if given) updated, its status
-        left to GitHub. parent: a task, question or decision of the session's to list it under.
+        left to GitHub (or GitLab). parent: a task, question or decision of the session's to list it under.
         detected: found in a transcript (prs.PrWatcher), not posted by the session: nothing
         is made when any session already has the URL, and an existing item keeps its title.
         Returns the item's ref, or None for a detected PR passed over."""
         canon = prs.canonical(url)
         if canon is None or canon != url.strip().rstrip("/"):
-            raise ValueError(f"url must be a GitHub pull request, https://github.com/<owner>/<repo>/pull/<n>, not {url!r}")
+            gitlab = sorted(features.gitlab_hosts())
+            more = (f", or a GitLab merge request, https://<host>/<group>/<project>/-/merge_requests/<n>, on {' or '.join(gitlab)}"
+                    if gitlab else "")
+            raise ValueError(f"url must be a GitHub pull request, https://github.com/<owner>/<repo>/pull/<n>{more}, not {url!r}")
         with self.tx() as db:
             self._require(db, sid)
             if parent:
@@ -1826,10 +1840,7 @@ class Store:
             row = db.execute("SELECT ref FROM items WHERE session_id = ? AND kind = 'pr' AND body = ? ORDER BY id LIMIT 1",
                              (sid, canon)).fetchone()
             if row is None:
-                base = f"{KINDS['pr']}{prs.parse(canon)[2]}"
-                taken = {r["ref"] for r in db.execute("SELECT ref FROM items WHERE session_id = ? AND ref LIKE ?",
-                                                      (sid, base + "%"))}
-                ref = next(base + s for s in ("", *"bcdefghijklmnopqrstuvwxyz") if base + s not in taken)
+                ref = self._pr_ref(db, sid, canon)
                 db.execute("""INSERT INTO items (session_id, ref, kind, title, body, status, created_at, updated_at,
                               session_at, pinned, parent_ref) VALUES (?, ?, 'pr', ?, ?, ?, ?, ?, ?, ?, ?)""",
                            (sid, ref, title, canon, INITIAL_STATUS["pr"], now(), now(), now(), int(pinned), parent))
@@ -1838,19 +1849,58 @@ class Store:
                        "WHERE session_id = ? AND ref = ?", (title, parent, now(), now(), sid, row["ref"]))
             return row["ref"]
 
+    @staticmethod
+    def _pr_ref(db, sid: str, url: str) -> str:
+        """The ref a PR item of url takes in session sid: its repo's name and number, repo#PR108,
+        with a letter after it (repo#PR108b) if another repo's PR of that name and number is already there."""
+        base = f"{prs.repo_of(url)}#{KINDS['pr']}{prs.parse(url)[2]}"
+        taken = {r["ref"] for r in db.execute("SELECT ref FROM items WHERE session_id = ? AND kind = 'pr'", (sid,))}
+        return next(base + s for s in ("", *"bcdefghijklmnopqrstuvwxyz") if base + s not in taken)
+
+    def _migrate_pr_refs(self, db) -> None:
+        """Once: each PR item's ref PR108 becomes repo#PR108 (_pr_ref), in the item, its children's
+        parent_ref and its messages: PR numbers are per repo, so PR108 named two PRs once a second
+        host or repo was in use. Nothing is dropped; resolve_ref still finds one by its old ref."""
+        if db.execute("SELECT 1 FROM settings WHERE key = ?", (PR_REFS,)).fetchone() is None:
+            for row in db.execute("SELECT session_id, ref, body FROM items WHERE kind = 'pr' ORDER BY id").fetchall():
+                if OLD_PR_REF.match(row["ref"]) and prs.repo_of(row["body"]):
+                    new = self._pr_ref(db, row["session_id"], row["body"])
+                    for table, column in (("items", "ref"), ("items", "parent_ref"), ("messages", "item_ref")):
+                        db.execute(f"UPDATE {table} SET {column} = ? WHERE session_id = ? AND {column} = ?",
+                                   (new, row["session_id"], row["ref"]))
+            db.execute("INSERT INTO settings (key, value) VALUES (?, '1')", (PR_REFS,))
+
+    def resolve_ref(self, sid: str, ref: str) -> str:
+        """The ref an item is under: ref itself if the session has it, else, for an old PR ref (PR108),
+        the one PR item of that number; ValueError naming them if several have it."""
+        if not isinstance(ref, str) or not (old := OLD_PR_REF.match(ref)) or self.item(sid, ref) is not None:
+            return ref
+        number = re.compile(rf"^[^#]+#PR{old[1]}[a-z]?$")
+        found = [r["ref"] for r in self._all("SELECT ref FROM items WHERE session_id = ? AND kind = 'pr'", (sid,))
+                 if number.match(r["ref"])]
+        if len(found) > 1:
+            raise ValueError(f"{ref} is more than one PR here, name its repo: {', '.join(found)}")
+        return found[0] if found else ref
+
     def pr_items(self) -> list[dict]:
         """Every PR item in the store, any session's: its url, session, ref, status and title."""
         return [{"url": r["body"], "session_id": r["session_id"], "ref": r["ref"], "status": r["status"],
                  "title": r["title"]} for r in self._all("SELECT * FROM items WHERE kind = 'pr' ORDER BY id")]
 
     def set_pr_states(self, states: dict[str, str]) -> int:
-        """GitHub's state for each PR, {url: draft, open, merged or closed}, on every item of
-        it, any session's (the PRs pane's fetch). Only a change is written. One the person
-        dismissed or deleted stays so, whatever its new state. Returns the items changed."""
+        """GitHub's (or GitLab's) state for each PR, {url: draft, open, merged, closed or gone}, on
+        every item of it, any session's (the PRs pane's fetch). Gone: the forge says it no longer
+        exists (GitHub finds its repo without the PR; GitLab answers 404 to a login that works); a note
+        on the item says so. Only a change is written. One the person dismissed or deleted stays so, whatever its new
+        state. Returns the items changed."""
         changed = 0
         with self.tx() as db:
             for url, status in states.items():
                 self._check_status("pr", status)
+                if status == "gone":
+                    for r in db.execute("SELECT session_id, ref FROM items WHERE kind = 'pr' AND body = ? AND status != ?",
+                                        (url, status)).fetchall():
+                        self._said(db, r["session_id"], r["ref"], GONE_NOTE, "note")
                 changed += db.execute(
                     f"""UPDATE items SET status = ?, updated_at = ?, dismissed = CASE WHEN dismissed IS NULL
                         THEN NULL WHEN dismissed = '{DELETED}' THEN dismissed ELSE ? END

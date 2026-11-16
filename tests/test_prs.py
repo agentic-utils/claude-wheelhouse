@@ -9,7 +9,7 @@ import pytest
 
 from claude_wheelhouse import mcp_server, prs
 from claude_wheelhouse.hub import Hub
-from claude_wheelhouse.store import PRS_SINCE, Store, inbox_rank, standing
+from claude_wheelhouse.store import GONE_NOTE, PR_REFS, PRS_SINCE, Store, inbox_rank, standing
 from claude_wheelhouse.tui import closable, family_prompt, item_tip, ref_text, titled
 
 URL = "https://github.com/agentic-utils/claude-wheelhouse/pull/108"
@@ -45,23 +45,30 @@ def test_title_in(command, expected, desc):
 # the store
 
 def test_post_pr_numbers_its_ref_by_the_pr(store, sid):
-    assert store.post_pr(sid, URL, "Inbox pins") == "PR108"
-    item = store.item(sid, "PR108")
+    assert store.post_pr(sid, URL, "Inbox pins") == "claude-wheelhouse#PR108"
+    item = store.item(sid, "claude-wheelhouse#PR108")
     assert (item["kind"], item["status"], item["body"], item["pinned"]) == ("pr", "open", URL, 0)
 
 
-def test_same_number_in_another_repo_takes_a_suffix(store, sid):
-    refs = [store.post_pr(sid, u, "t") for u in (URL, OTHER, "https://github.com/x/y/pull/108")]
-    assert refs == ["PR108", "PR108b", "PR108c"]
+@pytest.mark.parametrize("urls, refs, desc", [
+    ([URL, OTHER, "https://github.com/x/y/pull/108"], ["claude-wheelhouse#PR108", "checkout-api#PR108", "y#PR108"],
+     "another repo's same number: its own name, so no suffix"),
+    ([URL, "https://github.com/someone-else/claude-wheelhouse/pull/108", "https://github.com/third/claude-wheelhouse/pull/108"],
+     ["claude-wheelhouse#PR108", "claude-wheelhouse#PR108b", "claude-wheelhouse#PR108c"], "the same repo name and number: a letter"),
+    ([URL, URL.replace("108", "109")], ["claude-wheelhouse#PR108", "claude-wheelhouse#PR109"], "another number"),
+])
+def test_refs_name_the_repo_and_the_number(store, sid, urls, refs, desc):
+    assert [store.post_pr(sid, u, "t") for u in urls] == refs, desc
+    assert sorted(r["body"] for r in store.items(sid) if r["kind"] == "pr") == sorted(urls), "each its own item, keyed by its URL"
 
 
 def test_same_url_again_is_the_same_item(store, sid):
     store.post_item(sid, "task", "the work")
     store.post_pr(sid, URL, "first")
-    assert store.post_pr(sid, URL, "second", parent="T1") == "PR108"
-    item = store.item(sid, "PR108")
+    assert store.post_pr(sid, URL, "second", parent="T1") == "claude-wheelhouse#PR108"
+    item = store.item(sid, "claude-wheelhouse#PR108")
     assert (item["title"], item["parent_ref"]) == ("second", "T1")
-    assert [r["ref"] for r in store.items(sid) if r["kind"] == "pr"] == ["PR108"]
+    assert [r["ref"] for r in store.items(sid) if r["kind"] == "pr"] == ["claude-wheelhouse#PR108"]
 
 
 @pytest.mark.parametrize("url, parent, error, desc", [
@@ -78,17 +85,17 @@ def test_detected_pr_already_an_item_anywhere_is_passed_over(store, sid, tmp_pat
     other = store.create_session(str(tmp_path), name="other")
     store.post_pr(other, URL, "posted by hand")
     assert store.post_pr(sid, URL, "PR 108", detected=True) is None
-    assert store.post_pr(sid, URL, "posted here too") == "PR108"   # posting explicitly makes its own
+    assert store.post_pr(sid, URL, "posted here too") == "claude-wheelhouse#PR108"   # posting explicitly makes its own
 
 
 def test_status_is_githubs(store, sid):
     store.post_pr(sid, URL, "t")
     with pytest.raises(ValueError, match="its status comes from GitHub"):
-        store.update_item(sid, "PR108", status="merged", declares=True)
+        store.update_item(sid, "claude-wheelhouse#PR108", status="merged", declares=True)
     with pytest.raises(ValueError, match="posted with its url"):
         store.post_item(sid, "pr", "t")
-    store.update_item(sid, "PR108", title="renamed", declares=True)
-    assert store.item(sid, "PR108")["title"] == "renamed"
+    store.update_item(sid, "claude-wheelhouse#PR108", title="renamed", declares=True)
+    assert store.item(sid, "claude-wheelhouse#PR108")["title"] == "renamed"
 
 
 @pytest.mark.parametrize("dismissed, status, expected, desc", [
@@ -102,23 +109,23 @@ def test_set_pr_states(store, sid, tmp_path, dismissed, status, expected, desc):
     store.post_pr(sid, URL, "t")
     store.post_pr(other, URL, "t")
     if dismissed:
-        store.dismiss(sid, "PR108")
+        store.dismiss(sid, "claude-wheelhouse#PR108")
     assert store.set_pr_states({URL: status}) == 2, desc
     assert store.set_pr_states({URL: status}) == 0, "only a change is written"
-    item = store.item(sid, "PR108")
+    item = store.item(sid, "claude-wheelhouse#PR108")
     assert (item["status"], standing(item)) == (status, expected), desc
-    assert store.item(other, "PR108")["status"] == status, "every session's item of it"
+    assert store.item(other, "claude-wheelhouse#PR108")["status"] == status, "every session's item of it"
 
 
 def test_pr_items(store, sid):
     store.post_pr(sid, URL, "t")
-    assert store.pr_items() == [{"url": URL, "session_id": sid, "ref": "PR108", "status": "open", "title": "t"}]
+    assert store.pr_items() == [{"url": URL, "session_id": sid, "ref": "claude-wheelhouse#PR108", "status": "open", "title": "t"}]
 
 
 def test_open_pr_ranks_as_a_running_task(store, sid):
     store.post_item(sid, "task", "t", status="running")
     store.post_pr(sid, URL, "t")
-    task, pr = store.item(sid, "T1"), store.item(sid, "PR108")
+    task, pr = store.item(sid, "T1"), store.item(sid, "claude-wheelhouse#PR108")
     assert inbox_rank(task)[0] == inbox_rank(pr)[0]
 
 
@@ -147,8 +154,8 @@ def test_mcp_post_pr_refuses(store, sid, kw, error, desc):
 
 def test_mcp_post_pr(store, sid):
     mcp_server._store, mcp_server._sid = store, sid
-    assert call("post_item", kind="pr", title="Inbox pins", url=URL, pinned=True) == "PR108"
-    assert store.item(sid, "PR108")["pinned"] == 1
+    assert call("post_item", kind="pr", title="Inbox pins", url=URL, pinned=True) == "claude-wheelhouse#PR108"
+    assert store.item(sid, "claude-wheelhouse#PR108")["pinned"] == 1
     with pytest.raises(ValueError, match="only a pr takes this"):
         call("post_item", kind="task", title="t", url=URL)
 
@@ -175,13 +182,13 @@ def write(path, *recs):
 
 @pytest.mark.parametrize("records, expected, desc", [
     ([rec("assistant", 9, bash("a", 'gh pr create --title "Pins"')), rec("user", 8, result("a", f"...\n{URL}\n"))],
-     [("PR108", "Pins")], "gh pr create, its title from --title"),
+     [("claude-wheelhouse#PR108", "Pins")], "gh pr create, its title from --title"),
     ([rec("assistant", 9, bash("a", "gh pr create --fill")), rec("user", 8, result("a", URL))],
-     [("PR108", "PR 108")], "no title given: PR <n> until the pane's refresh"),
+     [("claude-wheelhouse#PR108", "PR 108")], "no title given: PR <n> until the pane's refresh"),
     ([rec("assistant", 9, {"type": "tool_use", "id": "m", "name": "mcp__github__create_pull_request",
                            "input": {"title": "Via MCP"}}),
       rec("user", 8, result("m", json.dumps({"html_url": URL})))],
-     [("PR108", "Via MCP")], "the GitHub MCP server's tool"),
+     [("claude-wheelhouse#PR108", "Via MCP")], "the GitHub MCP server's tool"),
     ([rec("assistant", 9, bash("a", "gh pr create -t x")), rec("user", 8, result("a", "error: no commits", True))],
      [], "an error with no URL makes nothing"),
     ([rec("assistant", 9, bash("a", "gh pr view 108")), rec("user", 8, result("a", URL))],
@@ -201,10 +208,10 @@ def test_watcher_reads_incrementally_and_files_a_subagents_pr_under_its_task(sto
     write(sub, rec("assistant", 9, bash("a", "gh pr create -t Sub")))
     watcher = prs.PrWatcher(sid)
     watcher.sync(store, main, {sub: "T1"}, EPOCH)
-    assert store.item(sid, "PR108") is None, "the call alone makes nothing"
+    assert store.item(sid, "claude-wheelhouse#PR108") is None, "the call alone makes nothing"
     write(sub, rec("user", 8, result("a", URL)))
     watcher.sync(store, main, {sub: "T1"}, EPOCH)
-    item = store.item(sid, "PR108")
+    item = store.item(sid, "claude-wheelhouse#PR108")
     assert (item["title"], item["parent_ref"]) == ("Sub", "T1")
 
 
@@ -229,7 +236,7 @@ def test_hub_sync_prs_takes_the_later_cutoff_and_activity(store, sid, tmp_path):
     watcher = SimpleNamespace(sid=sid, main=main, cutoff=EPOCH, agents={})
     store.set_setting(PRS_SINCE, "2000-01-01T00:00:00+00:00")
     Hub.sync_prs(hub, watcher)
-    assert store.item(sid, "PR108") is not None
+    assert store.item(sid, "claude-wheelhouse#PR108") is not None
     assert hub.pr_activity_at == 1_700_000_000 - 9
 
 
@@ -275,5 +282,81 @@ def test_a_subagents_pr_from_before_the_cutoff_is_not_found(store, sid, tmp_path
           rec("assistant", 1, bash("b", "gh pr create -t New")), rec("user", 0, result("b", OTHER)))
     cutoff = datetime.fromtimestamp(1_700_000_000 - 5, timezone.utc)
     prs.PrWatcher(sid).sync(store, main, {sub: None}, cutoff)
-    assert [(r["ref"], r["title"]) for r in store.items(sid) if r["kind"] == "pr"] == [("PR108", "New")]
-    assert store.item(sid, "PR108")["body"] == OTHER, "only the one made after it"
+    assert [(r["ref"], r["title"]) for r in store.items(sid) if r["kind"] == "pr"] == [("checkout-api#PR108", "New")]
+    assert store.item(sid, "checkout-api#PR108")["body"] == OTHER, "only the one made after it"
+
+
+# refs: repo#PR<n>, and the old PR<n> still found
+
+OLD = [("PR108", "claude-wheelhouse#PR108"), ("PR108b", "checkout-api#PR108"), ("PR7", "mizpah#PR7")]
+
+
+def old_refs(store, sid, urls):
+    """A session whose PR items are as an older wheelhouse left them: PR108, PR108b, ..., with a
+    message and a child on each, and the migration not yet run."""
+    for u, (old, new) in zip(urls, OLD):
+        store.post_pr(sid, u, "t")
+        store.db.execute("UPDATE items SET ref = ? WHERE session_id = ? AND ref = ?", (old, sid, new))
+        store.db.execute("INSERT INTO messages (session_id, item_ref, author, body, created_at) VALUES (?, ?, 'person', 'hi', 'x')",
+                         (sid, old))
+    store.db.execute("DELETE FROM settings WHERE key = ?", (PR_REFS,))
+
+
+def test_the_migration_renames_each_pr_with_its_messages_and_keeps_every_row(db_file, store, sid):
+    urls = [URL, OTHER, "https://github.com/doug/mizpah/pull/7"]
+    old_refs(store, sid, urls)
+    store.post_item(sid, "task", "the work")
+    store.db.execute("UPDATE items SET parent_ref = 'PR108' WHERE ref = 'T1'")   # a child of a PR: an odd one, kept in step
+    before = store.db.execute("SELECT count(*) FROM items").fetchone()[0]
+    again = Store(db_file)   # opening it migrates
+    assert {r["ref"]: r["body"] for r in again.items(sid) if r["kind"] == "pr"} == {
+        "claude-wheelhouse#PR108": urls[0], "checkout-api#PR108": urls[1], "mizpah#PR7": urls[2]}
+    assert sorted(r["ref"] for r in again.items(sid) if r["kind"] == "pr") == sorted(new for _, new in OLD)
+    assert again.db.execute("SELECT count(*) FROM items").fetchone()[0] == before, "no row dropped"
+    assert sorted(r[0] for r in again.db.execute("SELECT item_ref FROM messages")) == sorted(new for _, new in OLD), "messages follow"
+    assert again.item(sid, "T1")["parent_ref"] == "claude-wheelhouse#PR108", "and a child's parent"
+    assert again.setting(PR_REFS) == "1"
+    Store(db_file)
+    assert sorted(r["ref"] for r in again.items(sid) if r["kind"] == "pr") == sorted(new for _, new in OLD), "once"
+
+
+@pytest.mark.parametrize("ask, expected, desc", [
+    ("claude-wheelhouse#PR108", "claude-wheelhouse#PR108", "a ref as it is"),
+    ("PR7", "mizpah#PR7", "an old ref with one PR of that number"),
+    ("PR9", "PR9", "no PR of that number: as given, for the caller to refuse"),
+    ("T1", "T1", "another kind's"),
+    ("PR108b", "ERROR", "two PRs of 108: asked which"),
+    ("PR108", "ERROR", "the bare number too"),
+])
+def test_resolve_ref(store, sid, ask, expected, desc):
+    for u in (URL, OTHER, "https://github.com/doug/mizpah/pull/7"):
+        store.post_pr(sid, u, "t")
+    store.post_item(sid, "task", "t")
+    if expected == "ERROR":
+        with pytest.raises(ValueError, match="more than one PR here.*claude-wheelhouse#PR108.*checkout-api#PR108"):
+            store.resolve_ref(sid, ask)
+    else:
+        assert store.resolve_ref(sid, ask) == expected, desc
+
+
+def test_a_session_still_uses_an_old_ref_through_mcp(store, sid):
+    mcp_server._store, mcp_server._sid = store, sid
+    store.post_pr(sid, "https://github.com/doug/mizpah/pull/7", "t")
+    assert call("update_item", ref="PR7", title="renamed") == "mizpah#PR7 updated"
+    assert store.item(sid, "mizpah#PR7")["title"] == "renamed"
+    assert call("reply", ref="PR7", text="done") == "replied on mizpah#PR7"
+    assert call("get_input", ref="PR7").startswith("mizpah#PR7 [open] renamed")
+
+
+def test_a_gone_pr_is_settled_with_a_note_saying_why(store, sid, tmp_path):
+    other = store.create_session(str(tmp_path), name="other")
+    store.post_pr(sid, URL, "t")
+    store.post_pr(other, URL, "t")
+    assert store.set_pr_states({URL: "gone"}) == 2
+    assert store.set_pr_states({URL: "gone"}) == 0, "once"
+    item = store.item(sid, "claude-wheelhouse#PR108")
+    assert (item["status"], standing(item)) == ("gone", "settled"), "dimmed, in sight, not open"
+    assert [m["body"] for m in store.thread(sid, "claude-wheelhouse#PR108")] == [GONE_NOTE], "the reason, on its thread"
+    assert [m["body"] for m in store.thread(other, "claude-wheelhouse#PR108")] == [GONE_NOTE], "every session's item of it"
+    with pytest.raises(ValueError, match="its status comes from GitHub"):
+        store.update_item(sid, "claude-wheelhouse#PR108", status="open", declares=True)

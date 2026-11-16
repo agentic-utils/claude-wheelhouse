@@ -181,8 +181,18 @@ FEATURES: tuple[Feature, ...] = (
                  "a PR light blue), and resting the pointer on a row, there or in the session list, shows it in full.",
             tip="A ref's colour says its kind. Rest the pointer on a row to read its full title."),
     Feature("pr-items", UNRELEASED, ADVANCED,
-            note="A pull request a session makes shows in the inbox as PR and its number, under the task it was "
-                 "made for, with GitHub's status: merged and closed ones dim."),
+            note="A pull request a session makes shows in the inbox as its repo and PR number (repo#PR12), under the "
+                 "task it was made for, with GitHub's status: merged and closed ones dim. Write one that way and "
+                 "the wheelhouse links it."),
+    Feature("gitlab-merge-requests", UNRELEASED, ADVANCED,
+            note="A GitLab merge request is a PR too, on a host named in GITLAB_HOSTS: found after glab mr create, "
+                 "or posted with its URL, and polled with glab (its pipeline, approval and conflicts the light)."),
+    Feature("pr-gone", UNRELEASED, ADVANCED,
+            note="A PR or merge request its forge says no longer exists shows as gone, dimmed with a note, instead of "
+                 "staying open, and is checked again hourly; Close and Merge say so rather than show a 404."),
+    Feature("gitlab-mr-actions", UNRELEASED, ADVANCED,
+            note="Merge, Close and Mark ready or Make draft act on a GitLab merge request too (through glab): a "
+                 "merge is refused saying what stands in its way, and draft is the title's Draft: prefix."),
     Feature("prs-pane", UNRELEASED, "prs",
             note="The PRs pane lists the open PRs your sessions made, or with M every open PR you authored, each "
                  "with a traffic light for checks, review and conflicts; with a session selected, its PRs alone.",

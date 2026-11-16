@@ -232,7 +232,7 @@ async def test_the_glass_opens_it_and_esc_puts_focus_on_the_inbox(store, sid):
 # #274: ids in Detail's text link to their items
 
 
-REFS = {"T3", "Q252", "PR276", "M2", "P4"}
+REFS = {"T3", "Q252", "PR276", "M2", "P4", "av#PR12", "ci-base#PR1", "a.b_c#PR7", "av#PR108b"}
 
 
 @pytest.mark.parametrize("text, linked, desc", [
@@ -253,10 +253,19 @@ REFS = {"T3", "Q252", "PR276", "M2", "P4"}
     ("T9 and D1", [], "an id the session doesn't have"),
     ("[T3](https://x) T3", ["T3"], "inside a link's text left alone"),
     ("t3", [], "lower case is not an id"),
+    ("see av#PR12 now", ["av#PR12"], "a PR written <repo>#PR<n>"),
+    ("ci-base#PR1, av#PR12.", ["ci-base#PR1", "av#PR12"], "a repo name with a hyphen, before punctuation"),
+    ("(a.b_c#PR7)", ["a.b_c#PR7"], "dots and underscores in a repo's name"),
+    ("av#PR99 and zz#PR12", [], "a PR the session hasn't got, whatever its number"),
+    ("PR12 and #PR12", [], "a bare number names no repo, so no PR"),
+    ("xav#PR12 av#PR12bc av#PR12x", [], "inside a longer word"),
+    ("av#PR108b, av#PR108", ["av#PR108b"], "a PR written with a collision's letter, and not without it"),
+    ("https://x/av#PR12 docs/av#PR12", [], "in a URL or a path"),
+    ("`av#PR12`", [], "inline code"),
 ])
 def test_linked(text, linked, desc):
     out = search.linked(text, "S", frozenset(REFS))
-    assert [m for m in re.findall(r"\(wheelhouse-item:S/(\w+)\)", out)] == linked, f"{desc}: {out!r}"
+    assert re.findall(r"\(wheelhouse-item:S/([^)]+)\)", out) == linked, f"{desc}: {out!r}"
 
 
 def detail_link(app, word: str):

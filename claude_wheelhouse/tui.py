@@ -441,7 +441,7 @@ def ref_text(item, child: bool = False, dim: bool = False) -> Text | str:
 def titled(item, style: str = "") -> Text | str:
     """An inbox row's title: a PR's with its repo's short name before it, dimmed; plain
     text, as ever, for any other with no style."""
-    repo = prs.repo_of(ordering.field(item, "body")) if item["kind"] == "pr" else ""
+    repo = prs.repo_of(ordering.field(item, "body")) if item["kind"] == "pr" and "#" not in item["ref"] else ""
     if not repo:
         return Text(item["title"], style=style) if style else item["title"]
     return Text.assemble(*([(f"{repo} · ", "dim")] if repo else []), (item["title"], style))
@@ -449,7 +449,7 @@ def titled(item, style: str = "") -> Text | str:
 
 def item_tip(item) -> str:
     """An inbox row's hover text: its ref and full title, a PR's with its repo."""
-    repo = prs.repo_of(ordering.field(item, "body")) if item["kind"] == "pr" else ""
+    repo = prs.repo_of(ordering.field(item, "body")) if item["kind"] == "pr" and "#" not in item["ref"] else ""
     return f"{item['ref']}  {repo + ' · ' if repo else ''}{item['title']}"
 
 
@@ -461,7 +461,12 @@ def still_open(item) -> bool:
 
 def open_pr(item) -> bool:
     """Whether a PR item is still open on GitHub (a draft or open): Delete asks first."""
-    return item["kind"] == "pr" and item["status"] in ("draft", "open")
+    return item["kind"] == "pr" and item["status"] in ("draft", "open") and not prs.is_mr(ordering.field(item, "body"))
+
+
+def open_mr(item) -> bool:
+    """Whether a PR item is a merge request still open on GitLab: Delete asks first."""
+    return item["kind"] == "pr" and item["status"] in ("draft", "open") and prs.is_mr(ordering.field(item, "body"))
 
 
 def open_question(item) -> bool:
@@ -495,6 +500,7 @@ def family_prompt(parents: list, family: list, marked: int = 1, pin: bool = Fals
     n, under_way = len(gone), [it for it in gone if standing(it) != "finished"]
     said = [f"{k} {what}" for k, what in ((sum(map(still_open, under_way)), "still open"),
                                           (sum(map(open_pr, under_way)), "still open on GitHub"),
+                                          (sum(map(open_mr, under_way)), "still open on GitLab"),
                                           (sum(map(unread, under_way)), "unread")) if k]
     kids = f"{n} {'child' if n == 1 else 'children'}"
     if marked == 1:
@@ -546,6 +552,8 @@ def share(stored: str | None) -> float | None:
 def pr_body(item) -> str:
     """A PR item's detail: its repo and URL; its live state is the PRs pane's. Shown as pr_text."""
     owner, repo, n = prs.parse(item["body"]) or ("", "", 0)
+    if repo and prs.is_mr(item["body"]):
+        return f"Merge request **{owner}/{repo}!{n}**: [{item['body']}]({item['body']})"
     return f"Pull request **{owner}/{repo}#{n}**: [{item['body']}]({item['body']})" if repo else item["body"]
 
 
@@ -8808,8 +8816,8 @@ class WheelhouseApp(App):
             self.push_screen(Confirm(f"Delete open question {item['ref']} ({item['title']})? Ctrl+Z undoes it."),
                              lambda yes: yes and self.dismiss_now(item, verb))
             return
-        if open_pr(item):   # off the inbox only: say so before it goes
-            self.push_screen(Confirm(f"Delete {item['ref']} ({item['title']})? It stays open on GitHub."),
+        if open_pr(item) or open_mr(item):   # off the inbox only: say so before it goes
+            self.push_screen(Confirm(f"Delete {item['ref']} ({item['title']})? It stays open on {prs.forge(ordering.field(item, 'body'))}."),
                              lambda yes: yes and self.dismiss_now(item, verb))
             return
         self.dismiss_now(item, verb)

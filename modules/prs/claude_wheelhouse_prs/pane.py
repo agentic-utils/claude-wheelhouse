@@ -42,6 +42,7 @@ DIM = "#5a3500"   # an orange light, flashed off
 LOOKS = {"red": "#ff3b30", "orange": "#ff9500", "yellow": "#ffd300", "green": "#00ff9f", "grey": "#8c8c8c"}
 SCOPES = ("mine", "all")
 RUNNER: fetch.Runner = fetch.gh          # gh itself; the tests put a stub here
+GLAB_RUNNER: fetch.Runner = fetch.glab   # glab itself, for GitLab merge requests; the tests put a stub here
 CLOCK = time.time                        # the route's clock; the tests move it on
 SHORT = {"Request review": "Review", "Mark ready": "Ready", "Make draft": "Draft"}   # a caption's shorter form, where a bar is too narrow for its own
 TARGETS = "prs.review_targets"           # settings: Request review's past targets, most recent first, a JSON list
@@ -75,7 +76,8 @@ GREY, HEAD = "#777777", "bold steel_blue1"
 # the daemon side: the route the pane asks
 
 def routes(ctx: api.Context) -> list[api.Route]:
-    fetcher = fetch.Fetcher(ctx, lambda argv: RUNNER(argv), lambda: CLOCK())   # asked once a daemon (served.Served)
+    fetcher = fetch.Fetcher(ctx, lambda argv: RUNNER(argv), lambda: CLOCK(),   # asked once a daemon (served.Served)
+                            lambda argv: GLAB_RUNNER(argv))
 
     def listed(call: api.Call):
         scope = call.query.get("scope", "mine")
@@ -244,7 +246,7 @@ def why_not(action: str, rows: list[dict]) -> str | None:
     if len(rows) == 1:
         return f"Can't merge: {said[0]}" if action == "merge" else said[0]
     return "None of these can " + ("merge" if action == "merge" else "be asked for a review") + ":\n" + "\n".join(
-        f"PR{r['number']}: {why}" for r, why in zip(rows, said))
+        f"{label(r)}: {why}" for r, why in zip(rows, said))
 
 
 def when(stamp: str) -> str:
@@ -958,12 +960,12 @@ class Prs(Vertical):
                 self.ctx.set_setting(TARGETS, json.dumps(remembered(past, target)))
             for r, sid, ref in asking:
                 self.ctx.send(sid, ref, request(r, target))
-            skipped = [f"PR{r['number']} ({why[0].lower()}{why[1:]})" for r in rows if (why := unreviewable(r))]
+            skipped = [f"{label(r)} ({why[0].lower()}{why[1:]})" for r in rows if (why := unreviewable(r))]
             if skipped:
                 self.outcomes["review"] = "Not asked for " + "; ".join(skipped) + "."
                 self.paint_note()
-        what = f"PR{rows[0]['number']} ({clean(rows[0]['title'])})" if len(rows) == 1 \
-            else f"{len(asking)} PRs ({', '.join('PR' + str(r['number']) for r, _, _ in asking)})"
+        what = f"{label(rows[0])} ({clean(rows[0]['title'])})" if len(rows) == 1 \
+            else f"{len(asking)} PRs ({', '.join(label(r) for r, _, _ in asking)})"
         self.ctx.ask(f"Request a review of {what} on Slack, from: a channel or a name, such as #channel or @name",
                      past, then)
 
@@ -1016,7 +1018,7 @@ class Prs(Vertical):
             if self.ctx.show_item(r["item"]["session_id"], r["item"]["ref"]) is False:
                 self.refused(before)
         elif r["item"] is None and self.ctx.unselect is not None:
-            self.ctx.unselect(f"PR{r['number']} in {short(r)} isn't an item: no session made it.")
+            self.ctx.unselect(f"{label(r)} isn't an item: no session made it.")
             self.in_detail = ("url", url)   # after unselect, whose showing(None, None) clears it
             self.paint_detail()
 
@@ -1167,23 +1169,29 @@ def version(r: dict) -> tuple:
     return r["updated"], r["checks"], r["review"], r["mergeable"]
 
 
+def label(r: dict) -> str:
+    """A PR as it is written everywhere in text: its repo's name, #PR and its number (api.repo_of
+    for a row that has no repo of its own)."""
+    return f"{short(r)}#PR{r['number']}"
+
+
 def name(r: dict) -> str:
-    return f"PR{r['number']} ({clean(r['title'])}) in {short(r)}"
+    return f"{label(r)} ({clean(r['title'])})"
 
 
 def said(action: str, r: dict, got: dict) -> str:
     """What an action on a PR came to, as a line under the table."""
-    pr = f"PR{r['number']}"
+    pr = label(r)
     verb = {"merge": f"merge {pr}", "close": f"close {pr}", "ready": f"mark {pr} ready", "draft": f"make {pr} a draft"}[action]
     if "failed" in got:
         return f"Couldn't {verb}: {got['failed']}"
     if "error" in got:
         why = blockers(r) if action == "merge" else []
-        return f"Couldn't {verb}: {'; '.join(why) + '. ' if why else ''}gh says: {got['error']}"
+        return f"Couldn't {verb}: {'; '.join(why) + '. ' if why else ''}{'glab' if api.is_mr(r['url']) else 'gh'} says: {got['error']}"
     if action == "merge":
-        return f"Merged PR{r['number']} ({got.get('method', 'merge')})."
-    return {"close": f"Closed PR{r['number']}.", "ready": f"Marked PR{r['number']} ready for review.",
-            "draft": f"Made PR{r['number']} a draft."}[action]
+        return f"Merged {label(r)} ({got.get('method', 'merge')})."
+    return {"close": f"Closed {label(r)}.", "ready": f"Marked {label(r)} ready for review.",
+            "draft": f"Made {label(r)} a draft."}[action]
 
 
 module = api.Module(

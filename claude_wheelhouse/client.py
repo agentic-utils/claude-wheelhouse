@@ -22,6 +22,7 @@ import threading
 import time
 import uuid
 from typing import Callable, NamedTuple
+from urllib.parse import quote
 
 from . import adopt, api, auth, docroots, features, fingerprint, fork, plan_usage, served, transcript_usage, tutorial
 from .hub import RUNNING, Done, Event, Hub, host_context, requested
@@ -500,13 +501,13 @@ class RemoteClient:
             return self.get("/usage")
         try:
             if kind == "thread":
-                return self.get(f"/items/{key[1]}/{key[2]}/thread")
+                return self.get(f"/items/{key[1]}/{quote(key[2], safe='')}/thread")
             if kind == "conversation":
                 older = self.older_pages.get(key[1])
                 return self.get(f"/sessions/{key[1]}/conversation", {"older": older} if older else None)
             if kind == "doc":
                 have = (self.cache.get(key) or {}).get("stamp")
-                return self.get(f"/items/{key[1]}/{key[2]}/document", {"have": have} if have else None)
+                return self.get(f"/items/{key[1]}/{quote(key[2], safe='')}/document", {"have": have} if have else None)
             if kind == "file":
                 have = (self.cache.get(key) or {}).get("stamp")
                 try:
@@ -515,7 +516,7 @@ class RemoteClient:
                     if e.status == 403:   # outside every doc root: said where the doc would show
                         return {"refused": e.error}
                     raise
-            return self.get(f"/items/{key[1]}/{key[2]}/conversation")
+            return self.get(f"/items/{key[1]}/{quote(key[2], safe='')}/conversation")
         except Refused as e:
             if e.status == 404:   # gone
                 return None
@@ -955,7 +956,7 @@ class RemoteClient:
         return self.done(f"/sessions/{target[0]}/{action}", {"text": text, "ref": target[1]})
 
     def answer_permission(self, sid: str, ref: str, decision: str, message: str = "") -> Done:
-        return self.done(f"/items/{sid}/{ref}/permission", {"decision": decision, "message": message})
+        return self.done(f"/items/{sid}/{quote(ref, safe='')}/permission", {"decision": decision, "message": message})
 
     def unqueue(self, msg_id: int) -> str | None:
         """A queued answer taken back: its text, or None if it went meanwhile. Unreachable
@@ -991,7 +992,7 @@ class RemoteClient:
         return cwd, gone
 
     def run_command(self, sid: str, ref: str, text: str, send: bool, now: bool = False) -> Done:
-        return self.done(f"/items/{sid}/{ref}/run", {"text": text, "send": send, "now": now})
+        return self.done(f"/items/{sid}/{quote(ref, safe='')}/run", {"text": text, "send": send, "now": now})
 
     def mcp(self, sid: str, do: str, server: str = "", url: str | None = None) -> Done:
         return self.done(f"/sessions/{sid}/mcp", {"do": do, "server": server, "url": url})
@@ -1005,22 +1006,22 @@ class RemoteClient:
     def mark_seen(self, sid: str, ref: str) -> bool:
         """Sent from a worker (WheelhouseApp.dwelt), never the UI thread, and what it changed
         fetched there too, for land to show (#268)."""
-        if not (ok := self.quietly(f"/items/{sid}/{ref}/seen", {}, refetch="none")):
+        if not (ok := self.quietly(f"/items/{sid}/{quote(ref, safe='')}/seen", {}, refetch="none")):
             return False
         self.fetch_now()
         return ok
 
     def notes_wait(self, sid: str, ref: str, abort: bool) -> Done:
-        return self.done(f"/items/{sid}/{ref}/notes-wait", {"abort": abort})
+        return self.done(f"/items/{sid}/{quote(ref, safe='')}/notes-wait", {"abort": abort})
 
     def close(self, sid: str, ref: str, closed: bool, status: str | None = None) -> Done:
-        return self.done(f"/items/{sid}/{ref}/close", {"closed": closed} | ({"status": status} if status else {}))
+        return self.done(f"/items/{sid}/{quote(ref, safe='')}/close", {"closed": closed} | ({"status": status} if status else {}))
 
     def delete_family(self, sid: str, ref: str) -> Done:
-        return self.done(f"/items/{sid}/{ref}/delete-family", {})
+        return self.done(f"/items/{sid}/{quote(ref, safe='')}/delete-family", {})
 
     def set_pinned(self, sid: str, ref: str, pinned: bool) -> Done:
-        return self.done(f"/items/{sid}/{ref}/pin", {"pinned": pinned})
+        return self.done(f"/items/{sid}/{quote(ref, safe='')}/pin", {"pinned": pinned})
 
     def all_items(self) -> list[dict]:
         """Every item, parked sessions' too, for the person's order (ordering.py)."""

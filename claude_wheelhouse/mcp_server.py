@@ -48,7 +48,7 @@ def post_item(kind: str, title: str, body: str = "", status: str | None = None, 
               alternative: str = "", reverse: str = "", path: str = "", parent: str = "",
               pinned: bool | None = None, url: str = "") -> str:
     """Create a task, question, agent, decision, doc or pr item in the wheelhouse. kind: task |
-    question | agent | decision | doc | pr. Returns the item's ref (T1, Q1, A1, D1, M1, PR108...). Write
+    question | agent | decision | doc | pr. Returns the item's ref (T1, Q1, A1, D1, M1, repo#PR108...). Write
     the full detail in body, once. A decision (see the protocol) also needs why, one short
     line: the option passed over, the reason, how to undo it. It takes no status. The
     wheelhouse posts agent items for your subagents itself: don't post those. (alternative and
@@ -66,8 +66,11 @@ def post_item(kind: str, title: str, body: str = "", status: str | None = None, 
     A pr is a pull request you made: the wheelhouse finds those made with `gh pr create` (or
     the GitHub MCP server's create_pull_request) itself. Post one you made some other way (the
     web, another tool) with its url, https://github.com/<owner>/<repo>/pull/<n>, and a title;
-    its ref is the PR's number. Post the same url again with parent, the ref of the task it was
-    made for, to file it there. It takes no status: GitHub's is shown."""
+    its ref is its repo's name and the number, repo#PR108. Post the same url again with parent, the ref of the task it was
+    made for, to file it there. It takes no status: GitHub's is shown. A GitLab merge request
+    is a pr too, where the person has named its host: made with `glab mr create` it is found
+    itself, else post its url, https://<host>/<group>/<project>/-/merge_requests/<n>, the same
+    way; its status is GitLab's."""
     if kind == "permission":   # the host posts these from Claude Code's own permission check
         raise ValueError("kind must be task, question, agent, decision, doc or pr")
     if kind == "pr":
@@ -136,6 +139,7 @@ def update_item(ref: str, status: str | None = None, title: str | None = None,
     answered after the person's message on it (the wheelhouse posts what your turn ends by
     saying as the reply). Finishing a task, dropping one or answering a question may also
     list what is still open: correct any of it that's finished."""
+    ref = _store.resolve_ref(_sid, ref)
     _store.update_item(_sid, ref, status=status, title=title, body=body, note=note, declares=True)
     return f"{ref} updated" + (still_open() if status in FINISHING else "")
 
@@ -150,6 +154,7 @@ def reply(ref: str, text: str, status: str | None = None) -> str:
     posts what your turn ends by saying as the reply on the ref the person's message was on: don't repeat
     it here, set the status with update_item instead. A reply that finishes a task or
     answers a question may also list what is still open: correct any of it that's finished."""
+    ref = _store.resolve_ref(_sid, ref)
     _store.reply(_sid, ref, text, status, by_session=True)
     return f"replied on {ref}" + (f", now {status}" if status else "") + (still_open() if status in FINISHING else "")
 
@@ -296,6 +301,7 @@ def get_input(ref: str | None = None, message_id: int | None = None) -> str:
         m = s.message(_sid, message_id)
         return f"[{m['item_ref'] or 'general'}] {redacted(m['body'])}" if m else f"no message {message_id}"
     if ref:
+        ref = s.resolve_ref(_sid, ref)
         item = s.item(_sid, ref)
         if item is None:
             return f"no item {ref}"

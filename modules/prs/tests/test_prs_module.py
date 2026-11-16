@@ -470,7 +470,7 @@ def listed_row(n=1, item=True, **kw):
     ([{"mergeable": "UNKNOWN"}], {}, "merge", False, None, "mergeability unknown: left on"),
     ([{"draft": True}, {}], {}, "merge", False, None, "one of two marked can merge: on, the confirm names the rest"),
     ([{"draft": True}, {"checks": "FAILURE"}], {}, "merge", True,
-     "None of these can merge:\nPR1: it's a draft\nPR2: checks are failing", "none of two can: each PR's reason"),
+     "None of these can merge:\nwheelhouse#PR1: it's a draft\nwheelhouse#PR2: checks are failing", "none of two can: each PR's reason"),
     ([{}], {1: "close"}, "merge", True, "Under way: wait for it to finish", "busy"),
     ([{"review": None}], {}, "review", False, None, "no review yet: Request review on"),
     ([{"draft": True, "review": None}], {}, "review", True, "Still a draft: mark it ready first", "a draft"),
@@ -563,3 +563,82 @@ def test_a_detail_is_only_for_a_listed_pr_and_kept_no_longer_than_needed(tmp_pat
     fetcher.runner = detailed
     fetcher.detail(URL.format(4), False)
     assert set(fetcher.details) == {URL.format(4)}, "one kept past DETAIL_EVERY dropped"
+
+
+# a PR GitHub says is gone leaves the open set; a failure that isn't that never does
+
+def lost(*paths, kind="NOT_FOUND", repo=True):
+    """GitHub's answer when it can't find each alias's PR in a repo it resolved, or (not repo) the repo."""
+    return {"data": {p: {"pullRequest": None} if repo else None for p in paths},
+            "errors": [{"type": kind, "path": [p, "pullRequest"] if repo else [p],
+                        "message": f"Could not resolve to a {'PullRequest' if repo else 'Repository'}"} for p in paths]}
+
+
+@pytest.mark.parametrize("out, expected, desc", [
+    (json.dumps(lost("p0")), ({"p0"}, set()), "an alias's PR not found in its repo"),
+    (json.dumps(lost("p0", "p3")), ({"p0", "p3"}, set()), "two"),
+    (json.dumps(lost("p0", repo=False)), (set(), {"p0"}), "its repo doesn't resolve: unseen, not gone"),
+    (json.dumps({**lost("p0"), "data": {"p0": None}}), (set(), set()), "a PR's error but no repo in the data: neither"),
+    (json.dumps(lost("p0", kind="FORBIDDEN")), (set(), set()), "forbidden is no word on whether it exists"),
+    (json.dumps(lost("p0", kind="RATE_LIMITED")), (set(), set()), "a rate limit isn't either"),
+    (json.dumps({"errors": [{"type": "NOT_FOUND", "message": "no path"}]}), (set(), set()), "no path says which"),
+    (json.dumps({"data": {}}), (set(), set()), "no errors"),
+    ("", (set(), set()), "no answer"),
+    ("not json", (set(), set()), "not JSON"),
+])
+def test_not_found(out, expected, desc):
+    assert fetch.not_found(out) == expected, desc
+
+
+@pytest.mark.parametrize("answer, code, gone, warned, desc", [
+    (lost("p0"), 1, True, False, "GitHub can't find the PR in its repo: gone"),
+    (lost("p0", repo=False), 1, False, True, "its repo doesn't resolve (another login, a lapsed grant): a warning"),
+    (lost("p0", kind="FORBIDDEN"), 1, False, False, "forbidden: still open"),
+    ({"data": {"p0": None}, "errors": [{"type": "INTERNAL", "message": "boom"}]}, 1, False, False, "a server error: still open"),
+    ({"data": {"p0": None}}, 0, False, False, "no error and no PR: unknown, as before"),
+])
+def test_a_pr_github_cannot_find_is_marked_gone(tmp_path, answer, code, gone, warned, desc):
+    data = {**answer["data"], "p1": {"pullRequest": node(2)}, "search": {"nodes": []}}
+    f = Fake(tmp_path, [item(1), item(2)], {**answer, "data": data}, code=code)
+    fetcher = f.fetcher()
+    got = fetcher.answer("mine", True)
+    assert f.states == {URL.format(2): "open", **({URL.format(1): "gone"} if gone else {})}, desc
+    assert [r["number"] for r in got["prs"]] == [2], f"{desc}: it's out of the pane either way, as ever"
+    assert ("PR1" in (got.get("warning") or "")) == warned, f"{desc}: {got.get('warning')}"
+    f.items[0]["status"] = "gone" if gone else "open"
+    f.now += fetch.EVERY
+    fetcher.answer("mine", True)
+    assert ("pullRequest(number: 1)" in f.calls[-1][-1]) != gone, f"{desc}: a gone PR isn't asked about again"
+
+
+def test_a_gone_pr_is_asked_about_again_after_recheck_and_comes_back(tmp_path):
+    still_gone = {**lost("p0"), "data": {"p0": {"pullRequest": None}, "p1": {"pullRequest": node(2)}, "search": {"nodes": []}}}
+    f = Fake(tmp_path, [item(1, status="gone"), item(2)], still_gone, code=1)
+    fetcher = f.fetcher()
+    fetcher.answer("mine", True)
+    assert "pullRequest(number: 1)" in f.calls[-1][-1], "a fetch after a start asks about the gone ones too"
+    f.answer = {"data": {"p0": {"pullRequest": node(2)}, "search": {"nodes": []}}}
+    f.code = 0
+    f.now += fetch.EVERY
+    fetcher.answer("mine", True)
+    assert "pullRequest(number: 1)" not in f.calls[-1][-1], "within RECHECK of the last: not asked again"
+    f.answer = {"data": {"p0": {"pullRequest": node(1, state="MERGED")}, "p1": {"pullRequest": node(2)}, "search": {"nodes": []}}}
+    f.now += fetch.RECHECK
+    fetcher.answer("mine", True)
+    assert "pullRequest(number: 1)" in f.calls[-1][-1], "RECHECK on: asked again"
+    assert f.states[URL.format(1)] == "merged", f"back to its real status: {f.states}"
+
+
+@pytest.mark.parametrize("said, gone, desc", [
+    ("GraphQL: Could not resolve to a PullRequest with the number of 1. (repository.pullRequest)", True, "no such PR"),
+    ("GraphQL: Could not resolve to a Repository with the name 'two-inc/wheelhouse'.", False, "no such repo, or none this login sees"),
+    ("error connecting to api.github.com", False, "a network failure"),
+    ("HTTP 502: Bad Gateway", False, "a 5xx"),
+    ("To get started with GitHub CLI, please run:  gh auth login", False, "not logged in"),
+])
+def test_closing_a_pr_that_is_gone_says_so(tmp_path, said, gone, desc):
+    f = Fake(tmp_path, [item(1)])
+    got = fetch.Fetcher(f.ctx, lambda argv: (1, "", said), lambda: f.now).close(URL.format(1))
+    assert ("no longer exists" in got["error"]) == gone and (f.states == {URL.format(1): "gone"}) == gone, f"{desc}: {got}"
+    if not gone:
+        assert said in got["error"], desc

@@ -266,10 +266,11 @@ def clear_held(store: Store, sid: str, told: list[tuple[str, str]]) -> None:
 
 
 def pr_label(url: str, ref: str) -> str:
-    """How a PR is named to its session: repo#number (ref), or the ref alone."""
+    """How a PR is named to its session: its ref, repo#PR<n>, which names the repo; for an older ref
+    (PR5), repo#number (ref)."""
     from .prs import parse
     got = parse(url)
-    return f"{got[1]}#{got[2]} ({ref})" if got else ref
+    return f"{got[1]}#{got[2]} ({ref})" if got and "#" not in ref else ref
 
 
 def resumed(store: Store, sid: str, away_seconds: float | None, parked: bool,
