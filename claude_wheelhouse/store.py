@@ -665,6 +665,16 @@ def needs_relaunch(session) -> bool:
     return (session["code_version"] or 0) < PROTOCOL_VERSION
 
 
+def mcp_behind(session, code: str, since: str) -> bool:
+    """The session's wheelhouse MCP server started on code other than `code`, the wheelhouse's
+    own (fingerprint.code), no later than `since`, when the wheelhouse started on it (#378): a
+    pull since, which a relaunch picks up. One started after, on other code, isn't: then it's
+    the wheelhouse that's behind (a pull with no restart), and a relaunch would land on that
+    same code again. None recorded (code from before mark_mcp): not known, so needs_relaunch
+    alone says. Only a process that knows the wheelhouse's code can ask (Hub.outdated)."""
+    return session["mcp_code"] is not None and session["mcp_code"] != code and (session["mcp_started_at"] or "") <= since
+
+
 def can_queue(session) -> bool:
     """The session's code holds a queued answer until it is sent. Older code (or none
     stamped) would deliver it at once, so the wheelhouse sends instead."""

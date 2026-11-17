@@ -36,7 +36,7 @@ from .docroots import DOC_CAP
 from .host import (KEEPALIVE_AFTER, KEEPALIVE_TOKENS, MCP_CONNECTOR, MCP_DOS, keepalive_body,
                    waits_on_person)
 from .store import (COMPACT_QUESTION, NOTES_WAIT, Refused, Busy, REQUESTS, wheelhouse_item, COMPACT_TIMEOUT, OP_DOING, PARK_WITHIN, STARTING_WITHIN, HANDOVER_WITHIN, DISMISSABLE, compacting_now, operating, op_overdue, PRS_SINCE, STATUSES, SessionGone, requested_expired, Store, can_queue,
-                    PROTOCOL_VERSION, mcp_servers, mode, needs_relaunch, runner, standing)
+                    PROTOCOL_VERSION, mcp_behind, mcp_servers, mode, needs_relaunch, now as store_now, runner, standing)
 
 RUNNING = ("live", "stalled", "starting")
 RUN_GRACE = liveness.STARTING_GRACE   # seconds a command's tab has to take its run up (sweep_runs, #339)
@@ -370,6 +370,9 @@ class Hub:
         self.seen = None   # each session's (name, parked, alive) at the last refresh (note_quiet)
         self.by_id: dict = {}   # the sessions by id, as the last refresh read them
         self.statuses: dict[str, str] = {}
+        # when this hub started on its code (fingerprint.code): an MCP server started by then on
+        # other code runs older code, one started since on other code newer (outdated, #378)
+        self.since = store_now()
         # sessions whose host Relaunch has stopped: started again once it has gone. Each has
         # a monotonic deadline and the stopped host, (pid, start time). Kept in the store too
         # (relaunch_under_way), so a hub started again carries on those an earlier one began
@@ -601,9 +604,15 @@ class Hub:
         """It can't receive (D30): Send, Ctrl+S and Send all leave its queue alone (#62)."""
         return self.statuses.get(sid) == "dead"
 
+    def outdated(self, s) -> bool:
+        """The session runs older wheelhouse code (#378): an older protocol (needs_relaunch), or
+        an MCP server started on code before this hub's (mcp_behind). What ⟳, Relaunch all and
+        session info all go by."""
+        return needs_relaunch(s) or mcp_behind(s, fingerprint.code(), self.since)
+
     def stale(self, sid: str) -> bool:
         """Running older wheelhouse code: a relaunch picks up the new code."""
-        return self.running(sid) and needs_relaunch(self.listed(sid))
+        return self.running(sid) and self.outdated(self.listed(sid))
 
     def sends_now(self, sid: str) -> bool:
         """Running code from before queued answers, which would deliver one at once: so
@@ -911,23 +920,35 @@ class Hub:
                 self.announce(f"{display_name(s)}'s host didn't stop within {RELAUNCH_WAIT}s, so it wasn't "
                               f"relaunched: see hosts/{sid}.log", "error")
 
+    def behind(self, sid: str) -> bool:
+        """Running, past starting, on older wheelhouse code (stale, #378): Relaunch all stops it
+        and starts it again. One still starting has yet to say which code it runs."""
+        return self.statuses.get(sid) in ("live", "stalled") and self.outdated(self.listed(sid))
+
     def relaunchable(self) -> list[str]:
-        """What Relaunch all brings back: every Available session (not running, not parked)."""
-        return [s["id"] for s in self.sessions if self.state(s["id"]) == "available"]
+        """What Relaunch all brings back: every Available session (not running, not parked),
+        and every running one on older code (behind), so a pull and a restart then Relaunch
+        all land every session on the new code."""
+        return [s["id"] for s in self.sessions if self.state(s["id"]) == "available" or self.behind(s["id"])]
 
     def relaunch_all(self, sids: list[str], may_tab: bool = True) -> Done:
-        """Relaunch each of the sessions the person was shown that is Available still: one that
-        has started or been parked meanwhile is left as it is. For another machine (may_tab
-        false) not in a tab."""
+        """Relaunch each of the sessions the person was shown that is Available still, or
+        running on older code still (behind, read afresh: one relaunched meanwhile is on the
+        new code), stopped and started again as Relaunch does, without compacting first. One
+        that has started, been parked or caught up meanwhile is left as it is. For another
+        machine (may_tab false) not in a tab."""
         done, n = Done(), 0
         for sid in sids:
             try:
-                if self.state(sid) != "available":
+                if self.state(sid) == "available":
+                    one = self.relaunch(sid, may_tab)
+                elif self.behind(sid) and sid not in self.relaunching and self.outdated(s := self.row(sid)):
+                    one = self.stop_host(sid, (s["claude_pid"], s["claude_start"]), may_tab)
+                else:
                     continue
             except SessionGone:
                 continue
-            one = self.relaunch(sid, may_tab)
-            done.notices.extend(e for e in one.notices if e.text != "relaunching")
+            done.notices.extend(e for e in one.notices if not e.text.startswith("relaunching"))
             n += one.ok
         return done.say(f"relaunching {n} session(s)")
 
@@ -1478,7 +1499,8 @@ class Hub:
         runs (the hub's user and machine, which launch it), its directory and branch, model,
         effort and mode, when it started, its transcript and Claude Code's pid, and its
         wheelhouse MCP server: the pid and code it started on (mark_mcp), stale when that
-        isn't this hub's (a pull since, with no relaunch), None when it never said (older code).
+        isn't this hub's and it started before this hub did (mcp_behind: a pull since, with no
+        relaunch), None when it never said (older code).
         And the protocol version it stamped against this store's. SessionGone if it has gone."""
         s = self.row(sid)
         path = transcript.locate(sid)
@@ -1489,7 +1511,7 @@ class Hub:
                 "started": s["launched_at"] or s["created_at"], "transcript": str(path) if path else None,
                 "running": self.running(sid), "claude_pid": s["claude_pid"],
                 "mcp_pid": s["mcp_pid"], "mcp_code": code, "mcp_started": s["mcp_started_at"],
-                "code": fingerprint.code(), "mcp_stale": code is not None and code != fingerprint.code(),
+                "code": fingerprint.code(), "mcp_stale": mcp_behind(s, fingerprint.code(), self.since),
                 "protocol": s["code_version"], "protocol_now": PROTOCOL_VERSION, "relaunch": needs_relaunch(s)}
 
     # items

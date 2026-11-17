@@ -10,7 +10,7 @@ import threading
 import pytest
 
 from claude_wheelhouse import hub, launch, liveness, monitor
-from claude_wheelhouse.store import Store
+from claude_wheelhouse.store import PROTOCOL_VERSION, Store
 from claude_wheelhouse.tui import DocEdit, QuitConfirm, WheelhouseApp
 
 
@@ -202,6 +202,7 @@ async def test_relaunch_all_picks_available_sessions_only(store, sid, tmp_path, 
     active = store.create_session(str(tmp_path), name="active")
     starting = store.create_session(str(tmp_path), name="starting")
     states = {active: "live", starting: "starting"}
+    store.db.execute("UPDATE sessions SET code_version = ? WHERE id IN (?, ?)", (PROTOCOL_VERSION, active, starting))
     monkeypatch.setattr(liveness, "status", lambda s, **kw: states.get(s["id"], "dead"))
     calls = []
     monkeypatch.setattr(launch, "open_tab", lambda s, i: calls.append(i))
@@ -211,7 +212,7 @@ async def test_relaunch_all_picks_available_sessions_only(store, sid, tmp_path, 
         for key in ("alt+shift+l", "alt+y"):   # Relaunch all is in the footer (#62)
             await pilot.press(key)
             await pilot.pause()
-    assert calls == [sid], "Available only: not Parked, Active or starting"
+    assert calls == [sid], "Available only: not Parked, Active on current code (#378) or starting"
 
 
 @pytest.mark.parametrize("steps, expected, desc", [

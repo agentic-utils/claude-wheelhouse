@@ -1,4 +1,4 @@
-<!-- fact sheet stamp: version 274, 2026-11-17T21:07:29Z, source 07d2fbdcd10ac84a (make facts restamps it: AGENTS.md) -->
+<!-- fact sheet stamp: version 271, 2026-11-17T21:42:15Z, source 71d94ae6cce95f7c (make facts restamps it: AGENTS.md) -->
 # Wheelhouse fact sheet
 
 What the helper chat knows before any question. The guide below is written by hand; the
@@ -27,6 +27,8 @@ daemon running.
 - Session info: with a session selected, the ⓘ at the stats pane's top right opens its id
   (C copies it), user, machine, directory, branch, model, mode, start, transcript, and its
   MCP server's pid and code, flagged when it is stale (relaunch the session after a pull).
+  A stale session shows ⟳ in the session list too, and Relaunch all (Alt+Shift+L) restarts it
+  along with the Available ones, so after a pull and a restart it lands every session on the new code.
 - Inbox search: the 🔍 at the inbox's top right, or any plain character typed in the inbox,
   opens a search on ids and titles (the selected session's items, or every session's);
   Show hidden takes in items off the inbox. Enter or a click goes to the item.
@@ -121,7 +123,7 @@ This fact sheet describes claude-wheelhouse 0.2.0.dev0.
 
 - **Alt+A**: Adopt: pick a Claude Code session that isn't in the wheelhouse yet, from those on disk
 
-- **Alt+Shift+L**: Relaunch all: every Available session (not running, not parked)
+- **Alt+Shift+L**: Relaunch all: every Available session (not running, not parked), and every running one on older code (⟳)
 
 - **Alt+Shift+M**: MCP servers: the session in context's, as its host last saw them, each with a button to sign in or reconnect it (a claude.ai connector in every session the wheelhouse hosts); a tab's: /mcp there
 
@@ -431,3 +433,4 @@ The app's command line args (make args). Give them to make run in ARGS, for exam
 - Ctrl+Q asks before quitting, on No, so a slip for Alt+Q quits nothing; Ctrl+Q again quits.
 - A running subagent quiet for 5 minutes (or past its tool call's own timeout) shows quiet, in amber, and its session is told once, naming it and its last action. A session can change the 5 minutes (set_watchdog); a subagent can declare a quiet spell of its own (quiet).
 - A session is told its context size as it passes 200k tokens and every 100k after, once each until it compacts: the cue to compact at its next natural break (in a tab, to suggest /compact to you). Told only during a turn, never waking an idle session, and never for what it was already past when the wheelhouse started.
+- A session whose wheelhouse MCP server started on older code than the wheelhouse's (a pull and a restart since) shows ⟳, needs relaunch, and Relaunch all (Alt+Shift+L) now stops and starts it again too: so a pull, a restart and Relaunch all land every session on the new code.

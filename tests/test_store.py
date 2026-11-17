@@ -315,6 +315,19 @@ def test_needs_relaunch(store, sid, stamp, expected, desc):
     assert needs_relaunch(store.session(sid)) is expected, desc
 
 
+@pytest.mark.parametrize("code, started, expected, desc", [
+    (None, None, False, "no MCP server recorded (older code): not known, needs_relaunch alone says"),
+    ("own", "2026-11-17T09:00:00+00:00", False, "on the wheelhouse's own code"),
+    ("old", "2026-11-17T09:00:00+00:00", True, "other code, started before the wheelhouse: a pull since"),
+    ("old", "2026-11-17T10:00:00+00:00", True, "the same second as the wheelhouse started: counted as before"),
+    ("new", "2026-11-17T11:00:00+00:00", False, "other code, started since: the wheelhouse is behind, no loop"),
+])
+def test_mcp_behind(code, started, expected, desc):
+    """#378: the wheelhouse started at 10:00 on code `own`."""
+    from claude_wheelhouse.store import mcp_behind
+    assert mcp_behind({"mcp_code": code, "mcp_started_at": started}, "own", "2026-11-17T10:00:00+00:00") is expected, desc
+
+
 def test_decision_records_its_fields_and_stays_until_closed(store, sid):
     d = store.post_item(sid, "decision", "cache in SQLite", "Picked for the prototype.", **DECIDED)
     item = store.item(sid, d)

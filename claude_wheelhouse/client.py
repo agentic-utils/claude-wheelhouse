@@ -639,8 +639,9 @@ class RemoteClient:
     def model_state(s) -> dict:
         return s["model_state"]
 
-    def relaunchable(self) -> list[str]:
-        return [s["id"] for s in self.sessions if self.dead(s["id"]) and not s["parked"]]
+    def relaunchable(self) -> list[str]:   # as hub.Hub.relaunchable: Available, or running on older code
+        return [s["id"] for s in self.sessions if (self.dead(s["id"]) and not s["parked"])
+                or (self.stale(s["id"]) and self.statuses.get(s["id"]) in ("live", "stalled"))]
 
     def background(self) -> None:
         pass   # the daemon's hub does its reading

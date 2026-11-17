@@ -428,6 +428,41 @@ def test_the_status_helpers_read_the_listed_row_by_id(hub, store, sid, monkeypat
     assert reads == [], f"{desc}: painted every tick, so from the refresh's rows, not the store"
 
 
+@pytest.mark.parametrize("protocol, mcp, started, status, stale, desc", [
+    ("now", None, None, "live", False, "current protocol, no MCP code recorded: as before #378"),
+    ("old", None, None, "live", True, "an older protocol, no MCP code recorded: as before #378"),
+    ("now", "own", "before", "live", False, "its MCP server on the hub's code"),
+    ("now", "other", "before", "live", True, "on other code from before the hub started: a pull since"),
+    ("now", "other", "after", "live", False, "on other code started since: the hub is behind, so no loop"),
+    ("now", "other", "before", "starting", True, "still starting: flagged, but Relaunch all leaves it"),
+    ("now", "other", "before", "dead", False, "not running: Available, relaunched as ever"),
+])
+def test_stale_session_info_and_relaunch_all_agree(hub, store, sid, monkeypatch, protocol, mcp, started, status,
+                                                   stale, desc):
+    """#378: ⟳ (stale), session info's MCP flag and Relaunch all go by one notion of older code,
+    and Relaunch all stops a running one on it, to be started again on the new code."""
+    from claude_wheelhouse import fingerprint
+    when = {"before": "2000-01-01T00:00:00+00:00", "after": "2999-01-01T00:00:00+00:00"}.get(started)
+    store.db.execute("UPDATE sessions SET code_version = ?, mcp_code = ?, mcp_started_at = ?, claude_pid = 1, "
+                     "claude_start = 1 WHERE id = ?", (PROTOCOL_VERSION if protocol == "now" else 1,
+                     fingerprint.code() if mcp == "own" else mcp, when, sid))
+    monkeypatch.setattr(liveness, "status", lambda s, **kw: status)
+    monkeypatch.setattr(liveness, "is_alive", lambda pid, *a: True)
+    stopped = []
+    monkeypatch.setattr(Hub, "stop_process", staticmethod(lambda s: stopped.append(s["id"]) or True))
+    monkeypatch.setattr(hub, "relaunch", lambda sid, may_tab=True: hub_mod.Done())
+    hub.refresh()
+    assert hub.stale(sid) is stale, desc
+    if mcp:
+        assert hub.session_info(sid)["mcp_stale"] is (mcp == "other" and started == "before"), f"{desc}: session info"
+    behind = stale and status == "live"
+    assert (sid in hub.relaunchable()) is (behind or status == "dead"), f"{desc}: Relaunch all offers it"
+    hub.relaunch_all([sid])
+    assert stopped == ([sid] if behind else []), f"{desc}: Relaunch all stops it to start it again"
+    hub.relaunch_all([sid])
+    assert len(stopped) == behind, f"{desc}: once, not again while its relaunch is under way"
+
+
 # a subagent's own conversation (#69)
 
 AGENT_RECS = [
