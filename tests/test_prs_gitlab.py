@@ -1,5 +1,5 @@
-"""GitLab merge requests as PR items (.plan/gitlab.md): their URLs read and kept canonical on the
-hosts the person named (features.gitlab_hosts), posted or found in transcripts, shown as PRs are.
+"""GitLab merge requests as PR items (.plan/gitlab.md): their URLs read and kept canonical on any
+host, posted or found in transcripts, shown as PRs are.
 The GitHub paths are pinned beside them in tests/test_prs.py, which this leaves as it was."""
 
 import json
@@ -16,37 +16,10 @@ MR = f"https://{HOST}/autonomous-piloting/av/-/merge_requests/12"
 NESTED = f"https://{HOST}/autonomous-piloting/sim/tools/-/merge_requests/7"
 GITHUB = "https://github.com/agentic-utils/claude-wheelhouse/pull/108"
 EPOCH = datetime.fromtimestamp(0, timezone.utc)
+ANYWHERE = MR.replace(HOST, "git.elsewhere.example:8443")   # a host nobody configured
 
 
-@pytest.fixture(autouse=True)
-def hosts(monkeypatch):
-    monkeypatch.setenv("WHEELHOUSE_GITLAB_HOSTS", HOST)
-
-
-# naming the hosts
-
-@pytest.mark.parametrize("env, expected, desc", [
-    (None, set(), "nothing given: none, GitHub alone"),
-    (HOST, {HOST}, "one host"),
-    ("GitLab.Example.com, other.internal:8443", {"gitlab.example.com", "other.internal:8443"}, "case ignored, a port kept"),
-    ("https://a.example.com/ b.example.com", {"a.example.com", "b.example.com"}, "https:// and / allowed, spaces divide"),
-    ("a.example.com,,;bad, b/c", {"a.example.com"}, "what isn't a host name dropped"),
-])
-def test_gitlab_hosts(monkeypatch, env, expected, desc):
-    monkeypatch.delenv("WHEELHOUSE_GITLAB_HOSTS")
-    monkeypatch.setattr(features, "env_files", lambda: [])
-    if env:
-        monkeypatch.setenv("WHEELHOUSE_GITLAB_HOSTS", env)
-    assert features.gitlab_hosts() == expected, desc
-
-
-def test_gitlab_hosts_from_the_env_file(monkeypatch, tmp_path):
-    monkeypatch.delenv("WHEELHOUSE_GITLAB_HOSTS")
-    env = tmp_path / ".env"
-    env.write_text(f"GITLAB_HOSTS={HOST}\n")
-    monkeypatch.setattr(features, "env_files", lambda: [env])
-    assert features.gitlab_hosts() == {HOST}
-
+# the CA
 
 @pytest.mark.parametrize("given, want, desc", [
     (None, None, "not given"),
@@ -74,11 +47,10 @@ def test_gitlab_ca_cert(monkeypatch, tmp_path, capsys, given, want, desc):
     (f"Creating merge request for doug/x into main in autonomous-piloting/av\n\n!12 Pins\n{MR}\n", MR, "glab's output"),
     (f'{{"web_url": "{MR}", "iid": 12}}', MR, "a GitLab MCP server's JSON"),
     (MR.replace(HOST, HOST.upper()), MR, "the host in lower case"),
-    (MR.replace(HOST, "other.internal"), None, "a host the person didn't name"),
+    (ANYWHERE, ANYWHERE, "any host, its port kept"),
     (MR.replace("https", "http"), None, "no TLS, no merge request"),
     (f"https://{HOST}/autonomous-piloting/av/-/issues/12", None, "an issue is no merge request"),
     (f"https://{HOST}/av/-/merge_requests/12", None, "a project has a group"),
-    (f"{MR.replace(HOST, 'other.internal')} then {GITHUB}", GITHUB, "an unnamed host's skipped for the next URL"),
     (f"{GITHUB} then {MR}", GITHUB, "the first of either kind"),
     (f"{MR} then {GITHUB}", MR, "and the first, whichever kind"),
     ("", None, "nothing"),
@@ -87,18 +59,12 @@ def test_canonical(text, expected, desc):
     assert prs.canonical(text) == expected, desc
 
 
-def test_no_hosts_named_means_github_alone(monkeypatch):
-    monkeypatch.delenv("WHEELHOUSE_GITLAB_HOSTS")
-    monkeypatch.setattr(features, "env_files", lambda: [])
-    assert (prs.canonical(MR), prs.canonical(GITHUB)) == (None, GITHUB)
-
-
 @pytest.mark.parametrize("url, parsed, mr, repo, forge, desc", [
     (MR, ("autonomous-piloting", "av", 12), (HOST, "autonomous-piloting/av", 12), "av", "GitLab", "a project"),
     (NESTED, ("autonomous-piloting/sim", "tools", 7), (HOST, "autonomous-piloting/sim/tools", 7), "tools", "GitLab",
      "a subgroup: the namespace keeps it"),
     (MR.replace(HOST, "elsewhere.example"), ("autonomous-piloting", "av", 12), ("elsewhere.example", "autonomous-piloting/av", 12),
-     "av", "GitLab", "any host: a stored URL is read, not vetted"),
+     "av", "GitLab", "another host"),
     (GITHUB, ("agentic-utils", "claude-wheelhouse", 108), None, "claude-wheelhouse", "GitHub", "a pull request as before"),
     (None, None, None, "", "GitHub", "nothing"),
 ])
@@ -124,6 +90,7 @@ def test_post_pr_takes_a_merge_request(store, sid):
     assert (item["kind"], item["status"], item["body"]) == ("pr", "open", MR)
     assert store.post_pr(sid, NESTED, "t") == "tools#PR7"
     assert store.post_pr(sid, MR, "renamed") == "av#PR12" and len(store.pr_items()) == 2, "the same URL, the same item"
+    assert store.post_pr(sid, ANYWHERE, "t") == "av#PR12b", "a host nobody named: taken, a letter for the same name"
 
 
 def test_a_merge_request_and_a_pull_request_of_one_repo_name_and_number_get_a_letter(store, sid):
@@ -132,23 +99,17 @@ def test_a_merge_request_and_a_pull_request_of_one_repo_name_and_number_get_a_le
     assert sorted(r["url"] for r in store.pr_items()) == sorted([GITHUB, MR, github])
 
 
-@pytest.mark.parametrize("url, error, desc", [
-    (MR.replace(HOST, "other.internal"), f"GitLab merge request.* on {HOST}", "a host not named: the message names the ones that are"),
-    (MR + "/diffs", "url must be a GitHub pull request", "not canonical"),
-    ("https://github.com/a/b/issues/3", f"GitLab merge request.* on {HOST}", "an issue"),
+@pytest.mark.parametrize("url, desc", [
+    (MR + "/diffs", "not canonical"),
+    (MR.replace("https", "http"), "no TLS"),
+    ("https://github.com/a/b/issues/3", "an issue"),
 ])
-def test_post_pr_refuses(store, sid, url, error, desc):
-    with pytest.raises(ValueError, match=error):
-        store.post_pr(sid, url, "t")
-
-
-def test_the_refusal_without_hosts_is_githubs_as_ever(store, sid, monkeypatch):
-    monkeypatch.delenv("WHEELHOUSE_GITLAB_HOSTS")
-    monkeypatch.setattr(features, "env_files", lambda: [])
+def test_post_pr_refuses(store, sid, url, desc):
     with pytest.raises(ValueError) as refused:
-        store.post_pr(sid, MR, "t")
-    assert str(refused.value) == ("url must be a GitHub pull request, https://github.com/<owner>/<repo>/pull/<n>, "
-                                  f"not {MR!r}")
+        store.post_pr(sid, url, "t")
+    assert str(refused.value) == ("url must be a GitHub pull request, https://github.com/<owner>/<repo>/pull/<n>, or a "
+                                  "GitLab merge request, https://<host>/<group>/<project>/-/merge_requests/<n>, "
+                                  f"not {url!r}"), desc
 
 
 def test_a_merge_requests_status_is_gitlabs_to_set_through_the_pane(store, sid):
@@ -195,13 +156,15 @@ def write(path, *recs):
                            "input": {"title": "Via MCP"}}),
       rec("user", 8, result("m", json.dumps({"web_url": MR})))],
      [("av#PR12", "Via MCP")], "the GitLab MCP server's tool"),
-    ([rec("assistant", 9, bash("a", "glab mr create --fill")),
-      rec("user", 8, result("a", MR.replace(HOST, "other.internal")))],
-     [], "a host the person didn't name makes nothing"),
+    ([rec("assistant", 9, bash("a", "glab mr create --fill")), rec("user", 8, result("a", ANYWHERE))],
+     [("av#PR12", "MR 12")], "any host"),
     ([rec("assistant", 9, bash("a", "glab mr create --fill")), rec("user", 8, result("a", "error: no commits", True))],
      [], "an error with no URL makes nothing"),
     ([rec("assistant", 9, bash("a", "glab mr view 12")), rec("user", 8, result("a", MR))],
      [], "a URL from another command makes nothing"),
+    ([rec("assistant", 9, bash("a", f"echo {ANYWHERE}")), rec("user", 8, result("a", ANYWHERE)),
+      rec("assistant", 7, {"type": "text", "text": f"See {MR}"})],
+     [], "a URL a session merely mentions makes nothing"),
     ([rec("assistant", 9, bash("a", "gh pr create -t Hub")), rec("user", 8, result("a", GITHUB))],
      [("claude-wheelhouse#PR108", "Hub")], "a pull request is found as before"),
 ])

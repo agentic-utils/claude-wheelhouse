@@ -360,7 +360,7 @@ def mr_login(host: str, runner: Runner) -> None:
     code, out, err = runner(["glab", "api", "--hostname", host, "user"])
     if code != 0:
         failure = mr_failure(host, code, out, err)
-        raise RuntimeError(f"{host}: GitLab answers 404 even for the login: check GITLAB_HOSTS") \
+        raise RuntimeError(f"{host}: GitLab answers 404 even for the login: is it a GitLab host?") \
             if isinstance(failure, Gone) else failure
 
 

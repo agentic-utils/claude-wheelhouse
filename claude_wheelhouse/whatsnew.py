@@ -185,7 +185,7 @@ FEATURES: tuple[Feature, ...] = (
                  "task it was made for, with GitHub's status: merged and closed ones dim. Write one that way and "
                  "the wheelhouse links it."),
     Feature("gitlab-merge-requests", UNRELEASED, ADVANCED,
-            note="A GitLab merge request is a PR too, on a host named in GITLAB_HOSTS: found after glab mr create, "
+            note="A GitLab merge request is a PR too, on any GitLab host: found after glab mr create, "
                  "or posted with its URL, and polled with glab (its pipeline, approval and conflicts the light)."),
     Feature("pr-gone", UNRELEASED, ADVANCED,
             note="A PR or merge request its forge says no longer exists shows as gone, dimmed with a note, instead of "

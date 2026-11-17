@@ -6,10 +6,8 @@
   the session made it). A result with no URL (an error, `--web`) makes nothing.
 - GitLab (.plan/gitlab.md): a merge request is a PR item too, made by `glab mr create` or a
   tool named `*create_merge_request*`, its URL
-  `https://<host>/<group>/.../<project>/-/merge_requests/<n>` on a host of
-  features.gitlab_hosts() (none unless the person names some). A merge request on any other
-  host is no PR: `canonical` (what detection and post_item accept) refuses it; `parse` and
-  the rest only read a URL already stored, so they take any host.
+  `https://<host>/<group>/.../<project>/-/merge_requests/<n>` on any host: its shape alone
+  says it is GitLab's.
 - The title is the call's own (`--title`, or the tool's `title`), else `PR <n>` until the PRs
   pane's first refresh brings GitHub's.
 - A subagent's transcript is read the same way, and its PR filed under the item the
@@ -34,7 +32,6 @@ from pathlib import Path
 from rich.style import Style
 from rich.text import Text
 
-from . import features
 
 # a pull request's URL, as GitHub gives it: owner, repo, number
 PULL = re.compile(r"https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/pull/(\d+)")
@@ -48,12 +45,11 @@ ACTS_BYTES = re.compile(rb"git push|gh pr (?:merge|ready|close)|glab mr (?:merge
 RESULT_ID = re.compile(rb'"tool_use_id":\s*"([^"]+)"')
 
 
-def first(text: str | None, hosts: frozenset[str] | None) -> tuple[str, str, str, int] | None:
+def first(text: str | None) -> tuple[str, str, str, int] | None:
     """The first pull request or merge request URL in text, whichever comes first: ("github",
-    owner, repo, number) or ("gitlab", host, project path, number). A merge request counts when
-    its host (lower case) is in hosts; None for hosts takes any host."""
+    owner, repo, number) or ("gitlab", host in lower case, project path, number)."""
     pull = PULL.search(text or "")
-    merge = next((m for m in MERGE.finditer(text or "") if hosts is None or m[1].lower() in hosts), None)
+    merge = MERGE.search(text or "")
     if merge and not (pull and pull.start() < merge.start()):
         return "gitlab", merge[1].lower(), merge[2], int(merge[3])
     return ("github", pull[1], pull[2], int(pull[3])) if pull else None
@@ -61,9 +57,8 @@ def first(text: str | None, hosts: frozenset[str] | None) -> tuple[str, str, str
 
 def parse(text: str | None) -> tuple[str, str, int] | None:
     """The first pull request URL in text: (owner, repo, number); None if there's none. A merge
-    request's is its namespace (group and subgroups), its project and its number, whatever its
-    host: this reads a URL already stored; canonical says whether one is acceptable."""
-    found = first(text, None)
+    request's is its namespace (group and subgroups), its project and its number."""
+    found = first(text)
     if found is None:
         return None
     if found[0] == "github":
@@ -73,9 +68,9 @@ def parse(text: str | None) -> tuple[str, str, int] | None:
 
 
 def parse_mr(text: str | None) -> tuple[str, str, int] | None:
-    """The first merge request URL in text, on any host: (host, project path, number); None if
-    it holds none (a pull request's is None). Host in lower case."""
-    found = first(text, None)
+    """The first merge request URL in text: (host, project path, number); None if it holds
+    none (a pull request's is None). Host in lower case."""
+    found = first(text)
     return (found[1], found[2], found[3]) if found and found[0] == "gitlab" else None
 
 
@@ -100,10 +95,9 @@ def link(url: str) -> Text:
 
 def canonical(text: str | None) -> str | None:
     """The first pull request URL in text, as `https://github.com/<owner>/<repo>/pull/<n>`, or
-    merge request URL on a host of features.gitlab_hosts(), as
-    `https://<host>/<project path>/-/merge_requests/<n>` (no trailing path, query or
-    fragment); None if there's none."""
-    found = first(text, features.gitlab_hosts())
+    merge request URL, as `https://<host>/<project path>/-/merge_requests/<n>` (no trailing
+    path, query or fragment); None if there's none."""
+    found = first(text)
     if found is None:
         return None
     if found[0] == "github":

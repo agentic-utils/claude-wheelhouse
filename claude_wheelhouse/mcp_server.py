@@ -68,9 +68,9 @@ def post_item(kind: str, title: str, body: str = "", status: str | None = None, 
     web, another tool) with its url, https://github.com/<owner>/<repo>/pull/<n>, and a title;
     its ref is its repo's name and the number, repo#PR108. Post the same url again with parent, the ref of the task it was
     made for, to file it there. It takes no status: GitHub's is shown. A GitLab merge request
-    is a pr too, where the person has named its host: made with `glab mr create` it is found
-    itself, else post its url, https://<host>/<group>/<project>/-/merge_requests/<n>, the same
-    way; its status is GitLab's."""
+    on any GitLab host is a pr too: made with `glab mr create` it is found itself, else post
+    its url, https://<host>/<group>/<project>/-/merge_requests/<n>, the same way; its status
+    is GitLab's."""
     if kind == "permission":   # the host posts these from Claude Code's own permission check
         raise ValueError("kind must be task, question, agent, decision, doc or pr")
     if kind == "pr":

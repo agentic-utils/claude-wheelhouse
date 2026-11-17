@@ -254,7 +254,7 @@ session.
   also what a login without access to the project gets. A failing network, a 5xx or a refused
   login never makes one gone. `Delete` takes one off the inbox, asking first while it's open: it
   stays open on GitHub. A message on a PR goes to its session, as on any item. A GitLab merge
-  request is a PR too, on a host you name (`GITLAB_HOSTS`, below): made with `glab mr create`
+  request is a PR too, on any GitLab host (below): made with `glab mr create`
   (or a GitLab MCP server's `create_merge_request`) it shows by itself, otherwise a session
   posts `post_item(kind="pr", url="https://<host>/<group>/<project>/-/merge_requests/<n>")`.
   Its ref is the project's name, `#PR` and the number (`av#PR12`), and its status is GitLab's.
@@ -426,7 +426,7 @@ session.
   highlights it too if it lists it, and otherwise hides its highlight until you click, press
   `Enter` or move in it again. A PR no session made isn't an item, so picking it leaves
   nothing selected and Detail says why. Without `gh`, or not logged in, the pane says so.
-  A GitLab merge request (a session's, on a host named in `GITLAB_HOSTS`) is fetched with
+  A GitLab merge request (a session's, on any GitLab host) is fetched with
   `glab api`, one call each, by the daemon with `glab`'s own login: its light reads the
   pipeline (red failed, orange running), approval (yellow), conflicts (red) and whether
   GitLab calls it mergeable (green), and Detail shows its description, pipeline and notes.
@@ -1048,7 +1048,6 @@ a key spelt any other way isn't read.
 | `AWAY_HOURS` | `WHEELHOUSE_AWAY_HOURS` | `--away-hours N` | 2 (0 turns the card off) |
 | `AUTOCLEANSE_MINUTES` | `WHEELHOUSE_AUTOCLEANSE_MINUTES` | `--autocleanse-minutes N` | 5 (0 turns autocleanse off) |
 | `SESSION_DIR` | `WHEELHOUSE_SESSION_DIR` | none | the parent of the wheelhouse's clone |
-| `GITLAB_HOSTS` | `WHEELHOUSE_GITLAB_HOSTS` | none | none: GitHub alone |
 | `GITLAB_CA_CERT` | `WHEELHOUSE_GITLAB_CA_CERT` | none | `glab`'s own CA settings |
 
 `SESSION_DIR` is the directory the New session dialog (`Alt+N`) starts in. `~` is allowed, and a
@@ -1062,18 +1061,16 @@ compaction overlay at most 4, whatever the rate, leaving the UI thread to your k
 speed: a lower one draws fewer steps. While the terminal window is unfocused and no
 session is busy, the animation rests, and starts again when you come back or a session
 gets busy. The daemon reads only the settings it uses: `PORT`, `USAGE_MODE`,
-`KEEPALIVE_HOURS`, `GITLAB_HOSTS` and `GITLAB_CA_CERT`.
+`KEEPALIVE_HOURS` and `GITLAB_CA_CERT`.
 
-`GITLAB_HOSTS` names the GitLab hosts whose merge requests count as PRs, separated by commas or
-spaces (`gitlab.example.com`, or `gitlab.example.com:8443`). Nothing is read from GitLab until it
-names one, and a merge request on any other host is no PR (a session's `post_item` refuses it,
-naming the hosts that are). It needs the GitLab CLI, `glab`, logged in to each host
+A GitLab merge request on any host counts as a PR: its URL's shape,
+`https://<host>/<group>/<project>/-/merge_requests/<n>`, says it is GitLab's, so there are no hosts
+to name. Reading one needs the GitLab CLI, `glab`, logged in to its host
 (`glab auth login --hostname <host>`, or `GITLAB_TOKEN` in the daemon's environment): the
 wheelhouse never reads, stores or logs a token, and `glab` finds its own. For a host whose
 certificate an internal CA signed, either `glab config set ca_cert <file> --host <host>`, or
 `GITLAB_CA_CERT=<file>` (a PEM file, given to `glab` alone as `SSL_CERT_FILE`, nothing installed
-system-wide). Set them where the daemon and your sessions both read them: a `.env` file, rather
-than a shell's environment.
+system-wide). Set it where the daemon reads it: a `.env` file, rather than a shell's environment.
 
 ## Where state lives
 

@@ -23,8 +23,7 @@ TOKEN = "glpat-" + "abcdEFGH1234567890xy"   # split, or secret scanners take the
 
 
 @pytest.fixture(autouse=True)
-def hosts(monkeypatch):
-    monkeypatch.setenv("WHEELHOUSE_GITLAB_HOSTS", HOST)
+def no_env_files(monkeypatch):
     monkeypatch.setattr(features, "env_files", lambda: [])
 
 
@@ -356,9 +355,9 @@ def test_the_pane_says_who_refused(tmp_path):
     assert pane.said("merge", {"number": 2, "url": GITHUB.format(2), "repo": "two-inc/wheelhouse"}, {"error": "x"}).endswith("gh says: x")
 
 
-def test_an_action_still_takes_only_a_listed_url(tmp_path):
+def test_an_action_takes_only_a_whole_merge_request_url(tmp_path):
     with pytest.raises(api.Refused):
-        Fake(tmp_path).fetcher().close("https://other.internal/a/b/-/merge_requests/1")
+        Fake(tmp_path).fetcher().close(URL.format(1) + "/diffs")
 
 
 # the detail
