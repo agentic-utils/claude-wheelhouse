@@ -89,6 +89,7 @@ STATE = {"opened": "OPEN", "locked": "OPEN", "merged": "MERGED", "closed": "CLOS
 DRAFT_MARK = re.compile(r"^\s*(?:\[draft\]|\(draft\)|draft:)\s*", re.IGNORECASE)
 TOKENS = re.compile(r"\bgl[a-z]{2,6}-[A-Za-z0-9_.-]{8,}")   # GitLab's token prefixes (glpat-, gldt-, glcbt-...)
 SECRETS = ("GITLAB_TOKEN", "GITLAB_ACCESS_TOKEN", "OAUTH_TOKEN")   # glab's token variables
+TOKEN_HOST = ("GITLAB_HOST", "GITLAB_URI", "GL_HOST")   # glab's default host, the one its token variables are for
 DRAFT_PREFIX = re.compile(r"^\s*(?:\[draft\]|\(draft\)|draft:|\[wip\]|wip:)\s*", re.IGNORECASE)   # as GitLab reads one
 # what stands in a merge request's way, by detailed_merge_status: the words a refused merge says
 BLOCKED = {"draft_status": "it's a draft", "not_approved": "an approval is required",
@@ -302,13 +303,32 @@ def scrub(text: str) -> str:
     return TOKENS.sub("[token]", text)
 
 
-def glab(argv: list[str]) -> tuple[int, str, str]:
-    """The real runner for GitLab: `glab` itself, Unavailable if it isn't installed. Never asked
-    anything (no input, GLAB_NO_PROMPT), and given the CA the person named, for the process alone
-    (SSL_CERT_FILE, which a Go program reads); its token it finds itself."""
+def token_host() -> str:
+    """The host glab's token variables are for: its default host, GITLAB_HOST (else GITLAB_URI,
+    else GL_HOST) as host[:port] in lower case, any scheme and path cut; else gitlab.com."""
+    value = next((v for var in TOKEN_HOST if (v := (os.environ.get(var) or "").strip())), "")
+    return value.split("://", 1)[-1].split("/", 1)[0].lower() or "gitlab.com"
+
+
+def glab_env(argv: list[str]) -> dict[str, str]:
+    """glab's environment for argv: this process's, never asking (GLAB_NO_PROMPT), with the CA the
+    person named (SSL_CERT_FILE, which a Go program reads). The token variables go only to the
+    host they are for (token_host), as `--hostname` names it: a merge request's URL can name any
+    host, and an older glab sends an environment token to whichever it is pointed at."""
     env = {**os.environ, "GLAB_NO_PROMPT": "1"}
+    host = argv[argv.index("--hostname") + 1].lower() if "--hostname" in argv[:-1] else None
+    if host != token_host():
+        for var in SECRETS:
+            env.pop(var, None)
     if ca := api.gitlab_ca_cert():
         env["SSL_CERT_FILE"] = ca
+    return env
+
+
+def glab(argv: list[str]) -> tuple[int, str, str]:
+    """The real runner for GitLab: `glab` itself, Unavailable if it isn't installed, run in
+    glab_env(argv); its token it finds itself."""
+    env = glab_env(argv)
     try:
         done = subprocess.run(argv, capture_output=True, text=True, timeout=TIMEOUT, env=env, stdin=subprocess.DEVNULL)
     except FileNotFoundError:

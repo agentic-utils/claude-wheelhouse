@@ -431,6 +431,7 @@ def test_glab_runs_with_no_input_and_the_given_ca_alone(monkeypatch, tmp_path):
     ca.write_text("pem")
     monkeypatch.setenv("WHEELHOUSE_GITLAB_CA_CERT", str(ca))
     monkeypatch.setenv("GITLAB_TOKEN", TOKEN)
+    monkeypatch.setenv("GITLAB_HOST", f"https://{HOST}")
     seen = fake_run(monkeypatch, subprocess.CompletedProcess([], 0, "{}", ""))
     assert fetch.glab(["glab", "api", "--hostname", HOST, "version"]) == (0, "{}", "")
     env = seen.kw["env"]
@@ -438,6 +439,32 @@ def test_glab_runs_with_no_input_and_the_given_ca_alone(monkeypatch, tmp_path):
     assert seen.kw["stdin"] == subprocess.DEVNULL and seen.kw["timeout"] == fetch.TIMEOUT
     assert TOKEN not in " ".join(seen.argv), "the token is never on the command line"
     assert "SSL_CERT_FILE" not in os.environ, "this process's own environment is left as it was"
+
+
+@pytest.mark.parametrize("env, host, given, desc", [
+    ({}, "gitlab.com", True, "no GITLAB_HOST: gitlab.com's"),
+    ({}, HOST, False, "no GITLAB_HOST: another host gets none"),
+    ({"GITLAB_HOST": HOST}, HOST, True, "GITLAB_HOST's host"),
+    ({"GITLAB_HOST": f"https://{HOST.upper()}/"}, HOST, True, "https://, case and a trailing / cut"),
+    ({"GITLAB_HOST": HOST}, "gitlab.com", False, "GITLAB_HOST set: gitlab.com gets none"),
+    ({"GITLAB_HOST": f"{HOST}:8443"}, f"{HOST}:8443", True, "a port, the same"),
+    ({"GITLAB_HOST": f"{HOST}:8443"}, HOST, False, "a port, the host without it gets none"),
+    ({"GITLAB_URI": f"https://{HOST}"}, HOST, True, "GITLAB_URI when GITLAB_HOST isn't set"),
+    ({"GL_HOST": HOST}, HOST, True, "GL_HOST likewise"),
+    ({"GITLAB_HOST": HOST}, "evil.example", False, "an unrelated host gets none"),
+    ({"GITLAB_HOST": HOST}, None, False, "no --hostname: none"),
+])
+def test_the_token_variables_go_to_their_own_host_alone(monkeypatch, env, host, given, desc):
+    for var in (*fetch.TOKEN_HOST, *fetch.SECRETS):
+        monkeypatch.delenv(var, raising=False)
+    for var in fetch.SECRETS:
+        monkeypatch.setenv(var, TOKEN)
+    for var, value in env.items():
+        monkeypatch.setenv(var, value)
+    argv = ["glab", "api", *(["--hostname", host] if host else []), "user"]
+    got = fetch.glab_env(argv)
+    assert [var in got for var in fetch.SECRETS] == [given] * len(fetch.SECRETS), desc
+    assert got["GLAB_NO_PROMPT"] == "1", desc
 
 
 def test_glab_leaves_its_own_ca_settings_alone_when_none_is_given(monkeypatch):

@@ -136,7 +136,7 @@ DECISION_FIELDS = (("why", "Why"),)
 # show the bare PR<n>, which collides across repos.
 # 32: a GitLab merge request counts on any host, with no hosts list, and the protocol no longer asks
 # that the person name its host: an older MCP server refuses one on a host the person didn't name
-# (post_item), and an older session is told only a named host's count.
+# (post_item), and an older session's protocol still says the host must be named.
 PROTOCOL_VERSION = 32
 # the least time between two compactions a session asks for itself (request_compact), so a
 # confused one can't loop: seconds since its last accepted request

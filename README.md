@@ -1066,8 +1066,9 @@ gets busy. The daemon reads only the settings it uses: `PORT`, `USAGE_MODE`,
 A GitLab merge request on any host counts as a PR: its URL's shape,
 `https://<host>/<group>/<project>/-/merge_requests/<n>`, says it is GitLab's, so there are no hosts
 to name. Reading one needs the GitLab CLI, `glab`, logged in to its host
-(`glab auth login --hostname <host>`, or `GITLAB_TOKEN` in the daemon's environment): the
-wheelhouse never reads, stores or logs a token, and `glab` finds its own. For a host whose
+(`glab auth login --hostname <host>`, or `GITLAB_TOKEN` in the daemon's environment). `GITLAB_TOKEN`
+is given to `glab` only for `GITLAB_HOST`'s host (else gitlab.com); log in to any other host with
+`glab auth login --hostname <host>`. The wheelhouse never reads, stores or logs a token, and `glab` finds its own. For a host whose
 certificate an internal CA signed, either `glab config set ca_cert <file> --host <host>`, or
 `GITLAB_CA_CERT=<file>` (a PEM file, given to `glab` alone as `SSL_CERT_FILE`, nothing installed
 system-wide). Set it where the daemon reads it: a `.env` file, rather than a shell's environment.
