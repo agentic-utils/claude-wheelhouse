@@ -461,8 +461,9 @@ def test_the_token_variables_go_to_their_own_host_alone(monkeypatch, env, host, 
         monkeypatch.setenv(var, TOKEN)
     for var, value in env.items():
         monkeypatch.setenv(var, value)
-    argv = ["glab", "api", *(["--hostname", host] if host else []), "user"]
-    got = fetch.glab_env(argv)
+    seen = fake_run(monkeypatch, subprocess.CompletedProcess([], 0, "{}", ""))
+    fetch.glab(["glab", "api", *(["--hostname", host] if host else []), "user"])
+    got = seen.kw["env"]   # what glab itself is run with, not glab_env alone
     assert [var in got for var in fetch.SECRETS] == [given] * len(fetch.SECRETS), desc
     assert got["GLAB_NO_PROMPT"] == "1", desc
 
