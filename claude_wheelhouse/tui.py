@@ -10045,7 +10045,7 @@ class WheelhouseApp(App):
 
     def action_relaunch_all(self) -> None:
         """Relaunch all: every Available session, and every running one on older code (⟳,
-        #378: stopped and started again, any turn under way lost), once confirmed. Parked and
+        #378: stopped and started again, not compacted first, any turn under way lost), once confirmed. Parked and
         other Active ones are left alone."""
         if self.under_dialog():
             return
@@ -10057,7 +10057,8 @@ class WheelhouseApp(App):
         mid = sum(self.busy(sid) for sid in running)
         what = ", ".join(part for part in (
             f"{len(sids) - len(running)} Available" if len(running) < len(sids) else "",
-            f"{len(running)} running on older code, stopped and started again" if running else "",
+            f"{len(running)} running on older code, stopped and started again without compacting first, "
+            "so each loads its whole context again" if running else "",
             f"{mid} of them mid-turn, losing that turn" if mid else "") if part)
         self.push_screen(Confirm(f"Relaunch {len(sids)} session(s)? {what}."),
                          lambda yes: yes and self.told(self.client.relaunch_all(sids)))

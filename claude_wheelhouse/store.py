@@ -1487,9 +1487,13 @@ class Store:
 
     @staticmethod
     def _register(db, sid, pid, start, boot_id) -> None:
+        """A new process takes the session: a tab's before it execs Claude Code (launch.run), a
+        host's before it starts it (host.Host.run), so always before the new MCP server stamps
+        itself (mark_mcp). The last run's MCP stamp goes, so one that never stamps is judged by
+        its protocol alone, never flagged on the old run's code for good (#378)."""
         db.execute(
             "UPDATE sessions SET claude_pid = ?, claude_start = ?, boot_id = ?, heartbeat_at = ?, "
-            "code_version = ? WHERE id = ?",
+            "code_version = ?, mcp_pid = NULL, mcp_code = NULL, mcp_started_at = NULL WHERE id = ?",
             (pid, start, boot_id, now(), PROTOCOL_VERSION, sid),
         )
         for kind in ("relaunch", "start"):   # the new process: its launch's op has ended (#249)

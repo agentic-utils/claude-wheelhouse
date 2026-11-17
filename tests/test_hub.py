@@ -436,6 +436,7 @@ def test_the_status_helpers_read_the_listed_row_by_id(hub, store, sid, monkeypat
     ("now", "other", "after", "live", False, "on other code started since: the hub is behind, so no loop"),
     ("now", "other", "before", "starting", True, "still starting: flagged, but Relaunch all leaves it"),
     ("now", "other", "before", "dead", False, "not running: Available, relaunched as ever"),
+    ("relaunched", "other", "before", "live", False, "relaunched, its new MCP server never stamped: protocol alone"),
 ])
 def test_stale_session_info_and_relaunch_all_agree(hub, store, sid, monkeypatch, protocol, mcp, started, status,
                                                    stale, desc):
@@ -446,6 +447,8 @@ def test_stale_session_info_and_relaunch_all_agree(hub, store, sid, monkeypatch,
     store.db.execute("UPDATE sessions SET code_version = ?, mcp_code = ?, mcp_started_at = ?, claude_pid = 1, "
                      "claude_start = 1 WHERE id = ?", (PROTOCOL_VERSION if protocol == "now" else 1,
                      fingerprint.code() if mcp == "own" else mcp, when, sid))
+    if protocol == "relaunched":   # a new process takes it: the last run's MCP stamp goes
+        store.register(sid, 1, 1, "boot")
     monkeypatch.setattr(liveness, "status", lambda s, **kw: status)
     monkeypatch.setattr(liveness, "is_alive", lambda pid, *a: True)
     stopped = []
@@ -453,7 +456,7 @@ def test_stale_session_info_and_relaunch_all_agree(hub, store, sid, monkeypatch,
     monkeypatch.setattr(hub, "relaunch", lambda sid, may_tab=True: hub_mod.Done())
     hub.refresh()
     assert hub.stale(sid) is stale, desc
-    if mcp:
+    if protocol != "relaunched" and mcp:
         assert hub.session_info(sid)["mcp_stale"] is (mcp == "other" and started == "before"), f"{desc}: session info"
     behind = stale and status == "live"
     assert (sid in hub.relaunchable()) is (behind or status == "dead"), f"{desc}: Relaunch all offers it"

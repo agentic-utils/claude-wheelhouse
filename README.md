@@ -585,7 +585,8 @@ session.
   session again where it left off; on a running one it stops it (a tab's Claude Code or a
   host) and starts it again, asking first only if it's mid-turn. Relaunch all (`Alt+Shift+L`)
   brings back every Available session, and stops and starts again every running one on older
-  code (`⟳`), saying how many are mid-turn first; so `make stop && git pull && make run` then
+  code (`⟳`), without compacting it first (its whole context loads again), saying how many are
+  mid-turn first; so `make stop && git pull && make run` then
   Relaunch all lands every session on the new code. Selecting an Available session also offers to
   relaunch it. Nothing restarts on its own, and a resumed session is asked to post the
   questions and tasks it already had open. Park on a running session asks it to write its
