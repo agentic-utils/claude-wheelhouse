@@ -475,6 +475,11 @@ def test_stale_session_info_and_relaunch_all_agree(hub, store, sid, monkeypatch,
     (["busy", "press", "compact", "idle", "tick"], [], False, "a compaction took it meanwhile: let go"),
     (["busy", "press", "caught_up", "idle", "tick"], [], False, "on current code meanwhile: let go"),
     (["busy", "press", "ended", "idle", "tick"], [], False, "ended meanwhile: let go"),
+    (["sent", "press", "tick"], [], True, "a tab sent something since its last response, no task item: waits"),
+    (["busy", "press", "tick"], [], True, "a tab stopped for a tool (a permission prompt), no task item: waits"),
+    (["task", "press"], ["press"], False, "idle with a task item stuck running: stopped at once, not held"),
+    (["sdk_busy", "task", "press", "tick"], [], True, "a host whose activity isn't resting: waits"),
+    (["sdk_idle", "task", "press"], ["press"], False, "an idle host with a task item stuck running: stopped at once"),
 ])
 def test_relaunch_all_waits_for_a_mid_turn_sessions_turn(hub, store, sid, monkeypatch, steps, stopped_after, waits,
                                                          desc):
@@ -485,14 +490,24 @@ def test_relaunch_all_waits_for_a_mid_turn_sessions_turn(hub, store, sid, monkey
                      "claude_start = 1 WHERE id = ?", (PROTOCOL_VERSION, "2000-01-01T00:00:00+00:00", sid))
     monkeypatch.setattr(liveness, "status", lambda s, **kw: "live")
     monkeypatch.setattr(liveness, "is_alive", lambda pid, *a: True)
-    turn = [False]
-    monkeypatch.setattr(hub, "busy", lambda s: turn[0])
+    snap = SimpleNamespace(stop="end_turn", last_at=1000.0)   # the transcript as the hub reads it
+    hub.contexts[sid] = SimpleNamespace(ready=True, snap=snap)
     stopped, at = [], []
     monkeypatch.setattr(Hub, "stop_process", staticmethod(lambda s: stopped.append(s["id"]) or True))
     hub.refresh()
     for step in steps:
-        if step == "busy" or step == "idle":
-            turn[0] = step == "busy"
+        if step in ("busy", "idle"):
+            snap.stop = "tool_use" if step == "busy" else "end_turn"
+        elif step == "sent":
+            monkeypatch.setattr(store, "heard_at", lambda sid, notices=True: "2999-01-01T00:00:00+00:00")
+        elif step == "task":
+            store.post_item(sid, "task", "build", status="running")
+            hub.refresh()
+            assert hub.listed(sid)["running"] == 1, f"{desc}: the task item counts as running"
+        elif step.startswith("sdk_"):
+            store.db.execute("UPDATE sessions SET runner = 'sdk', activity = ? WHERE id = ?",
+                             ("waiting on P1" if step == "sdk_busy" else "idle", sid))
+            hub.refresh()
         elif step == "press":
             hub.relaunch_all([sid])
         elif step == "park":

@@ -10056,12 +10056,12 @@ class WheelhouseApp(App):
             self.notify("nothing to relaunch: no session is Available or on older code")
             return
         running = [sid for sid in sids if self.running(sid)]
-        mid = sum(self.busy(sid) for sid in running)
+        # mid-turn is the hub's to judge (Hub.in_turn, from the transcript), as each relaunch comes due
         what = ", ".join(part for part in (
             f"{len(sids) - len(running)} Available" if len(running) < len(sids) else "",
             f"{len(running)} running on older code, stopped and started again without compacting first, "
-            "so each loads its whole context again" if running else "",
-            f"{mid} of them mid-turn, each relaunched as its turn ends" if mid else "") if part)
+            "so each loads its whole context again; one mid-turn waits for its turn to end" if running else "")
+            if part)
         self.push_screen(Confirm(f"Relaunch {len(sids)} session(s)? {what}."),
                          lambda yes: yes and self.told(self.client.relaunch_all(sids)))
 

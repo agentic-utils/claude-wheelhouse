@@ -586,7 +586,8 @@ session.
   host) and starts it again, asking first only if it's mid-turn. Relaunch all (`Alt+Shift+L`)
   brings back every Available session, and stops and starts again every running one on older
   code (`⟳`), without compacting it first (its whole context loads again): an idle one at once,
-  a mid-turn one as soon as its turn ends (a notice says so; one parked, ended or caught up
+  a mid-turn one (read from its transcript, or a hosted one's activity) as soon as its turn
+  ends (a notice says so; one parked, ended or caught up
   meanwhile is left alone, and a wheelhouse restart forgets the wait); so `make stop && git pull && make run` then
   Relaunch all lands every session on the new code. Selecting an Available session also offers to
   relaunch it. Nothing restarts on its own, and a resumed session is asked to post the

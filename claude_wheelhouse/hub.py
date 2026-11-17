@@ -925,9 +925,22 @@ class Hub:
                               f"relaunched: see hosts/{sid}.log", "error")
         self.after_turns()
 
+    def in_turn(self, s) -> bool:
+        """Whether a session is in a turn, for Relaunch all's wait (after_turn, #378), read from the
+        session itself, never from its task items: an SDK host's activity line not resting (a
+        permission it waits on included); a tab's as mid_turn reads it from its transcript, as
+        keep_warm does (its last response stopped for a tool, a permission prompt included, or
+        something sent since), and while its transcript is still being read, held as in one."""
+        if runner(s) == "sdk":
+            return not (s["activity"] or "idle").startswith(RESTING)
+        follower = self.contexts.get(s["id"])
+        if follower is None:
+            return False
+        return not follower.ready or self.mid_turn(s, follower.snap)
+
     def after_turns(self) -> None:
         """Relaunch all's mid-turn sessions (after_turn), each stopped for its relaunch once its
-        turn has ended (busy, as the session list shows it), as Relaunch all stops an idle one.
+        turn has ended (in_turn), as Relaunch all stops an idle one.
         One let go first, untouched: ended or forgotten, parked, no longer running on older
         code (relaunched some other way, or stopped), or taken by an operation (check_busy:
         a compaction, a park). The hub does this by itself, so what happened goes to every listener."""
@@ -941,7 +954,7 @@ class Hub:
             except Refused:
                 del self.after_turn[sid]
                 continue
-            if self.busy(sid):
+            if self.in_turn(s):
                 continue
             done = self.stop_host(sid, (s["claude_pid"], s["claude_start"]), self.after_turn.pop(sid))
             for notice in done.notices:
@@ -964,7 +977,7 @@ class Hub:
         """Relaunch each of the sessions the person was shown that is Available still, or
         running on older code still (behind, read afresh: one relaunched meanwhile is on the
         new code), stopped and started again as Relaunch does, without compacting first: an
-        idle one now, a mid-turn one (busy) once its turn ends (after_turn, once however often
+        idle one now, a mid-turn one (in_turn) once its turn ends (after_turn, once however often
         Relaunch all is pressed). One that has started, been parked or caught up meanwhile is
         left as it is. For another machine (may_tab false) not in a tab."""
         done, n, waits = Done(), 0, 0
@@ -973,7 +986,7 @@ class Hub:
                 if self.state(sid) == "available":
                     one = self.relaunch(sid, may_tab)
                 elif self.behind(sid) and sid not in self.relaunching and self.outdated(s := self.row(sid)):
-                    if self.busy(sid):
+                    if self.in_turn(s):
                         self.after_turn[sid] = may_tab
                         waits += 1
                         continue
