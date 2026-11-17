@@ -373,6 +373,10 @@ class Hub:
         # when this hub started on its code (fingerprint.code): an MCP server started by then on
         # other code runs older code, one started since on other code newer (outdated, #378)
         self.since = store_now()
+        # running sessions on older code that Relaunch all found mid-turn: each relaunched once
+        # its turn ends (after_turns, #378), with whether it may come back in a tab. Kept in memory
+        # only: a hub started again forgets them, and their ⟳ stays for Relaunch all again
+        self.after_turn: dict[str, bool] = {}
         # sessions whose host Relaunch has stopped: started again once it has gone. Each has
         # a monotonic deadline and the stopped host, (pid, start time). Kept in the store too
         # (relaunch_under_way), so a hub started again carries on those an earlier one began
@@ -919,6 +923,31 @@ class Hub:
                 self.relaunch_under_way(sid, None)
                 self.announce(f"{display_name(s)}'s host didn't stop within {RELAUNCH_WAIT}s, so it wasn't "
                               f"relaunched: see hosts/{sid}.log", "error")
+        self.after_turns()
+
+    def after_turns(self) -> None:
+        """Relaunch all's mid-turn sessions (after_turn), each stopped for its relaunch once its
+        turn has ended (busy, as the session list shows it), as Relaunch all stops an idle one.
+        One let go first, untouched: ended or forgotten, parked, no longer running on older
+        code (relaunched some other way, or stopped), or taken by an operation (check_busy:
+        a compaction, a park). The hub does this by itself, so what happened goes to every listener."""
+        for sid in list(self.after_turn):
+            s = self.by_id.get(sid)
+            if s is None or s["parked"] or sid in self.relaunching or not self.behind(sid):
+                del self.after_turn[sid]
+                continue
+            try:
+                self.store.check_busy(sid, "relaunch")
+            except Refused:
+                del self.after_turn[sid]
+                continue
+            if self.busy(sid):
+                continue
+            done = self.stop_host(sid, (s["claude_pid"], s["claude_start"]), self.after_turn.pop(sid))
+            for notice in done.notices:
+                self.emit(notice)
+            if done.ok:
+                self.announce(f"{display_name(s)}'s turn has ended: relaunching it on the new code")
 
     def behind(self, sid: str) -> bool:
         """Running, past starting, on older wheelhouse code (stale, #378): Relaunch all stops it
@@ -934,15 +963,20 @@ class Hub:
     def relaunch_all(self, sids: list[str], may_tab: bool = True) -> Done:
         """Relaunch each of the sessions the person was shown that is Available still, or
         running on older code still (behind, read afresh: one relaunched meanwhile is on the
-        new code), stopped and started again as Relaunch does, without compacting first. One
-        that has started, been parked or caught up meanwhile is left as it is. For another
-        machine (may_tab false) not in a tab."""
-        done, n = Done(), 0
+        new code), stopped and started again as Relaunch does, without compacting first: an
+        idle one now, a mid-turn one (busy) once its turn ends (after_turn, once however often
+        Relaunch all is pressed). One that has started, been parked or caught up meanwhile is
+        left as it is. For another machine (may_tab false) not in a tab."""
+        done, n, waits = Done(), 0, 0
         for sid in sids:
             try:
                 if self.state(sid) == "available":
                     one = self.relaunch(sid, may_tab)
                 elif self.behind(sid) and sid not in self.relaunching and self.outdated(s := self.row(sid)):
+                    if self.busy(sid):
+                        self.after_turn[sid] = may_tab
+                        waits += 1
+                        continue
                     one = self.stop_host(sid, (s["claude_pid"], s["claude_start"]), may_tab)
                 else:
                     continue
@@ -950,7 +984,7 @@ class Hub:
                 continue
             done.notices.extend(e for e in one.notices if not e.text.startswith("relaunching"))
             n += one.ok
-        return done.say(f"relaunching {n} session(s)")
+        return done.say(f"relaunching {n} session(s)" + (f", {waits} more as each turn ends" if waits else ""))
 
     def new_session(self, cwd: str, name: str, ticket: str, brief: str, runner: str, model: str | None = None,
                     effort: str | None = None) -> Done:

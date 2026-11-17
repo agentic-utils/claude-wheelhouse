@@ -1,4 +1,4 @@
-<!-- fact sheet stamp: version 272, 2026-11-17T21:42:20Z, source e95404a154f6b47d (make facts restamps it: AGENTS.md) -->
+<!-- fact sheet stamp: version 273, 2026-11-17T21:42:21Z, source bc1cc1f8d0f71b7d (make facts restamps it: AGENTS.md) -->
 # Wheelhouse fact sheet
 
 What the helper chat knows before any question. The guide below is written by hand; the
@@ -123,7 +123,7 @@ This fact sheet describes claude-wheelhouse 0.2.0.dev0.
 
 - **Alt+A**: Adopt: pick a Claude Code session that isn't in the wheelhouse yet, from those on disk
 
-- **Alt+Shift+L**: Relaunch all: every Available session (not running, not parked), and every running one on older code (⟳)
+- **Alt+Shift+L**: Relaunch all: every Available session (not running, not parked), and every running one on older code (⟳), not compacted first; a mid-turn one as its turn ends
 
 - **Alt+Shift+M**: MCP servers: the session in context's, as its host last saw them, each with a button to sign in or reconnect it (a claude.ai connector in every session the wheelhouse hosts); a tab's: /mcp there
 

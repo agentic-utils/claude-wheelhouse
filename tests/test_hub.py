@@ -466,6 +466,51 @@ def test_stale_session_info_and_relaunch_all_agree(hub, store, sid, monkeypatch,
     assert len(stopped) == behind, f"{desc}: once, not again while its relaunch is under way"
 
 
+@pytest.mark.parametrize("steps, stopped_after, waits, desc", [
+    (["press"], ["press"], False, "idle: stopped at once"),
+    (["busy", "press", "tick"], [], True, "mid-turn: waits, not stopped"),
+    (["busy", "press", "idle", "tick"], ["tick"], False, "mid-turn: stopped once its turn ends"),
+    (["busy", "press", "press", "idle", "tick", "tick"], ["tick"], False, "pressed twice: one wait, one stop"),
+    (["busy", "press", "park", "idle", "tick"], [], False, "parked meanwhile: let go"),
+    (["busy", "press", "compact", "idle", "tick"], [], False, "a compaction took it meanwhile: let go"),
+    (["busy", "press", "caught_up", "idle", "tick"], [], False, "on current code meanwhile: let go"),
+    (["busy", "press", "ended", "idle", "tick"], [], False, "ended meanwhile: let go"),
+])
+def test_relaunch_all_waits_for_a_mid_turn_sessions_turn(hub, store, sid, monkeypatch, steps, stopped_after, waits,
+                                                         desc):
+    """#378, Q295: Relaunch all stops an idle running session on older code at once, and a
+    mid-turn one (busy) once its turn ends, unless it is let go first."""
+    from claude_wheelhouse import fingerprint
+    store.db.execute("UPDATE sessions SET code_version = ?, mcp_code = 'other', mcp_started_at = ?, claude_pid = 1, "
+                     "claude_start = 1 WHERE id = ?", (PROTOCOL_VERSION, "2000-01-01T00:00:00+00:00", sid))
+    monkeypatch.setattr(liveness, "status", lambda s, **kw: "live")
+    monkeypatch.setattr(liveness, "is_alive", lambda pid, *a: True)
+    turn = [False]
+    monkeypatch.setattr(hub, "busy", lambda s: turn[0])
+    stopped, at = [], []
+    monkeypatch.setattr(Hub, "stop_process", staticmethod(lambda s: stopped.append(s["id"]) or True))
+    hub.refresh()
+    for step in steps:
+        if step == "busy" or step == "idle":
+            turn[0] = step == "busy"
+        elif step == "press":
+            hub.relaunch_all([sid])
+        elif step == "park":
+            store.set_parked(sid, True)
+        elif step == "compact":
+            in_cycle(store, sid)
+        elif step == "caught_up":
+            store.mark_mcp(sid, 2, fingerprint.code())
+        elif step == "ended":
+            store.end(sid)
+        elif step == "tick":
+            hub.refresh()
+            hub.finish_relaunches()
+        at.extend([step] * (len(stopped) - len(at)))
+    assert at == stopped_after, f"{desc}: stopped at {at}"
+    assert (sid in hub.after_turn) is waits, f"{desc}: still waiting"
+
+
 # a subagent's own conversation (#69)
 
 AGENT_RECS = [

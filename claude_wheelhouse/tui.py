@@ -4828,7 +4828,8 @@ DESCRIBE = {
              "open again (once; a running child Delete left at the top level stays there). In a text box, its own undo"),
     "new_session": "New session",
     "adopt": "Adopt: pick a Claude Code session that isn't in the wheelhouse yet, from those on disk",
-    "relaunch_all": "Relaunch all: every Available session (not running, not parked), and every running one on older code (⟳)",
+    "relaunch_all": ("Relaunch all: every Available session (not running, not parked), and every running one on "
+                     "older code (⟳), not compacted first; a mid-turn one as its turn ends"),
     "mcp_servers": ("MCP servers: the session in context's, as its host last saw them, each with a button to sign in "
                     "or reconnect it (a claude.ai connector in every session the wheelhouse hosts); a tab's: /mcp there"),
     "clear_filter": ("Hide a compaction's art over the conversation first, then clear a text selection, then the marks, "
@@ -10045,7 +10046,8 @@ class WheelhouseApp(App):
 
     def action_relaunch_all(self) -> None:
         """Relaunch all: every Available session, and every running one on older code (⟳,
-        #378: stopped and started again, not compacted first, any turn under way lost), once confirmed. Parked and
+        #378: stopped and started again, not compacted first, a mid-turn one as its turn ends),
+        once confirmed. Parked and
         other Active ones are left alone."""
         if self.under_dialog():
             return
@@ -10059,7 +10061,7 @@ class WheelhouseApp(App):
             f"{len(sids) - len(running)} Available" if len(running) < len(sids) else "",
             f"{len(running)} running on older code, stopped and started again without compacting first, "
             "so each loads its whole context again" if running else "",
-            f"{mid} of them mid-turn, losing that turn" if mid else "") if part)
+            f"{mid} of them mid-turn, each relaunched as its turn ends" if mid else "") if part)
         self.push_screen(Confirm(f"Relaunch {len(sids)} session(s)? {what}."),
                          lambda yes: yes and self.told(self.client.relaunch_all(sids)))
 
