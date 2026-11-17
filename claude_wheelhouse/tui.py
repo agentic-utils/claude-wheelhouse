@@ -36,6 +36,7 @@ from textual.cache import LRUCache
 from textual.message import Message
 from textual.containers import Grid, Horizontal, Vertical, VerticalScroll
 from textual.coordinate import Coordinate
+from textual.drivers.linux_driver import LinuxDriver
 from textual.errors import NoWidget
 from textual.content import Content
 from textual._context import visible_screen_stack
@@ -5111,6 +5112,19 @@ class KeysHelp(Dialog):
 
 
 
+class AltKeysDriver(LinuxDriver):
+    """Textual's terminal driver, asking for the kitty keyboard protocol's first flag alone (#374).
+    Textual asks for 25 (disambiguate, all keys as escapes, their text), and Windows Terminal 1.25
+    honours it: Alt+S comes as s with its text, which Textual reads as a bare s, so every Alt
+    binding typed the letter. With flag 1 Alt+S comes as alt+s and Ctrl+Enter as ctrl+enter."""
+
+    TEXTUAL_FLAGS = "\x1b[>25u"
+    FLAGS = "\x1b[>1u"
+
+    def write(self, data: str) -> None:
+        super().write(self.FLAGS if data == self.TEXTUAL_FLAGS else data)
+
+
 class WheelhouseApp(App):
     CSS = f"""
     Screen {{ background: #0a0a12; }}
@@ -5297,6 +5311,11 @@ class WheelhouseApp(App):
         Binding("ctrl+q", "quit", "Quit", key_display="Ctrl+Q"),
         *BUTTON_KEYS,
     ]
+
+    def get_driver_class(self):
+        """Textual's own choice, but its terminal driver swapped for one that keeps Alt keys (#374)."""
+        driver = super().get_driver_class()
+        return AltKeysDriver if driver is LinuxDriver else driver
 
     def __init__(self, store: Store | None = None, client=None):
         """client: the daemon's (client.RemoteClient); else a hub of this app's own, in
