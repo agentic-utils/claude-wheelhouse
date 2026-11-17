@@ -76,7 +76,7 @@ def isolated_db(tmp_path, monkeypatch):
     monkeypatch.delenv("WHEELHOUSE_TOKEN", raising=False)
     monkeypatch.delenv("WHEELHOUSE_PORT", raising=False)   # a test that wants one sets it (features.port)
     for setting in ("ENABLE_SDK", "USAGE_MODE", "KEEPALIVE_HOURS", "ANIMATION_FPS", "AUTOCLEANSE_MINUTES",
-                    "GITLAB_HOSTS", "GITLAB_CA_CERT"):   # features.given's
+                    "GITLAB_CA_CERT"):   # features.given's
         monkeypatch.delenv(f"WHEELHOUSE_{setting}", raising=False)
     return path
 

@@ -1,22 +1,20 @@
 # GitLab merge requests as PR items
 
 Status: built. Extends `.plan/pr-pane.md`: a GitLab merge request (MR) is a PR item (kind `pr`),
-found, posted and polled as a GitHub pull request is. With no GitLab host named, nothing changes.
+found, posted and polled as a GitHub pull request is, on any host: its URL's shape says it is GitLab's,
+so there is no list of hosts to keep (#376).
 
 ## Settings
 
-- `GITLAB_HOSTS` (`WHEELHOUSE_GITLAB_HOSTS`, `.env`, no flag): host names (`host` or `host:port`),
-  separated by commas or spaces. Default none. `features.gitlab_hosts()`.
 - `GITLAB_CA_CERT` (`WHEELHOUSE_GITLAB_CA_CERT`, `.env`): a PEM file given to the `glab` process alone
   as `SSL_CERT_FILE`. Unset, glab's own per-host `ca_cert` applies. `features.gitlab_ca_cert()`.
 
 ## URLs
 
 `https://<host>/<group>[/<subgroup>...]/<project>/-/merge_requests/<n>`. `prs.canonical` (what detection
-and `post_item` accept) requires a named host and returns the lower-case-host form with no trailing path,
+and `post_item` accept) takes any host and returns the lower-case-host form with no trailing path,
 query or fragment. Reading a stored URL (`prs.parse`, `parse_mr`, `repo_of`, `link`, `is_mr`, `forge`) is
-structural and takes any host: the body was vetted when stored, and a `--connect` app may not have the
-setting. `parse` keeps its `(owner, repo, number)` shape (owner the namespace).
+structural too. `parse` keeps its `(owner, repo, number)` shape (owner the namespace).
 
 ## Refs
 
@@ -33,8 +31,9 @@ in daemon paths. `search.ITEM_ID` links a PR only as `<repo>#PR<n>`. The PRs pan
 
 `PrWatcher` also takes a Bash `glab mr create` and a tool named `*create_merge_request*`; the result's
 first URL that `canonical` accepts is the MR. Activity cues gain `glab mr merge|close|reopen|update|approve|rebase`.
-`Store.post_pr` accepts either form; its refusal names the GitLab hosts only when some are named.
-`PROTOCOL_VERSION` is not bumped: a session on older code refuses a GitLab URL with a plain message.
+A merge request URL a session merely mentions makes nothing: only a create's result counts.
+`Store.post_pr` accepts either form, and its refusal names both. `PROTOCOL_VERSION` 32 (#376): before it,
+a session's MCP server refused a merge request on a host the person hadn't named in `GITLAB_HOSTS`.
 
 ## Status (PRs module, `fetch.py`)
 

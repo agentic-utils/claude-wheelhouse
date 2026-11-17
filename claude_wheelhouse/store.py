@@ -134,7 +134,10 @@ DECISION_FIELDS = (("why", "Why"),)
 # 31: a PR's ref is repo#PR<n> (av#PR12), not PR<n>, and a protocol rule to write a pull or merge request
 # as <repo>#PR<n> and an issue as <repo>#issue<n>: an older MCP server and an older monitor make and
 # show the bare PR<n>, which collides across repos.
-PROTOCOL_VERSION = 31
+# 32: a GitLab merge request counts on any host, with no hosts list, and the protocol no longer asks
+# that the person name its host: an older MCP server refuses one on a host the person didn't name
+# (post_item), and an older session's protocol still says the host must be named.
+PROTOCOL_VERSION = 32
 # the least time between two compactions a session asks for itself (request_compact), so a
 # confused one can't loop: seconds since its last accepted request
 MODEL_COMPACT_GAP = 30 * 60
@@ -1812,8 +1815,8 @@ class Store:
 
     def post_pr(self, sid: str, url: str, title: str, parent: str | None = None, pinned: bool = False,
                 detected: bool = False) -> str | None:
-        """A pull request the session made: its GitHub URL (or its GitLab merge request's, on a
-        host of features.gitlab_hosts()), kept canonical as the item's body (prs.canonical), and
+        """A pull request the session made: its GitHub URL (or its GitLab merge request's, on
+        any host), kept canonical as the item's body (prs.canonical), and
         its ref the PR's number, PR108 (then PR108b, c... for another
         repo's same number in this session, so refs stay unique). The same URL posted again
         in the session is the same item: its title (and parent, if given) updated, its status
@@ -1823,10 +1826,8 @@ class Store:
         Returns the item's ref, or None for a detected PR passed over."""
         canon = prs.canonical(url)
         if canon is None or canon != url.strip().rstrip("/"):
-            gitlab = sorted(features.gitlab_hosts())
-            more = (f", or a GitLab merge request, https://<host>/<group>/<project>/-/merge_requests/<n>, on {' or '.join(gitlab)}"
-                    if gitlab else "")
-            raise ValueError(f"url must be a GitHub pull request, https://github.com/<owner>/<repo>/pull/<n>{more}, not {url!r}")
+            raise ValueError("url must be a GitHub pull request, https://github.com/<owner>/<repo>/pull/<n>, or a GitLab "
+                             f"merge request, https://<host>/<group>/<project>/-/merge_requests/<n>, not {url!r}")
         with self.tx() as db:
             self._require(db, sid)
             if parent:

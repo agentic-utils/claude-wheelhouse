@@ -57,14 +57,12 @@ wheelhouse's own clone is rarely where a session works. ~ is expanded and a rela
 is taken from the home directory; a directory that
 doesn't exist is said once and the default taken.
 
-Pull requests are GitHub's alone unless gitlab_hosts() names GitLab hosts (WHEELHOUSE_GITLAB_HOSTS,
-else GITLAB_HOSTS= in either .env, no flag): the merge requests on those are found, posted and
-polled through glab as PRs are through gh (prs.py, the PRs module). gitlab_ca_cert() is the
-PEM file of the CA that signed such a host's certificate, if glab's own per-host ca_cert isn't
-set (WHEELHOUSE_GITLAB_CA_CERT, else GITLAB_CA_CERT=): given to the glab process alone."""
+A GitLab merge request, on any host, is found, posted and polled through glab as a pull
+request is through gh (prs.py, the PRs module). gitlab_ca_cert() is the PEM file of the CA
+that signed a GitLab host's certificate, if glab's own per-host ca_cert isn't set
+(WHEELHOUSE_GITLAB_CA_CERT, else GITLAB_CA_CERT=): given to the glab process alone."""
 
 import os
-import re
 import sys
 from pathlib import Path
 
@@ -98,7 +96,6 @@ AUTOCLEANSE_KEY = "AUTOCLEANSE_MINUTES"
 AUTOCLEANSE_MINUTES = 5.0
 _autocleanse_minutes: str | None = None   # set by the command line (set_autocleanse_minutes)
 SESSION_DIR_KEY = "SESSION_DIR"
-GITLAB_HOSTS_KEY = "GITLAB_HOSTS"
 GITLAB_CA_KEY = "GITLAB_CA_CERT"
 # each flag's .env key (its environment variable is WHEELHOUSE_<key>), for cli.args_text
 SETTINGS = {FLAG: KEY, USAGE_FLAG: USAGE_KEY, PORT_FLAG: PORT_KEY, KEEPALIVE_FLAG: KEEPALIVE_KEY,
@@ -347,17 +344,6 @@ def session_dir() -> Path:
         return path
     _say(f"claude-wheelhouse: {where} is {value!r}, not a directory: new sessions start in {default}")
     return default
-
-
-def gitlab_hosts() -> frozenset[str]:
-    """The GitLab hosts whose merge requests count as PRs: WHEELHOUSE_GITLAB_HOSTS, else
-    GITLAB_HOSTS= in the install directory's .env, else the user's, a list of host names
-    (host or host:port), separated by commas or spaces, an https:// before one and a / after
-    it allowed, case ignored. None given: none, and the wheelhouse knows GitHub alone."""
-    if (setting := given(None, "", GITLAB_HOSTS_KEY)) is None:
-        return frozenset()
-    hosts = (h.strip().lower().removeprefix("https://").rstrip("/") for h in re.split(r"[,\s]+", setting[0]))
-    return frozenset(h for h in hosts if re.fullmatch(r"[a-z0-9.-]+(?::\d+)?", h))
 
 
 def gitlab_ca_cert() -> str | None:

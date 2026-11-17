@@ -23,8 +23,7 @@ TOKEN = "glpat-" + "abcdEFGH1234567890xy"   # split, or secret scanners take the
 
 
 @pytest.fixture(autouse=True)
-def hosts(monkeypatch):
-    monkeypatch.setenv("WHEELHOUSE_GITLAB_HOSTS", HOST)
+def no_env_files(monkeypatch):
     monkeypatch.setattr(features, "env_files", lambda: [])
 
 
@@ -356,9 +355,9 @@ def test_the_pane_says_who_refused(tmp_path):
     assert pane.said("merge", {"number": 2, "url": GITHUB.format(2), "repo": "two-inc/wheelhouse"}, {"error": "x"}).endswith("gh says: x")
 
 
-def test_an_action_still_takes_only_a_listed_url(tmp_path):
+def test_an_action_takes_only_a_whole_merge_request_url(tmp_path):
     with pytest.raises(api.Refused):
-        Fake(tmp_path).fetcher().close("https://other.internal/a/b/-/merge_requests/1")
+        Fake(tmp_path).fetcher().close(URL.format(1) + "/diffs")
 
 
 # the detail
@@ -432,6 +431,7 @@ def test_glab_runs_with_no_input_and_the_given_ca_alone(monkeypatch, tmp_path):
     ca.write_text("pem")
     monkeypatch.setenv("WHEELHOUSE_GITLAB_CA_CERT", str(ca))
     monkeypatch.setenv("GITLAB_TOKEN", TOKEN)
+    monkeypatch.setenv("GITLAB_HOST", f"https://{HOST}")
     seen = fake_run(monkeypatch, subprocess.CompletedProcess([], 0, "{}", ""))
     assert fetch.glab(["glab", "api", "--hostname", HOST, "version"]) == (0, "{}", "")
     env = seen.kw["env"]
@@ -439,6 +439,33 @@ def test_glab_runs_with_no_input_and_the_given_ca_alone(monkeypatch, tmp_path):
     assert seen.kw["stdin"] == subprocess.DEVNULL and seen.kw["timeout"] == fetch.TIMEOUT
     assert TOKEN not in " ".join(seen.argv), "the token is never on the command line"
     assert "SSL_CERT_FILE" not in os.environ, "this process's own environment is left as it was"
+
+
+@pytest.mark.parametrize("env, host, given, desc", [
+    ({}, "gitlab.com", True, "no GITLAB_HOST: gitlab.com's"),
+    ({}, HOST, False, "no GITLAB_HOST: another host gets none"),
+    ({"GITLAB_HOST": HOST}, HOST, True, "GITLAB_HOST's host"),
+    ({"GITLAB_HOST": f"https://{HOST.upper()}/"}, HOST, True, "https://, case and a trailing / cut"),
+    ({"GITLAB_HOST": HOST}, "gitlab.com", False, "GITLAB_HOST set: gitlab.com gets none"),
+    ({"GITLAB_HOST": f"{HOST}:8443"}, f"{HOST}:8443", True, "a port, the same"),
+    ({"GITLAB_HOST": f"{HOST}:8443"}, HOST, False, "a port, the host without it gets none"),
+    ({"GITLAB_URI": f"https://{HOST}"}, HOST, True, "GITLAB_URI when GITLAB_HOST isn't set"),
+    ({"GL_HOST": HOST}, HOST, True, "GL_HOST likewise"),
+    ({"GITLAB_HOST": HOST}, "evil.example", False, "an unrelated host gets none"),
+    ({"GITLAB_HOST": HOST}, None, False, "no --hostname: none"),
+])
+def test_the_token_variables_go_to_their_own_host_alone(monkeypatch, env, host, given, desc):
+    for var in (*fetch.TOKEN_HOST, *fetch.SECRETS):
+        monkeypatch.delenv(var, raising=False)
+    for var in fetch.SECRETS:
+        monkeypatch.setenv(var, TOKEN)
+    for var, value in env.items():
+        monkeypatch.setenv(var, value)
+    seen = fake_run(monkeypatch, subprocess.CompletedProcess([], 0, "{}", ""))
+    fetch.glab(["glab", "api", *(["--hostname", host] if host else []), "user"])
+    got = seen.kw["env"]   # what glab itself is run with, not glab_env alone
+    assert [var in got for var in fetch.SECRETS] == [given] * len(fetch.SECRETS), desc
+    assert got["GLAB_NO_PROMPT"] == "1", desc
 
 
 def test_glab_leaves_its_own_ca_settings_alone_when_none_is_given(monkeypatch):

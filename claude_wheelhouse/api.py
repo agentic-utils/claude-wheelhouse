@@ -62,7 +62,7 @@ from .models import EFFORTS, name as model_label  # noqa: F401
 # a pull request's URL read (prs.py), and how the lists colour a kind and show a row's full text
 from .prs import STATES as PR_STATES, canonical as pr_url, link as pr_link, parse as parse_pr, repo_of  # noqa: F401
 from .prs import forge, is_mr, parse_mr  # noqa: F401  (a GitLab merge request's URL, read: .plan/gitlab.md)
-from .features import gitlab_ca_cert, gitlab_hosts  # noqa: F401  (the GitLab hosts and CA the person named)
+from .features import gitlab_ca_cert  # noqa: F401  (the GitLab CA the person named)
 from .rows import KIND_COLOUR, KeepColours, RowTips, faded, marked, plain  # noqa: F401
 from .plan_usage import EVERY as USAGE_EVERY, AccountUsage  # noqa: F401
 from .transcript_usage import (AMBER, BUCKET, CHARTS, DAY, HOT, HOUR, OK, PARTIAL, SERIES,  # noqa: F401

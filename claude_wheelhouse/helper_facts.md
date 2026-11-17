@@ -1,4 +1,4 @@
-<!-- fact sheet stamp: version 269, 2026-11-17T13:02:56Z, source 83ab3e16e8b0a8a0 (make facts restamps it: AGENTS.md) -->
+<!-- fact sheet stamp: version 274, 2026-11-17T21:07:29Z, source 07d2fbdcd10ac84a (make facts restamps it: AGENTS.md) -->
 # Wheelhouse fact sheet
 
 What the helper chat knows before any question. The guide below is written by hand; the
@@ -372,7 +372,7 @@ The app's command line args (make args). Give them to make run in ARGS, for exam
 - A doc has a thread of its own: comment on it below the doc (split) or on a Thread tab (tabbed); Ctrl+L switches the two, Ctrl+PgUp and Ctrl+PgDn the tabs.
 - An inbox item's ref is coloured by its kind (a task green, a question yellow, a decision purple, a PR light blue), and resting the pointer on a row, there or in the session list, shows it in full.
 - A pull request a session makes shows in the inbox as its repo and PR number (repo#PR12), under the task it was made for, with GitHub's status: merged and closed ones dim. Write one that way and the wheelhouse links it.
-- A GitLab merge request is a PR too, on a host named in GITLAB_HOSTS: found after glab mr create, or posted with its URL, and polled with glab (its pipeline, approval and conflicts the light).
+- A GitLab merge request is a PR too, on any GitLab host: found after glab mr create, or posted with its URL, and polled with glab (its pipeline, approval and conflicts the light).
 - A PR or merge request its forge says no longer exists shows as gone, dimmed with a note, instead of staying open, and is checked again hourly; Close and Merge say so rather than show a 404.
 - Merge, Close and Mark ready or Make draft act on a GitLab merge request too (through glab): a merge is refused saying what stands in its way, and draft is the title's Draft: prefix.
 - The PRs pane lists the open PRs your sessions made, or with M every open PR you authored, each with a traffic light for checks, review and conflicts; with a session selected, its PRs alone.
