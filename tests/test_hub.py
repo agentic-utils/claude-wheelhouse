@@ -459,6 +459,7 @@ def test_stale_session_info_and_relaunch_all_agree(hub, store, sid, monkeypatch,
     if protocol != "relaunched" and mcp:
         assert hub.session_info(sid)["mcp_stale"] is (mcp == "other" and started == "before"), f"{desc}: session info"
     behind = stale and status == "live"
+    hub.contexts[sid] = SimpleNamespace(ready=True, snap=SimpleNamespace(stop="end_turn", last_at=1000.0))   # idle
     assert (sid in hub.relaunchable()) is (behind or status == "dead"), f"{desc}: Relaunch all offers it"
     hub.relaunch_all([sid])
     assert stopped == ([sid] if behind else []), f"{desc}: Relaunch all stops it to start it again"
@@ -480,6 +481,10 @@ def test_stale_session_info_and_relaunch_all_agree(hub, store, sid, monkeypatch,
     (["task", "press"], ["press"], False, "idle with a task item stuck running: stopped at once, not held"),
     (["sdk_busy", "task", "press", "tick"], [], True, "a host whose activity isn't resting: waits"),
     (["sdk_idle", "task", "press"], ["press"], False, "an idle host with a task item stuck running: stopped at once"),
+    (["shell", "busy", "press", "tick"], [], True, "a host's session out in a shell tab, mid-turn: waits"),
+    (["shell", "press"], ["press"], False, "a host's session out in a shell tab, idle: stopped at once"),
+    (["unread", "press", "tick"], [], False, "its transcript can't be read: let go, said as a warning"),
+    (["unfollowed", "press", "tick"], [], True, "its transcript not read yet: waits"),
 ])
 def test_relaunch_all_waits_for_a_mid_turn_sessions_turn(hub, store, sid, monkeypatch, steps, stopped_after, waits,
                                                          desc):
@@ -492,7 +497,8 @@ def test_relaunch_all_waits_for_a_mid_turn_sessions_turn(hub, store, sid, monkey
     monkeypatch.setattr(liveness, "is_alive", lambda pid, *a: True)
     snap = SimpleNamespace(stop="end_turn", last_at=1000.0)   # the transcript as the hub reads it
     hub.contexts[sid] = SimpleNamespace(ready=True, snap=snap)
-    stopped, at = [], []
+    stopped, at, said = [], [], []
+    hub.listen(lambda e: said.append(e.text))
     monkeypatch.setattr(Hub, "stop_process", staticmethod(lambda s: stopped.append(s["id"]) or True))
     hub.refresh()
     for step in steps:
@@ -508,6 +514,14 @@ def test_relaunch_all_waits_for_a_mid_turn_sessions_turn(hub, store, sid, monkey
             store.db.execute("UPDATE sessions SET runner = 'sdk', activity = ? WHERE id = ?",
                              ("waiting on P1" if step == "sdk_busy" else "idle", sid))
             hub.refresh()
+        elif step == "shell":   # its activity says only that: the transcript tells its turn
+            store.db.execute("UPDATE sessions SET runner = 'sdk', activity = 'in a shell tab' WHERE id = ?", (sid,))
+            store.set_shell(sid, "tab")
+            hub.refresh()
+        elif step == "unread":
+            hub.contexts[sid] = SimpleNamespace(ready=False, error="couldn't read the transcript", snap=snap)
+        elif step == "unfollowed":
+            del hub.contexts[sid]
         elif step == "press":
             hub.relaunch_all([sid])
         elif step == "park":
@@ -524,6 +538,7 @@ def test_relaunch_all_waits_for_a_mid_turn_sessions_turn(hub, store, sid, monkey
         at.extend([step] * (len(stopped) - len(at)))
     assert at == stopped_after, f"{desc}: stopped at {at}"
     assert (sid in hub.after_turn) is waits, f"{desc}: still waiting"
+    assert any("transcript can't be read" in t for t in said) is ("unread" in steps), f"{desc}: said {said}"
 
 
 # a subagent's own conversation (#69)

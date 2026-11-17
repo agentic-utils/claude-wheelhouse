@@ -925,25 +925,29 @@ class Hub:
                               f"relaunched: see hosts/{sid}.log", "error")
         self.after_turns()
 
-    def in_turn(self, s) -> bool:
+    def in_turn(self, s) -> bool | None:
         """Whether a session is in a turn, for Relaunch all's wait (after_turn, #378), read from the
         session itself, never from its task items: an SDK host's activity line not resting (a
-        permission it waits on included); a tab's as mid_turn reads it from its transcript, as
-        keep_warm does (its last response stopped for a tool, a permission prompt included, or
-        something sent since), and while its transcript is still being read, held as in one."""
-        if runner(s) == "sdk":
+        permission it waits on included); a tab's, a host's session out in a shell tab's too
+        (whose activity just says so), from its transcript as mid_turn reads it
+        (turn_in_transcript). Held as in one until its transcript is first read; None if that
+        read failed (the follower's error), so it can't be told."""
+        if runner(s) == "sdk" and not s["shell"]:
             return not (s["activity"] or "idle").startswith(RESTING)
         follower = self.contexts.get(s["id"])
         if follower is None:
-            return False
-        return not follower.ready or self.mid_turn(s, follower.snap)
+            return True
+        if not follower.ready:
+            return None if follower.error else True
+        return self.turn_in_transcript(s["id"], follower.snap)
 
     def after_turns(self) -> None:
         """Relaunch all's mid-turn sessions (after_turn), each stopped for its relaunch once its
         turn has ended (in_turn), as Relaunch all stops an idle one.
         One let go first, untouched: ended or forgotten, parked, no longer running on older
-        code (relaunched some other way, or stopped), or taken by an operation (check_busy:
-        a compaction, a park). The hub does this by itself, so what happened goes to every listener."""
+        code (relaunched some other way, or stopped), taken by an operation (check_busy:
+        a compaction, a park), or one whose transcript can't be read (said as a warning). The
+        hub does this by itself, so what happened goes to every listener."""
         for sid in list(self.after_turn):
             s = self.by_id.get(sid)
             if s is None or s["parked"] or sid in self.relaunching or not self.behind(sid):
@@ -954,7 +958,13 @@ class Hub:
             except Refused:
                 del self.after_turn[sid]
                 continue
-            if self.in_turn(s):
+            turn = self.in_turn(s)
+            if turn is None:
+                del self.after_turn[sid]
+                self.announce(f"{display_name(s)} wasn't relaunched: its transcript can't be read, so its turn "
+                              "can't be told. Relaunch it by hand", "warning")
+                continue
+            if turn:
                 continue
             done = self.stop_host(sid, (s["claude_pid"], s["claude_start"]), self.after_turn.pop(sid))
             for notice in done.notices:
@@ -986,7 +996,7 @@ class Hub:
                 if self.state(sid) == "available":
                     one = self.relaunch(sid, may_tab)
                 elif self.behind(sid) and sid not in self.relaunching and self.outdated(s := self.row(sid)):
-                    if self.in_turn(s):
+                    if self.in_turn(s) is not False:   # in a turn, or not yet told: after_turns decides
                         self.after_turn[sid] = may_tab
                         waits += 1
                         continue
@@ -1799,7 +1809,12 @@ class Hub:
         of the person's)."""
         if runner(s) == "sdk":
             return working(s)
-        heard = transcript_usage.epoch(self.store.heard_at(s["id"], notices=False) or "") or 0
+        return self.turn_in_transcript(s["id"], snap)
+
+    def turn_in_transcript(self, sid: str, snap) -> bool:
+        """mid_turn's reading of a transcript, whatever runs it: its last response stopped for a
+        tool (a permission prompt included), or something sent since, not a notice."""
+        heard = transcript_usage.epoch(self.store.heard_at(sid, notices=False) or "") or 0
         return snap.stop == "tool_use" or heard > (snap.last_at or 0)
 
     def watch_agents(self) -> None:
