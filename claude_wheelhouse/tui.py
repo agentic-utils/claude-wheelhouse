@@ -4828,7 +4828,8 @@ DESCRIBE = {
              "open again (once; a running child Delete left at the top level stays there). In a text box, its own undo"),
     "new_session": "New session",
     "adopt": "Adopt: pick a Claude Code session that isn't in the wheelhouse yet, from those on disk",
-    "relaunch_all": "Relaunch all: every Available session (not running, not parked)",
+    "relaunch_all": ("Relaunch all: every Available session (not running, not parked), and every running one on "
+                     "older code (⟳), not compacted first; a mid-turn one as its turn ends"),
     "mcp_servers": ("MCP servers: the session in context's, as its host last saw them, each with a button to sign in "
                     "or reconnect it (a claude.ai connector in every session the wheelhouse hosts); a tab's: /mcp there"),
     "clear_filter": ("Hide a compaction's art over the conversation first, then clear a text selection, then the marks, "
@@ -10044,16 +10045,25 @@ class WheelhouseApp(App):
             self.push_screen(McpServers(sid))
 
     def action_relaunch_all(self) -> None:
-        """Relaunch all: every Available session, once confirmed. Parked and Active ones are
-        left alone."""
+        """Relaunch all: every Available session, and every running one on older code (⟳,
+        #378: stopped and started again, not compacted first, a mid-turn one as its turn ends),
+        once confirmed. Parked and
+        other Active ones are left alone."""
         if self.under_dialog():
             return
-        available = self.client.relaunchable()
-        if not available:
-            self.notify("nothing to relaunch: no session is Available")
+        sids = self.client.relaunchable()
+        if not sids:
+            self.notify("nothing to relaunch: no session is Available or on older code")
             return
-        self.push_screen(Confirm(f"Relaunch {len(available)} Available session(s)?"),
-                         lambda yes: yes and self.told(self.client.relaunch_all(available)))
+        running = [sid for sid in sids if self.running(sid)]
+        # mid-turn is the hub's to judge (Hub.in_turn, from the transcript), as each relaunch comes due
+        what = ", ".join(part for part in (
+            f"{len(sids) - len(running)} Available" if len(running) < len(sids) else "",
+            f"{len(running)} running on older code, stopped and started again without compacting first, "
+            "so each loads its whole context again; a mid-turn one waits for its turn to end" if running else "")
+            if part)
+        self.push_screen(Confirm(f"Relaunch {len(sids)} session(s)? {what}."),
+                         lambda yes: yes and self.told(self.client.relaunch_all(sids)))
 
     @on(Button.Pressed, "#park")
     @session_action

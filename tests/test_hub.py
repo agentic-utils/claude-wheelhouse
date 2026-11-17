@@ -428,6 +428,119 @@ def test_the_status_helpers_read_the_listed_row_by_id(hub, store, sid, monkeypat
     assert reads == [], f"{desc}: painted every tick, so from the refresh's rows, not the store"
 
 
+@pytest.mark.parametrize("protocol, mcp, started, status, stale, desc", [
+    ("now", None, None, "live", False, "current protocol, no MCP code recorded: as before #378"),
+    ("old", None, None, "live", True, "an older protocol, no MCP code recorded: as before #378"),
+    ("now", "own", "before", "live", False, "its MCP server on the hub's code"),
+    ("now", "other", "before", "live", True, "on other code from before the hub started: a pull since"),
+    ("now", "other", "after", "live", False, "on other code started since: the hub is behind, so no loop"),
+    ("now", "other", "before", "starting", True, "still starting: flagged, but Relaunch all leaves it"),
+    ("now", "other", "before", "dead", False, "not running: Available, relaunched as ever"),
+    ("relaunched", "other", "before", "live", False, "relaunched, its new MCP server never stamped: protocol alone"),
+])
+def test_stale_session_info_and_relaunch_all_agree(hub, store, sid, monkeypatch, protocol, mcp, started, status,
+                                                   stale, desc):
+    """#378: ⟳ (stale), session info's MCP flag and Relaunch all go by one notion of older code,
+    and Relaunch all stops a running one on it, to be started again on the new code."""
+    from claude_wheelhouse import fingerprint
+    when = {"before": "2000-01-01T00:00:00+00:00", "after": "2999-01-01T00:00:00+00:00"}.get(started)
+    store.db.execute("UPDATE sessions SET code_version = ?, mcp_code = ?, mcp_started_at = ?, claude_pid = 1, "
+                     "claude_start = 1 WHERE id = ?", (PROTOCOL_VERSION if protocol == "now" else 1,
+                     fingerprint.code() if mcp == "own" else mcp, when, sid))
+    if protocol == "relaunched":   # a new process takes it: the last run's MCP stamp goes
+        store.register(sid, 1, 1, "boot")
+    monkeypatch.setattr(liveness, "status", lambda s, **kw: status)
+    monkeypatch.setattr(liveness, "is_alive", lambda pid, *a: True)
+    stopped = []
+    monkeypatch.setattr(Hub, "stop_process", staticmethod(lambda s: stopped.append(s["id"]) or True))
+    monkeypatch.setattr(hub, "relaunch", lambda sid, may_tab=True: hub_mod.Done())
+    hub.refresh()
+    assert hub.stale(sid) is stale, desc
+    if protocol != "relaunched" and mcp:
+        assert hub.session_info(sid)["mcp_stale"] is (mcp == "other" and started == "before"), f"{desc}: session info"
+    behind = stale and status == "live"
+    hub.contexts[sid] = SimpleNamespace(ready=True, snap=SimpleNamespace(stop="end_turn", last_at=1000.0))   # idle
+    assert (sid in hub.relaunchable()) is (behind or status == "dead"), f"{desc}: Relaunch all offers it"
+    hub.relaunch_all([sid])
+    assert stopped == ([sid] if behind else []), f"{desc}: Relaunch all stops it to start it again"
+    hub.relaunch_all([sid])
+    assert len(stopped) == behind, f"{desc}: once, not again while its relaunch is under way"
+
+
+@pytest.mark.parametrize("steps, stopped_after, waits, desc", [
+    (["press"], ["press"], False, "idle: stopped at once"),
+    (["busy", "press", "tick"], [], True, "mid-turn: waits, not stopped"),
+    (["busy", "press", "idle", "tick"], ["tick"], False, "mid-turn: stopped once its turn ends"),
+    (["busy", "press", "press", "idle", "tick", "tick"], ["tick"], False, "pressed twice: one wait, one stop"),
+    (["busy", "press", "park", "idle", "tick"], [], False, "parked meanwhile: let go"),
+    (["busy", "press", "compact", "idle", "tick"], [], False, "a compaction took it meanwhile: let go"),
+    (["busy", "press", "caught_up", "idle", "tick"], [], False, "on current code meanwhile: let go"),
+    (["busy", "press", "ended", "idle", "tick"], [], False, "ended meanwhile: let go"),
+    (["sent", "press", "tick"], [], True, "a tab sent something since its last response, no task item: waits"),
+    (["busy", "press", "tick"], [], True, "a tab stopped for a tool (a permission prompt), no task item: waits"),
+    (["task", "press"], ["press"], False, "idle with a task item stuck running: stopped at once, not held"),
+    (["sdk_busy", "task", "press", "tick"], [], True, "a host whose activity isn't resting: waits"),
+    (["sdk_idle", "task", "press"], ["press"], False, "an idle host with a task item stuck running: stopped at once"),
+    (["shell", "busy", "press", "tick"], [], True, "a host's session out in a shell tab, mid-turn: waits"),
+    (["shell", "press"], ["press"], False, "a host's session out in a shell tab, idle: stopped at once"),
+    (["unread", "press", "tick"], [], False, "its transcript can't be read: let go, said as a warning"),
+    (["unfollowed", "press", "tick"], [], True, "its transcript not read yet: waits"),
+])
+def test_relaunch_all_waits_for_a_mid_turn_sessions_turn(hub, store, sid, monkeypatch, steps, stopped_after, waits,
+                                                         desc):
+    """#378, Q295: Relaunch all stops an idle running session on older code at once, and a
+    mid-turn one (busy) once its turn ends, unless it is let go first."""
+    from claude_wheelhouse import fingerprint
+    store.db.execute("UPDATE sessions SET code_version = ?, mcp_code = 'other', mcp_started_at = ?, claude_pid = 1, "
+                     "claude_start = 1 WHERE id = ?", (PROTOCOL_VERSION, "2000-01-01T00:00:00+00:00", sid))
+    monkeypatch.setattr(liveness, "status", lambda s, **kw: "live")
+    monkeypatch.setattr(liveness, "is_alive", lambda pid, *a: True)
+    snap = SimpleNamespace(stop="end_turn", last_at=1000.0)   # the transcript as the hub reads it
+    hub.contexts[sid] = SimpleNamespace(ready=True, snap=snap)
+    stopped, at, said = [], [], []
+    hub.listen(lambda e: said.append(e.text))
+    monkeypatch.setattr(Hub, "stop_process", staticmethod(lambda s: stopped.append(s["id"]) or True))
+    hub.refresh()
+    for step in steps:
+        if step in ("busy", "idle"):
+            snap.stop = "tool_use" if step == "busy" else "end_turn"
+        elif step == "sent":
+            monkeypatch.setattr(store, "heard_at", lambda sid, notices=True: "2999-01-01T00:00:00+00:00")
+        elif step == "task":
+            store.post_item(sid, "task", "build", status="running")
+            hub.refresh()
+            assert hub.listed(sid)["running"] == 1, f"{desc}: the task item counts as running"
+        elif step.startswith("sdk_"):
+            store.db.execute("UPDATE sessions SET runner = 'sdk', activity = ? WHERE id = ?",
+                             ("waiting on P1" if step == "sdk_busy" else "idle", sid))
+            hub.refresh()
+        elif step == "shell":   # its activity says only that: the transcript tells its turn
+            store.db.execute("UPDATE sessions SET runner = 'sdk', activity = 'in a shell tab' WHERE id = ?", (sid,))
+            store.set_shell(sid, "tab")
+            hub.refresh()
+        elif step == "unread":
+            hub.contexts[sid] = SimpleNamespace(ready=False, error="couldn't read the transcript", snap=snap)
+        elif step == "unfollowed":
+            del hub.contexts[sid]
+        elif step == "press":
+            hub.relaunch_all([sid])
+        elif step == "park":
+            store.set_parked(sid, True)
+        elif step == "compact":
+            in_cycle(store, sid)
+        elif step == "caught_up":
+            store.mark_mcp(sid, 2, fingerprint.code())
+        elif step == "ended":
+            store.end(sid)
+        elif step == "tick":
+            hub.refresh()
+            hub.finish_relaunches()
+        at.extend([step] * (len(stopped) - len(at)))
+    assert at == stopped_after, f"{desc}: stopped at {at}"
+    assert (sid in hub.after_turn) is waits, f"{desc}: still waiting"
+    assert any("transcript can't be read" in t for t in said) is ("unread" in steps), f"{desc}: said {said}"
+
+
 # a subagent's own conversation (#69)
 
 AGENT_RECS = [

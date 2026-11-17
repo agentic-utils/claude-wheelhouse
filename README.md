@@ -191,8 +191,12 @@ session.
   decisions and subagents you answer show `queued` and `processing` the same way.
   Answers reach the session
   as a notification, even when it's idle. A running session started from an older
-  wheelhouse shows "needs relaunch" (`⟳` in the session list): Relaunch gives it the new wheelhouse
-  code (once you've `/exit`ed it in its tab). It still queues answers as usual,
+  wheelhouse shows "needs relaunch" (`⟳` in the session list): one whose protocol is behind, or
+  whose wheelhouse MCP server started on other code before the wheelhouse itself started (a pull
+  and a restart since). One started after the wheelhouse on other code isn't flagged: then it's the
+  wheelhouse that's behind (pulled but not restarted), and relaunching would land on the same code.
+  Relaunch gives it the new wheelhouse code (once you've `/exit`ed it in its tab), and Relaunch all
+  does so for every one of them, waiting for a mid-turn one's turn to end. It still queues answers as usual,
   unless it is old enough to predate queued answers: then it can't hold them, so
   Ctrl+Enter sends to it straight away, whatever its mode, until it's relaunched.
 - **Subagents.** The wheelhouse tracks each session's subagents itself, from the files
@@ -397,7 +401,8 @@ session.
   opens its session info: its id (`C` or Copy id copies it), the user and machine it runs as,
   its directory and branch, model and effort, mode (terminal tab or SDK host), start (UTC),
   transcript, Claude Code's pid, and its wheelhouse MCP server's pid and the code it started on,
-  flagged in yellow when that isn't the wheelhouse's own (a pull since it started: relaunch it),
+  flagged in yellow when that isn't the wheelhouse's own and it started before the wheelhouse did
+  (a pull since it started: relaunch it, as its `⟳` says),
   and the protocol version it runs against the current one.
   A short pane drops the output chart first, then both. With no session selected, every
   session's totals, with no context gauge (each session has its own). The charts' shimmer, and the session list's Cylon eyes, rest while you type in an answer box. The
@@ -579,7 +584,12 @@ session.
   in the wheelhouse at all, which Adopt can bring back. Relaunch starts an Available or Parked
   session again where it left off; on a running one it stops it (a tab's Claude Code or a
   host) and starts it again, asking first only if it's mid-turn. Relaunch all (`Alt+Shift+L`)
-  brings back every Available session, and selecting an Available session also offers to
+  brings back every Available session, and stops and starts again every running one on older
+  code (`⟳`), without compacting it first (its whole context loads again): an idle one at once,
+  a mid-turn one (read from its transcript, or a hosted one's activity) as soon as its turn
+  ends (a notice says so; one parked, ended or caught up
+  meanwhile is left alone, and a wheelhouse restart forgets the wait); so `make stop && git pull && make run` then
+  Relaunch all lands every session on the new code. Selecting an Available session also offers to
   relaunch it. Nothing restarts on its own, and a resumed session is asked to post the
   questions and tasks it already had open. Park on a running session asks it to write its
   handoff notes into its items, then it parks and stops (its tab closes); on one not running

@@ -430,6 +430,10 @@ FEATURES: tuple[Feature, ...] = (
                  "until it compacts: the cue to compact at its next natural break (in a tab, to suggest /compact "
                  "to you). Told only during a turn, never waking an idle session, and never for what it was "
                  "already past when the wheelhouse started."),
+    Feature("relaunch-older-code", UNRELEASED, ADVANCED,
+            note="A session whose wheelhouse MCP server started on older code than the wheelhouse's (a pull and a "
+                 "restart since) shows ⟳, needs relaunch, and Relaunch all (Alt+Shift+L) now stops and starts "
+                 "it again too: so a pull, a restart and Relaunch all land every session on the new code."),
 
 )
 

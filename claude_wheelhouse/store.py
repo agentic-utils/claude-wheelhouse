@@ -665,6 +665,16 @@ def needs_relaunch(session) -> bool:
     return (session["code_version"] or 0) < PROTOCOL_VERSION
 
 
+def mcp_behind(session, code: str, since: str) -> bool:
+    """The session's wheelhouse MCP server started on code other than `code`, the wheelhouse's
+    own (fingerprint.code), no later than `since`, when the wheelhouse started on it (#378): a
+    pull since, which a relaunch picks up. One started after, on other code, isn't: then it's
+    the wheelhouse that's behind (a pull with no restart), and a relaunch would land on that
+    same code again. None recorded (code from before mark_mcp): not known, so needs_relaunch
+    alone says. Only a process that knows the wheelhouse's code can ask (Hub.outdated)."""
+    return session["mcp_code"] is not None and session["mcp_code"] != code and (session["mcp_started_at"] or "") <= since
+
+
 def can_queue(session) -> bool:
     """The session's code holds a queued answer until it is sent. Older code (or none
     stamped) would deliver it at once, so the wheelhouse sends instead."""
@@ -1477,9 +1487,13 @@ class Store:
 
     @staticmethod
     def _register(db, sid, pid, start, boot_id) -> None:
+        """A new process takes the session: a tab's before it execs Claude Code (launch.run), a
+        host's before it starts it (host.Host.run), so always before the new MCP server stamps
+        itself (mark_mcp). The last run's MCP stamp goes, so one that never stamps is judged by
+        its protocol alone, never flagged on the old run's code for good (#378)."""
         db.execute(
             "UPDATE sessions SET claude_pid = ?, claude_start = ?, boot_id = ?, heartbeat_at = ?, "
-            "code_version = ? WHERE id = ?",
+            "code_version = ?, mcp_pid = NULL, mcp_code = NULL, mcp_started_at = NULL WHERE id = ?",
             (pid, start, boot_id, now(), PROTOCOL_VERSION, sid),
         )
         for kind in ("relaunch", "start"):   # the new process: its launch's op has ended (#249)

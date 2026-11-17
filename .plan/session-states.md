@@ -104,7 +104,9 @@ happens and it says so.
 (resume by id, the way new sessions run now) and `set_parked(sid, False)`.
 
 **Relaunch all (Shift+L).** Relaunch on every Available session, as `hub.restorable`
-picks them today. Parked and Active sessions are left alone.
+picks them today. Parked and Active sessions are left alone, but for an Active one on
+older code (`⟳`, `hub.behind`, #378), which is stopped and started again, so a pull, a
+restart and Relaunch all land every session on the new code.
 
 **Adopt.** Today's `adopt.adopt`, offered only for sessions with no row: forgotten or
 never known. The tracked-but-dead entries leave the list, since Relaunch covers them. The
