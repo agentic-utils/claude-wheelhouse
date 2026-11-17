@@ -46,6 +46,7 @@ class App:
 ])
 async def test_kitty_flags_asked_for(monkeypatch, driver, disabled, wanted, desc):
     monkeypatch.setattr(linux_driver.signal, "signal", lambda *args: None)
+    monkeypatch.setattr(linux_driver.termios, "tcsetattr", lambda *args: None)   # a real tty keeps its echo
     monkeypatch.setattr(linux_driver, "WriterThread", Writer)
     monkeypatch.setattr(linux_driver, "Thread", Thread)
     monkeypatch.setattr(constants, "DISABLE_KITTY_KEY", disabled)
