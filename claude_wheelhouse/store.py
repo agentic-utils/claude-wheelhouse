@@ -2581,13 +2581,13 @@ class Store:
         operation is under way: its held drafts sent, as one batch, alone (a queued answer of
         Queued mode's waits for Send as ever). The hub calls it only while the session runs, so
         one that stopped mid-cycle keeps them held until it's back (sweep_held). How many went;
-        0, still held, while it's busy."""
+        0, still held, while it's busy. Sent as new rows (send_last), so a notice written since
+        they were held (a resume, a crash's) is read before them."""
         with self.tx() as db:
             s = db.execute("SELECT * FROM sessions WHERE id = ?", (sid,)).fetchone()
             if s is None or operating(s) is not None:
                 return 0
-            return db.execute("UPDATE messages SET after_cycle = 0, draft = 0 WHERE session_id = ? AND draft = 1 "
-                              "AND after_cycle = 1", (sid,)).rowcount
+            return self.send_last(db, sid, held=True)
 
     def drafts(self, sid: str | None = None) -> list[sqlite3.Row]:
         return self._all("SELECT * FROM messages WHERE draft = 1 AND (? IS NULL OR session_id = ?) ORDER BY id",
@@ -2610,12 +2610,24 @@ class Store:
                               (sid,)).fetchall()
         return len(sent)
 
+    @staticmethod
+    def send_last(db, sid: str, held: bool = False) -> int:
+        """Inside a write: the session's drafts (held: only those held for a compaction's end)
+        sent as new rows, behind every message sent before them, so the wheelhouse's context (a
+        resume or crash notice) is read first and the person's words after, oldest first; each
+        keeps its text, item and time. How many went."""
+        which = "draft = 1" + (" AND after_cycle = 1" if held else "")
+        moved = db.execute("INSERT INTO messages (session_id, item_ref, author, body, created_at, kind) "
+                           "SELECT session_id, item_ref, author, body, created_at, kind FROM messages "
+                           f"WHERE session_id = ? AND {which} ORDER BY id", (sid,)).rowcount
+        db.execute(f"DELETE FROM messages WHERE session_id = ? AND {which}", (sid,))
+        return moved
+
     def dispatch_last(self, sid: str, body: str | None = None, item_ref: str | None = None, waking: bool = False) -> int:
         """Send the session's drafts, and body if given, behind every message sent before them,
         in one transaction: a session woken to send them (Hub.wake_and_send) reads the resume
         notice its launch left first, then the person's words, oldest first, in the one batch
-        the monitor or host claims. The drafts are sent as new rows, so their order follows the
-        notice's; each keeps its text, item and time. Returns how many went. Refused during a
+        the monitor or host claims (send_last). Returns how many went. Refused during a
         operation (Busy), and on a compaction's task item (Refused)."""
         with self.tx() as db:
             self.refuse_wheelhouse_item(db, sid, item_ref)
@@ -2625,10 +2637,7 @@ class Store:
             if not own:
                 self.refuse_busy(db, sid, "send", person=True)
             first = db.execute("SELECT coalesce(max(id), 0) + 1 FROM messages").fetchone()[0]
-            moved = db.execute("INSERT INTO messages (session_id, item_ref, author, body, created_at, kind) "
-                               "SELECT session_id, item_ref, author, body, created_at, kind FROM messages "
-                               "WHERE session_id = ? AND draft = 1 ORDER BY id", (sid,)).rowcount
-            db.execute("DELETE FROM messages WHERE session_id = ? AND draft = 1", (sid,))
+            moved = self.send_last(db, sid)
             if body is not None:
                 self._mark_seen(db, sid, item_ref)
                 db.execute("INSERT INTO messages (session_id, item_ref, author, body, created_at) "

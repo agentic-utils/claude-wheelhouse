@@ -1945,6 +1945,20 @@ def test_a_held_send_waits_out_a_host_that_stops_mid_cycle(hub, store, sid, monk
     assert [e.text for e in events] == ["sent 1 to demo: its compaction is over"], f"{desc}: {[e.text for e in events]}"
 
 
+def test_a_held_send_is_read_after_a_notice_written_since(hub, store, sid, monkeypatch):
+    """#383 review: held drafts go as new rows (send_last), so a notice the wheelhouse wrote after
+    the hold (a resume's, a crash's) is claimed before the person's answer."""
+    host(store, sid)
+    monkeypatch.setattr(liveness, "status", lambda s, **kw: "live")
+    in_cycle(store, sid)
+    hub.refresh()
+    assert hub.submit((sid, None), "use Postgres", now=True).ok
+    store.move_compaction(sid, store.compaction(sid)["id"], "failed", "its host stopped")
+    store.notice(sid, "Your host crashed and was relaunched")
+    hub.refresh()
+    assert [m["body"] for m in store.claim(sid)] == ["Your host crashed and was relaunched", "use Postgres"]
+
+
 def test_the_old_cut_offs_go_on_open_and_at_an_end(db_file, store, sid):
     """#383: the #150 lock's settings rows (RETIRED_CUTOFF), which older code may still write."""
     from claude_wheelhouse.store import RETIRED_CUTOFF
