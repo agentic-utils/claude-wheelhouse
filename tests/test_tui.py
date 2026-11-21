@@ -10030,8 +10030,8 @@ async def test_delete_on_a_pinned_item_goes_at_once_too(store, sid, fail, pinned
 async def test_a_compacting_session_shows_it(store, tmp_path, monkeypatch, size):
     """#150, #383: while its host records a compaction (the question's Compact now, say), Compact
     is off and its eye in the session list is blue, from the press to /compact's end (#244); its
-    items open and read as ever, undimmed, and an answer given one is queued, never sent into the
-    cycle: Send and Send now wait, saying so, the text kept. Once the cycle ends Send sends it."""
+    items open and read as ever, undimmed; an answer given one is queued as ever, and one sent now
+    held, said, never sent into the cycle, and sent as it ends."""
     from claude_wheelhouse import liveness
     from claude_wheelhouse.tui import EYE_BLUE, ItemList, SessionList
     monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
@@ -10081,16 +10081,12 @@ async def test_a_compacting_session_shows_it(store, tmp_path, monkeypatch, size)
         await pilot.pause()
         assert [d["body"] for d in store.drafts(sid)] == ["the second"] and not sent(), f"{size}: queued, not sent"
         notes.clear()
-        for key, typed in (("ctrl+s", ""), ("alt+s", "now, please")):   # either would send into the notes turn
-            app.answer.text = typed
-            app.answer.focus()
-            await pilot.press(key)
-            await pilot.pause()
-            assert not sent() and len(store.drafts(sid)) == 1, f"{size}: {key} waits for the cycle"
-            assert any("busy compacting" in n for n in notes), f"{size}: {key} says why: {notes}"
-            notes.clear()
-        assert app.answer.text == "now, please", f"{size}: Send now's text kept in the box"
-        app.answer.text = ""
+        app.answer.text = "now, please"
+        app.answer.focus()
+        await pilot.press("alt+s")   # Send now: held, never into the notes turn
+        await pilot.pause()
+        assert notes == ["hosted is compacting: sent once it's done"] and app.answer.text == "", f"{size}: held, said"
+        assert not sent() and len(store.drafts(sid)) == 2, f"{size}: neither sent mid-cycle"
 
         store.move_compaction(sid, cid, "compacting")
         store.set_activity(sid, "compacting")
@@ -10098,9 +10094,12 @@ async def test_a_compacting_session_shows_it(store, tmp_path, monkeypatch, size)
         store.set_activity(sid, "idle · compacted")
         await again()
         assert not compact.disabled and sid not in sessions.blue, f"{size}: all back to normal"
+        assert sent() == ["now, please"], f"{size}: the held one goes as the cycle ends"
+        assert [d["body"] for d in store.drafts(sid)] == ["the second"], f"{size}: the queued one waits for Send"
+        app.screen.set_focus(None)
         await pilot.press("ctrl+s")
         await pilot.pause()
-        assert sent() == ["the second"], f"{size}: the queue goes once it's done"
+        assert sorted(sent()) == ["now, please", "the second"], f"{size}: and goes with it"
 
 
 @pytest.mark.anyio

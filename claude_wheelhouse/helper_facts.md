@@ -1,4 +1,4 @@
-<!-- fact sheet stamp: version 278, 2026-11-21T11:43:27Z, source 5534a4e192f9e1f6 (make facts restamps it: AGENTS.md) -->
+<!-- fact sheet stamp: version 279, 2026-11-21T11:43:34Z, source e731995a7d787b75 (make facts restamps it: AGENTS.md) -->
 # Wheelhouse fact sheet
 
 What the helper chat knows before any question. The guide below is written by hand; the
@@ -61,8 +61,9 @@ daemon running.
 - Compaction: in a tab, Claude Code compacting (by itself, or `/compact` typed there) shows as a
   task in the inbox ("Compact <name>: <k>k context", done once compacted) and a plain blue line
   per stage in the conversation ("Compaction: compacting"), and the session's eye is blue
-  meanwhile; what you send it waits until it's done. Its items stay open throughout: read them,
-  and answer them into the queue. Its animated art shows over the middle of
+  meanwhile; what you send it waits until it's done. Its items stay open throughout: read and
+  answer them. A queued answer waits for Send as ever; Send now, Immediate mode or Send itself is
+  held ("<name> is compacting: sent once it's done") and goes the moment the compaction ends. Its animated art shows over the middle of
   the conversation with the crew's latest line; Esc or a click hides it until the next compaction,
   and its last frame stays 8 seconds after the end.
 - Tour: the guided tour, resumed with Alt+T while the title bar shows its badge.

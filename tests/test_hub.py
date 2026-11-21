@@ -1861,8 +1861,6 @@ def in_cycle(store, sid, state="preparing"):
 
 
 @pytest.mark.parametrize("act, desc", [
-    (lambda h, sid: h.submit((sid, None), "hi", now=True), "Alt+S"),
-    (lambda h, sid: h.send_queue(sid), "Ctrl+S"),
     (lambda h, sid: h.host_command(sid, "compact"), "Compact again"),
     (lambda h, sid: h.ask(sid, "park"), "Park"),
     (lambda h, sid: h.ask(sid, "end"), "Stop & Forget, Let it know"),
@@ -1899,7 +1897,8 @@ def test_interrupt_goes_and_just_stop_it_is_refused_during_a_cycle(hub, store, s
     assert hub.host_command(sid, "interrupt").ok
 
 
-def test_send_all_skips_a_compacting_session_and_names_it(hub, store, sid, tmp_path, monkeypatch):
+def test_send_all_holds_a_compacting_sessions_queue_and_names_it(hub, store, sid, tmp_path, monkeypatch):
+    """#383: Send all mid-compaction holds that session's queue, to go once its cycle ends."""
     other = store.create_session(str(tmp_path), name="other")
     monkeypatch.setattr(liveness, "status", lambda s, **kw: "live")
     for s in (sid, other):
@@ -1907,8 +1906,11 @@ def test_send_all_skips_a_compacting_session_and_names_it(hub, store, sid, tmp_p
     in_cycle(store, sid)
     hub.refresh()
     done = hub.send_all()
-    assert done.ok and [m["session_id"] for m in store.drafts()] == [sid]
-    assert any("demo is compacting in its tab" in n.text and n.severity == "warning" for n in done.notices), done.notices
+    assert done.ok and [m["session_id"] for m in store.drafts()] == [sid] and store.held() == {sid}
+    assert "demo is compacting: sent once it's done" in [n.text for n in done.notices], done.notices
+    store.move_compaction(sid, store.compaction(sid)["id"], "completed")
+    hub.refresh()
+    assert not store.drafts() and store.pending(sid), "sent as the cycle ended"
 
 
 def test_an_answer_to_a_waiting_permission_goes_at_once_whatever_the_mode(hub, store, sid):

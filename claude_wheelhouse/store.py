@@ -204,6 +204,8 @@ BUSY_REFUSED = "{name} is busy {doing}: {action} once it's done, or Interrupt to
 # said to the session itself, refusing its own call mid-operation
 SESSION_BUSY = "this session is busy {doing}: call {call} again once that has finished"
 NOT_THE_SESSIONS = "{ref} is the wheelhouse's own record of a compaction: there's no session to send it to"
+# said of a send held until a compaction ends (#383): queued, and sent by the hub once it has
+CYCLE_HELD = "{name} is compacting: sent once it's done"
 # the cycle's task item (#244), the wheelhouse's own: never in what the session is told or lists
 COMPACTION_TASK = '{"from": "compaction"}'
 # the task item's status at each state, and its note there ({origin}, {why}: stage notes)
@@ -524,7 +526,10 @@ ADDED_COLUMNS = [("sessions", "end_requested_at", "TEXT"), ("sessions", "park_re
                  ("sessions", "idle_at", "TEXT"),
                  # a command item's run under way (#339): when it was started (UTC), and its tab's process
                  # as JSON [pid, start time, boot id] (liveness.is_alive) once the tab has taken it up
-                 ("items", "run_at", "TEXT"), ("items", "run_tab", "TEXT")]
+                 ("items", "run_at", "TEXT"), ("items", "run_tab", "TEXT"),
+                 # a draft the person sent mid-compaction (Send now, Immediate, Send): held, and sent by
+                 # the hub once the cycle has ended (send_held, #383)
+                 ("messages", "after_cycle", "INTEGER NOT NULL DEFAULT 0")]
 # older databases may also carry sessions.transcript_title and sessions.renamed_at,
 # from a /rename pickup since dropped, and items.seq (RETIRED_TRIGGER): unused, and left in place
 DECISIONS_CLOSE = "migrated_decisions_close"   # settings: the one-off migration above has run
@@ -2544,17 +2549,42 @@ class Store:
             db.execute("INSERT INTO messages (session_id, author, body, created_at, kind) "
                        "VALUES (?, 'person', ?, ?, 'notice')", (sid, body, now()))
 
-    def queue(self, sid: str, body: str, item_ref: str | None = None) -> None:
+    def queue(self, sid: str, body: str, item_ref: str | None = None, after_cycle: bool = False) -> None:
         """A message from the person, held as a draft until dispatch() sends it. An answer to
         an unseen decision marks it seen, in the same transaction (_mark_seen). Allowed during any
-        operation (Q244): only dispatch waits. It still calls off the quiet mark's cycle (call_off_quiet)."""
+        operation (Q244): only dispatch waits. It still calls off the quiet mark's cycle (call_off_quiet).
+        after_cycle: one the person sent mid-compaction, sent once the cycle ends (send_held, #383)."""
         with self.tx() as db:
             self.refuse_wheelhouse_item(db, sid, item_ref)
             self._require(db, sid)
             self.call_off_quiet(db, db.execute("SELECT * FROM sessions WHERE id = ?", (sid,)).fetchone())
             self._mark_seen(db, sid, item_ref)
-            db.execute("INSERT INTO messages (session_id, item_ref, author, body, created_at, draft) "
-                       "VALUES (?, ?, 'person', ?, ?, 1)", (sid, item_ref, body, now()))
+            db.execute("INSERT INTO messages (session_id, item_ref, author, body, created_at, draft, after_cycle) "
+                       "VALUES (?, ?, 'person', ?, ?, 1, ?)", (sid, item_ref, body, now(), int(after_cycle)))
+
+    def hold_drafts(self, sid: str) -> int:
+        """Send pressed mid-compaction (#383): the session's drafts held, to be sent once the
+        cycle ends (send_held). How many."""
+        with self.tx() as db:
+            return db.execute("UPDATE messages SET after_cycle = 1 WHERE session_id = ? AND draft = 1",
+                              (sid,)).rowcount
+
+    def held(self) -> set[str]:
+        """The sessions with drafts held for a compaction's end (after_cycle)."""
+        return {r[0] for r in self._all("SELECT DISTINCT session_id FROM messages WHERE draft = 1 AND after_cycle = 1")}
+
+    def send_held(self, sid: str, send: bool = True) -> int:
+        """Once the session's compaction has ended (completed, failed or cancelled) and no other
+        operation is under way: its held drafts sent, as one batch, alone (a queued answer of
+        Queued mode's waits for Send as ever). send False (the session isn't running): let go,
+        left in its queue. How many went; 0, still held, while it's busy."""
+        with self.tx() as db:
+            s = db.execute("SELECT * FROM sessions WHERE id = ?", (sid,)).fetchone()
+            if s is None or send and operating(s) is not None:
+                return 0
+            went = db.execute("UPDATE messages SET after_cycle = 0, draft = ? WHERE session_id = ? AND draft = 1 "
+                              "AND after_cycle = 1", (int(not send), sid)).rowcount
+        return went if send else 0
 
     def drafts(self, sid: str | None = None) -> list[sqlite3.Row]:
         return self._all("SELECT * FROM messages WHERE draft = 1 AND (? IS NULL OR session_id = ?) ORDER BY id",

@@ -35,7 +35,7 @@ from . import adopt, api, away, quickshell, compactor, features, fingerprint, fo
 from .docroots import DOC_CAP
 from .host import (KEEPALIVE_AFTER, KEEPALIVE_TOKENS, MCP_CONNECTOR, MCP_DOS, keepalive_body,
                    waits_on_person)
-from .store import (COMPACT_QUESTION, NOTES_WAIT, Refused, Busy, REQUESTS, wheelhouse_item, COMPACT_TIMEOUT, OP_DOING, PARK_WITHIN, STARTING_WITHIN, HANDOVER_WITHIN, DISMISSABLE, compacting_now, operating, op_overdue, PRS_SINCE, STATUSES, SessionGone, requested_expired, Store, can_queue,
+from .store import (COMPACT_QUESTION, CYCLE_HELD, NOTES_WAIT, Refused, Busy, REQUESTS, wheelhouse_item, COMPACT_TIMEOUT, OP_DOING, PARK_WITHIN, STARTING_WITHIN, HANDOVER_WITHIN, DISMISSABLE, compacting_now, operating, op_overdue, PRS_SINCE, STATUSES, SessionGone, requested_expired, Store, can_queue,
                     PROTOCOL_VERSION, mcp_behind, mcp_servers, mode, needs_relaunch, now as store_now, runner, standing)
 
 RUNNING = ("live", "stalled", "starting")
@@ -56,19 +56,27 @@ def send_or_queue(store: Store, sid: str, ref: str, text: str, now: bool = False
     it waits in the session's queue for Send like any other, mid-turn or not; `now` (the Run
     dialog's Run, send now, #365) sends it at once whatever the mode, as Alt+S does a typed
     answer (Hub.submit). One refused as busy (an operation under way, #249) is queued, never
-    refused or dropped (D232); the quiet mark's cycle is called off as a person's answer would.
-    SessionGone if the session has gone. "sent" or "queued"."""
+    refused or dropped (D232), and mid-compaction held to go once it ends (held, #383); the quiet
+    mark's cycle is called off as a person's answer would. SessionGone if the session has gone.
+    "sent" or "queued"."""
     s = store.session(sid)
     if s is None:
         raise SessionGone(sid)
+    after = False
     if now or goes_now(store, s, ref):
         try:
             store.send(sid, text, ref)
             return "sent"
-        except Busy:
-            pass
-    store.queue(sid, text, ref)
+        except Busy as e:
+            after = held(e, s)
+    store.queue(sid, text, ref, after_cycle=after)
     return "queued"
+
+def held(e: Busy, s) -> bool:
+    """Whether a send refused as busy (e) is held for the compaction's end instead (#383): the
+    cycle alone is under way (not an op around it), and the session's code queues (can_queue)."""
+    return e.kind == "compact" and can_queue(s)
+
 
 # a hosted session's activity when nothing is under way: errored and stopped count as resting
 RESTING = ("idle", "interrupted", "stopped", "in a shell tab", "error")
@@ -506,8 +514,17 @@ class Hub:
         self.statuses = {s["id"]: liveness.status(s, waking=self.waking) for s in self.sessions}
         self.sweep_compactions()
         self.sweep_ops()
+        self.sweep_held()
         self.sweep_runs()
         self.note_quiet()
+
+    def sweep_held(self) -> None:
+        """What the person sent mid-compaction (Send now, Immediate, Send: after_cycle), sent once
+        the cycle has ended, completed, failed or cancelled, and nothing else is under way (#383);
+        a session not running has it let go, left in its queue for its wake."""
+        for sid in self.store.held():
+            if sid in self.statuses and (n := self.store.send_held(sid, self.statuses[sid] in RUNNING)):
+                self.announce(f"sent {self.sent_note(sid, n)}: its compaction is over", sid=sid)
 
     def sweep_compactions(self) -> None:
         """A compaction cycle whose session isn't running (its host died hard, or stopped before
@@ -1363,7 +1380,13 @@ class Hub:
             done.denied = True
             done.say(f"denied {target[1]}, with your message")
         elif now or goes_now(self.store, s, target[1]):
-            self.store.send(target[0], text, target[1])
+            try:
+                self.store.send(target[0], text, target[1])
+            except Busy as e:   # mid-compaction: held to go once it ends (#383), else refused as busy
+                if not held(e, s):
+                    raise
+                self.store.queue(target[0], text, target[1], after_cycle=True)
+                return done.say(CYCLE_HELD.format(name=display_name(s)))
             done.say(f"sent to {aimed(target)}{self.late(target[0])}")
             if mode(s) == "queued" and (drafts := self.store.drafts(target[0])):
                 done.say(still_queued(s, target, drafts))
@@ -1410,24 +1433,36 @@ class Hub:
         if self.dead(sid):
             s = self.row(sid)
             return Done(False).say(f"{display_name(s)} isn't running: {wake_verb(s)} it first", "warning")
-        n = self.store.dispatch(sid)
+        try:
+            n = self.store.dispatch(sid)
+        except Busy as e:   # mid-compaction: held to go once it ends (#383)
+            if e.kind != "compact":
+                raise
+            if not self.store.hold_drafts(sid):
+                return Done(False).say("nothing queued for that session")
+            return Done().say(CYCLE_HELD.format(name=display_name(self.row(sid))))
         return Done(bool(n)).say(f"sent {self.sent_note(sid, n)}" if n else "nothing queued for that session")
 
     def send_all(self) -> Done:
         """Every queue but a dead or parked session's, which stays queued until it's relaunched
         or unparked (#62)."""
         queued = dict.fromkeys(m["session_id"] for m in self.store.drafts())
-        sent, refused = [], []
+        sent, held, refused = [], [], []
         for sid in queued:
             if self.dead(sid):
                 continue
             try:
                 if n := self.store.dispatch(sid):
                     sent.append((sid, n))
-            except Busy as e:   # its queue waits for the operation's end (#244, #249)
-                refused.append(str(e))
-        if sent:
-            done = Done().say("sent " + "; ".join(self.sent_note(sid, n) for sid, n in sent))
+            except Busy as e:   # its queue waits for the operation's end (#244, #249), a compaction's held (#383)
+                if e.kind == "compact" and self.store.hold_drafts(sid):
+                    held.append(CYCLE_HELD.format(name=display_name(self.row(sid))))
+                else:
+                    refused.append(str(e))
+        if sent or held:
+            done = Done().say("sent " + "; ".join(self.sent_note(sid, n) for sid, n in sent)) if sent else Done()
+            for why in held:
+                done.say(why)
             for why in refused:
                 done.say(why, "warning")
             return done

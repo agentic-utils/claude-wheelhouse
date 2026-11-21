@@ -232,7 +232,8 @@ FEATURES: tuple[Feature, ...] = (
                  "has every switch; the first press asks once."),
     Feature("compacting-shown", UNRELEASED, "sessions", when="sdk",
             note="While a session is compacting, its Compact button is off and its busy eye in the session list "
-                 "turns blue. Its items still open and take answers, which queue until it's done. Its conversation "
+                 "turns blue. Its items still open and take answers: a queued one waits for Send as ever, and one sent "
+                 "now (or Send itself) goes the moment it's done. Its conversation "
                  "opens as the compaction starts, the trash compactor over it.",
             tip="A blue eye: the session is compacting; answer its items meanwhile, they queue until it's done."),
     Feature("compactor-dock", UNRELEASED, ADVANCED,
