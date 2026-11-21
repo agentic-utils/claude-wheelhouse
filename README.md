@@ -590,7 +590,12 @@ session.
   ends (a notice says so; one parked, ended or caught up
   meanwhile is left alone, and a wheelhouse restart forgets the wait); so `make stop && git pull && make run` then
   Relaunch all lands every session on the new code. Selecting an Available session also offers to
-  relaunch it. Nothing restarts on its own, and a resumed session is asked to post the
+  relaunch it. Nothing restarts on its own but a crashed host: a session run in the wheelhouse
+  whose host stops on an error (Claude Code exiting, or not starting) shows the error in red, in
+  its conversation and under its description, and is relaunched at once and told what happened.
+  After 3 such relaunches in 10 minutes it stays stopped, and its conversation says so in red;
+  so does a crash found more than 5 minutes late, or one of a session parked or being parked or
+  forgotten. A resumed session is asked to post the
   questions and tasks it already had open. Park on a running session asks it to write its
   handoff notes into its items, then it parks and stops (its tab closes); on one not running
   it parks at once. On one run in the wheelhouse, Park asks first, offering to compact it once

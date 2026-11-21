@@ -784,6 +784,45 @@ def test_run_stops(store, sid, monkeypatch, ending, activity, desc):
     run(go())
     if activity:
         assert store.session(sid)["activity"] == activity, desc
+    crashes = store.crashes(sid)
+    assert [c["why"] for c in crashes] == ([activity.removeprefix("stopped: ")] if activity else []), \
+        f"{desc}: only a crash is recorded, for the hub to relaunch"
+
+
+def test_options_take_a_long_stream_message(store, sid):
+    assert Host(store, sid, client_factory=FakeClient).options(False).max_buffer_size == 64 * 1024 * 1024
+
+
+@pytest.mark.parametrize("message, kind, desc", [
+    (("SystemMessage", dict(subtype="init", data={})), "SystemMessage (init)", "its subtype"),
+    (("AssistantMessage", dict(content=[("ToolUseBlock", dict(id="1", name="Bash", input={}))], model="m")),
+     "AssistantMessage (ToolUseBlock)", "its blocks' types"),
+    (("UserMessage", dict(content="hi")), "UserMessage", "plain text: the type alone"),
+])
+def test_a_large_messages_kind(message, kind, desc):
+    import claude_agent_sdk.types as sdk
+
+    def make(spec):
+        name, fields = spec
+        fields = {k: [make(b) for b in v] if k == "content" and isinstance(v, list) else v for k, v in fields.items()}
+        return getattr(sdk, name)(**fields)
+    assert host_mod.message_kind(make(message)) == kind, desc
+
+
+def test_a_large_message_is_logged_with_its_type_and_size(store, sid, monkeypatch, capsys):
+    monkeypatch.setattr(host_mod, "LARGE_MESSAGE", 100)
+    from claude_agent_sdk import SystemMessage
+    h = Host(store, sid, client_factory=StreamClient, person="doug")
+
+    async def go():
+        h.client = StreamClient(None)
+        h.client.feed.put_nowait(SystemMessage(subtype="init", data={"x": "y" * 200}))
+        h.client.feed.put_nowait(SystemMessage(subtype="init", data={}))
+        h.client.feed.put_nowait(None)
+        await h.read()
+    run(go())
+    logged = [line for line in capsys.readouterr().err.splitlines() if "large message" in line]
+    assert len(logged) == 1 and "SystemMessage (init), 2" in logged[0], logged
 
 
 def test_run_refuses_a_taken_session(store, sid, monkeypatch):

@@ -638,6 +638,8 @@ LONG_SYNOPSIS = " ".join(f"Sentence {n} of the synopsis says what the session is
     ("sdk", True, "", "", "none yet"),
     ("sdk", True, "running Bash: " + "x" * 300, "running Bash: " + "x" * 300, "a long one, cropped to its two rows"),
     ("sdk", False, "thinking", "", "none while it isn't running"),
+    ("sdk", False, "stopped: Claude Code exited", "stopped: Claude Code exited", "but why its host crashed (#381)"),
+    ("sdk", False, "stopped", "", "an older host's bare stop: not a crash, not shown"),
     ("tab", True, "thinking", "", "none for a tab, which has its own terminal"),
 ])
 async def test_the_activity_has_its_own_rows(store, tmp_path, monkeypatch, runner_, live, activity, after, desc):
@@ -654,6 +656,7 @@ async def test_the_activity_has_its_own_rows(store, tmp_path, monkeypatch, runne
         box, scroll = app.query_one("#session-info"), app.query_one("#session-info-scroll")
         line, text = app.query_one("#session-activity"), app.query_one("#session-info-text")
         assert (app._activity_text, bool(activity) and activity in app._info_text) == (after, False), desc
+        assert (line.content.style == tui.VOICE["crash"]) == after.startswith("stopped:"), f"{desc}: a crash in red"
         rows = 2 if runner_ == "sdk" else 0   # a tab's session has no activity, so no rows for one
         assert line.region.height == rows and (not rows or line.region.y == scroll.region.bottom), \
             f"{desc}: {rows} rows under the scroll"
@@ -10432,15 +10435,18 @@ async def test_a_compaction_starting_shows_its_conversation(store, tmp_path, mon
             assert not typed or app.answer.text == typed, f"{desc}: the text kept"
 
 
-@pytest.mark.parametrize("text, desc", [
-    ("Compaction: preparing (notes turn)", "a stage"),
-    ("Compaction: failed: *the* host_stopped_ # twice", "a reason Markdown would mangle"),
+@pytest.mark.parametrize("who, text, desc", [
+    ("stage", "Compaction: preparing (notes turn)", "a stage"),
+    ("stage", "Compaction: failed: *the* host_stopped_ # twice", "a reason Markdown would mangle"),
+    ("crash", "✖ The host crashed: Failed to decode JSON: *x* # y", "a host's crash (#381), in red"),
 ])
-def test_stage_blocks_render_as_plain_text_never_markdown(text, desc):
+def test_stage_blocks_render_as_plain_text_never_markdown(who, text, desc):
     """#244, #324: a stage's line is drawn as it is, never as Markdown."""
     from rich.console import Console
     console = Console(width=80, color_system=None)
-    assert "".join(seg.text for seg in tui._block_lines("stage", text, 80, console)).rstrip() == text, desc
+    segments = tui._block_lines(who, text, 80, console)
+    assert "".join(seg.text for seg in segments).rstrip() == text, desc
+    assert str(segments[0].style) == tui.VOICE[who], desc
 
 
 @pytest.mark.anyio

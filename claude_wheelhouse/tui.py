@@ -111,7 +111,8 @@ UNDO_LANDING = "{key}: the undo is still putting rows back, try again in a momen
 # the person's words in terminal green, Claude's in white as in the Claude app
 VOICE = {"you": MATRIX, "claude": "#e8e8e8", "pr": "#e8e8e8", "head": "#05d9e8",
          "warn": "bold #ffd300", "note": "#777777", "tool": "#777777", "doc": "#e8e8e8",
-         "stage": "#2f8cff", "crew": "#9cc8ff", "dock": "#2f8cff"}   # a compaction's stage lines (#244) in its eye's blue, the overlay's crew (#324) lighter
+         "stage": "#2f8cff", "crew": "#9cc8ff", "dock": "#2f8cff",   # a compaction's stage lines (#244) in its eye's blue, the overlay's crew (#324) lighter
+         "crash": "bold #ff4b3e"}   # a host's crash (#381) in the red alert's red
 # the big compactor's roles (compactor.ROLES, #287): the walls and crew in the compaction blue,
 # sparks and the hatch light in amber, the dianoga in green, a red alert (Star Trek) in red,
 # a neuralyzer's flash (Men in Black) in white
@@ -613,7 +614,7 @@ def _block_lines(who: str, md: str, width: int, console) -> list:
     """A block's rendered segments at one width: rendered once, though Textual measures a
     widget's height and then draws it, and a new turn leaves every older block as it was."""
     r = Text(md.strip("`"), style=VOICE[who]) if who == "tool" else pr_text(md) if who == "pr" \
-        else Text(md, style=VOICE[who]) if who == "stage" else RichMarkdown(md, style=VOICE[who])
+        else Text(md, style=VOICE[who]) if who in ("stage", "crash") else RichMarkdown(md, style=VOICE[who])
     return list(console.render(r, console.options.update_width(width)))
 
 
@@ -8476,7 +8477,8 @@ class WheelhouseApp(App):
         activity = self.activity_line(s) if s else ""
         if activity != getattr(self, "_activity_text", None):
             self._activity_text = activity
-            self.session_activity.update(Text(activity))   # plain: the session's own words, never markup
+            # plain: the session's own words, never markup. A host's crash in red (#381)
+            self.session_activity.update(Text(activity, style=VOICE["crash"] if activity.startswith("stopped:") else ""))
         before = [b.display for b in self.session_controls]
         for grid, buttons in ((self.session_buttons, self.lifecycle_buttons(s)),
                               (self.conversation_buttons, self.controls(s))):
@@ -8531,8 +8533,10 @@ class WheelhouseApp(App):
         return t
 
     def activity_line(self, s) -> str:
-        """What a session run in the wheelhouse is doing now, for the line under its description."""
-        return s["activity"] if runner(s) == "sdk" and s["activity"] and self.running(s["id"]) else ""
+        """What a session run in the wheelhouse is doing now, for the line under its description;
+        once it has stopped, why, if its host crashed (#381): only a crash leaves a reason."""
+        activity = s["activity"] or ""
+        return activity if runner(s) == "sdk" and (self.running(s["id"]) or activity.startswith("stopped:")) else ""
 
     # selection
 

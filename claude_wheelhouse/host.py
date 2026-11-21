@@ -18,6 +18,7 @@ hand-over to a tab it gives up the session, waits for the tab to exit, then take
 
 import asyncio
 import contextlib
+import dataclasses
 import getpass
 import json
 import os
@@ -39,6 +40,10 @@ from .store import (CLOSED, COMPACT_QUESTION, COMPACT_QUESTION_DONE, HOST_QUESTI
                     mcp_named, mcp_question, mcp_server, now, runner, wheelhouse_question)
 
 POLL_SECONDS = 1.0
+# the longest stream message Claude Code may send: the SDK's default of 1 MiB stopped hosts mid-tool
+# (#381). Any over LARGE_MESSAGE is logged with its type and size, to learn what they are
+MAX_MESSAGE = 64 * 1024 * 1024
+LARGE_MESSAGE = 1024 * 1024
 SHELL_POLL_SECONDS = 2.0
 CONFIRM_TRIES = (0.1, 0.5, 2.0)   # waits between tries to mark sent messages delivered
 STEADY_TRIES = (0.1, 0.5, 2.0, 5.0)   # waits between tries of a write the shell hand-over can't skip
@@ -187,6 +192,24 @@ ANSWER_MARK = re.compile(r"(?:^|[,;\n])\s*[Qq]?(\d+)\s*:(?!\d)")
 def stopped(why) -> str:
     """A stop reason for the activity line: one line, short."""
     return " ".join(f"stopped: {why}".split())[:160]
+
+
+def message_size(m) -> int:
+    """About how long a stream message was, in bytes: as JSON again, since the SDK keeps no
+    count of the line it read. 0 if it can't be said."""
+    try:
+        return len(json.dumps(dataclasses.asdict(m), default=str).encode())
+    except Exception:
+        return 0
+
+
+def message_kind(m) -> str:
+    """A stream message's type, with its subtype or its content blocks' types: what a large
+    one was."""
+    content = getattr(m, "content", None)
+    parts = [getattr(m, "subtype", None)] + ([type(b).__name__ for b in content] if isinstance(content, list) else [])
+    said = ", ".join(p for p in parts if p)
+    return f"{type(m).__name__} ({said})" if said else type(m).__name__
 
 
 def where(m) -> str:
@@ -486,6 +509,7 @@ class Host:
             # replay-user-messages: each turn sent is replayed, by its uuid, as Claude Code takes
             # it up, so a turn's end is matched to the turns it answered (read)
             extra_args={"system-prompt-snapshot": "off", "replay-user-messages": None},
+            max_buffer_size=MAX_MESSAGE,
             env={"WHEELHOUSE_SESSION_ID": self.sid, "WHEELHOUSE_DB": str(self.store.path)},
             stderr=lambda line: print(f"[claude] {line}", file=sys.stderr, flush=True),
         )
@@ -1162,6 +1186,8 @@ class Host:
         from claude_agent_sdk import AssistantMessage, RateLimitEvent, ResultMessage, SystemMessage, UserMessage
         from claude_agent_sdk.types import TextBlock, ThinkingBlock, ToolUseBlock
         async for m in self.client.receive_messages():
+            if (size := message_size(m)) > LARGE_MESSAGE:
+                print(f"{now()} large message: {message_kind(m)}, {size:,} bytes", file=sys.stderr, flush=True)
             try:
                 if isinstance(m, UserMessage) and m.uuid in self.sent and m.uuid not in self.taken_up:
                     self.taken_up.append(m.uuid)   # one of ours, replayed as Claude Code takes it up
@@ -1798,7 +1824,7 @@ class Host:
             while not self.stopping:
                 if self.reader.done():   # Claude Code exited under us
                     exc = self.reader.exception() if not self.reader.cancelled() else None
-                    self.stop_reason = stopped(exc) if exc else "stopped"
+                    self.stop_reason = stopped(exc or "Claude Code exited")
                     break
                 try:
                     if not await self.poll():
@@ -1821,6 +1847,8 @@ class Host:
             await self.disconnect()
             try:
                 if self.owner and self.store.session(self.sid) is not None:
+                    if self.stop_reason:   # only a crash leaves a reason: the hub relaunches it (Hub.relaunch_crashed)
+                        self.store.record_crash(self.sid, self.stop_reason.removeprefix("stopped: "))
                     self.store.set_activity(self.sid, self.stop_reason)
             except sqlite3.OperationalError:
                 pass
