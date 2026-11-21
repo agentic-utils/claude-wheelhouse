@@ -57,7 +57,7 @@ from starlette.routing import Route
 from . import api, auth, away, docroots, features, fingerprint, liveness, models, served, steps, transcript, transcript_usage, tutorial
 from .hub import Done, Event, Hub, compaction_entries, host_context
 from .host import MCP_DOS
-from .store import COMPACT_QUESTION, HOST_QUESTION, NOTES_SEEN, NOTES_WAIT, THEN, TOUR_AT, SessionGone, Store, compacting_now, inbox_rank, mode, runner, standing
+from .store import COMPACT_QUESTION, NOTES_SEEN, NOTES_WAIT, THEN, TOUR_AT, SessionGone, Store, compacting_now, inbox_rank, mode, runner, standing
 
 ADDRESS = "127.0.0.1"   # the port is features.port()
 TICK = 1.0           # seconds between the hub's refreshes, as the TUI's tick
@@ -887,8 +887,7 @@ class Daemon:
                                "JOIN sessions s ON s.id = i.session_id")
         return {"items": [{**{k: v for k, v in dict(r).items() if k not in UNLISTED or (k == "body" and r["kind"] == "pr")},
                             "compact_question": r["answer"] == COMPACT_QUESTION,
-                            "notes_wait": r["answer"] == NOTES_WAIT,
-                            "host_question": r["answer"] == HOST_QUESTION} for r in rows],
+                            "notes_wait": r["answer"] == NOTES_WAIT} for r in rows],
                 "processing": sorted(self.store.processing()), "awaiting": sorted(self.store.awaiting()),
                 "drafts": [{"id": m["id"], "session_id": m["session_id"], "item_ref": m["item_ref"]}
                            for m in self.store.drafts()],

@@ -36,8 +36,8 @@ def marked(cells: tuple) -> tuple:
 
 
 def faded(cells: tuple) -> tuple:
-    """A row's cells dimmed, each keeping its own hue: its session is being compacted (#150), or
-    is dead and not parked (hub.lifeless, #252)."""
+    """A row's cells dimmed, each keeping its own hue: a conversation row whose session is being
+    compacted (#324), or a row whose session is dead and not parked (hub.lifeless, #252)."""
     out = tuple(c.copy() if isinstance(c, Text) else Text(str(c)) for c in cells)
     for c in out:
         c.stylize("dim")

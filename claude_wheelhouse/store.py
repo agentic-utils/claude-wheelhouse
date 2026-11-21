@@ -142,9 +142,7 @@ PROTOCOL_VERSION = 32
 # confused one can't loop: seconds since its last accepted request
 MODEL_COMPACT_GAP = 30 * 60
 PARKED_UNCOMPACTED = "Parked without compacting"   # the decision a session's reason not to compact is posted as
-# a compaction's cut-off (Store.compact_cut), in settings by session id, and the activity lines
-# that end one: the host's idle and interrupted lines, and its errors and stops
-COMPACT_CUTOFF = "compact.cutoff."
+# the activity lines that end a turn: the host's idle and interrupted lines, and its errors and stops
 COMPACT_ENDS = ("idle", "interrupted", "error", "stopped")
 DRAFTS_VERSION = 2   # the first that holds a queued answer until it is sent
 # How a session's answers go until the person toggles it: "queued" holds them until sent,
@@ -900,25 +898,11 @@ class Store:
 
     def set_activity(self, sid: str, text: str) -> None:
         """What the host's session is doing now, one line: idle, thinking, running Bash...
-        A compaction's first line ("compacting...") marks its cut-off, if Compact pressed
-        hasn't already; a line that ends one (COMPACT_ENDS) lets it go (compact_cut)."""
+        A line that ends a turn (COMPACT_ENDS) stamps idle_at."""
         with self.tx() as db:
             db.execute("UPDATE sessions SET activity = ? WHERE id = ?", (text, sid))
-            if text.startswith("compacting"):
-                self.compact_cut(db, sid, fresh=False)
-            elif text.startswith(COMPACT_ENDS):
-                db.execute("DELETE FROM settings WHERE key = ?", (COMPACT_CUTOFF + sid,))
+            if text.startswith(COMPACT_ENDS):
                 db.execute("UPDATE sessions SET idle_at = ? WHERE id = ?", (stamp(), sid))   # a turn has ended
-
-    @staticmethod
-    def compact_cut(db, sid: str, fresh: bool) -> None:
-        """Where a compaction starts, once for every app: the newest item id the session has
-        then (settings, COMPACT_CUTOFF), served on its row as compact_cutoff. Items at or
-        below it are locked while it compacts (#150); one posted after never is. fresh: a
-        Compact pressed, over any left behind."""
-        db.execute(f"""INSERT INTO settings (key, value) SELECT ?, coalesce(max(id), 0) FROM items
-                       WHERE session_id = ? ON CONFLICT (key) DO {"UPDATE SET value = excluded.value" if fresh else "NOTHING"}""",
-                   (COMPACT_CUTOFF + sid, sid))
 
     def set_context(self, sid: str, tokens: int, max_tokens: int) -> None:
         """The context size the host's Claude Code reports, and when: the stats read it after
@@ -974,7 +958,6 @@ class Store:
                 and (operating(s) or ("", ""))[0] == "compact"):
             return False
         db.execute("UPDATE sessions SET compaction = 'cancelled', compaction_at = ? WHERE id = ?", (stamp(), s["id"]))
-        db.execute("DELETE FROM settings WHERE key = ?", (COMPACT_CUTOFF + s["id"],))
         Store.staged(db, s["id"], "cancelled", "you wrote in, so it was called off")
         return True
 
@@ -984,7 +967,6 @@ class Store:
         never coming, or parked without compacting): its cycle, still requested, is cancelled."""
         if db.execute("UPDATE sessions SET compaction = 'cancelled', compaction_at = ? WHERE id = ? "
                       "AND compaction = 'requested' AND compaction_origin = 'park'", (stamp(), sid)).rowcount:
-            db.execute("DELETE FROM settings WHERE key = ?", (COMPACT_CUTOFF + sid,))
             Store.staged(db, sid, "cancelled", "the park was called off")
 
     def cancel_park_cycle(self, sid: str) -> None:
@@ -1012,7 +994,6 @@ class Store:
                                  "compaction_id = ? AND compaction = 'requested' AND compaction_at < ?",
                                  (stamp(), sid, cid, cutoff)).rowcount
             if expired:
-                db.execute("DELETE FROM settings WHERE key = ?", (COMPACT_CUTOFF + sid,))
                 self.drop_compact_command(db, sid)
                 self.staged(db, sid, "failed", f"no host took it up within {within:g} s")
         return bool(expired)
@@ -1072,7 +1053,6 @@ class Store:
             db.execute("UPDATE sessions SET park_compact = 0, park_keep = NULL WHERE id = ?", (sid,))
             if s["compaction_origin"] == "park" and compacting_now(s):
                 db.execute("UPDATE sessions SET compaction = ?, compaction_at = ? WHERE id = ?", (ends, stamp(), sid))
-                db.execute("DELETE FROM settings WHERE key = ?", (COMPACT_CUTOFF + sid,))
                 Store.drop_compact_command(db, sid)
                 Store.staged(db, sid, ends, why)
         if s[f"{what}_told_at"] or (what == "park" and s["op_state"] == "parking"):
@@ -1121,7 +1101,6 @@ class Store:
             elif s["op_state"] == "parking":
                 if s["compaction_origin"] == "park" and compacting_now(s):
                     db.execute("UPDATE sessions SET compaction = 'failed', compaction_at = ? WHERE id = ?", (stamp(), sid))
-                    db.execute("DELETE FROM settings WHERE key = ?", (COMPACT_CUTOFF + sid,))
                     self.staged(db, sid, "failed", why)
             else:
                 self.unpark_request(db, sid, s["op"], s, "failed", why)
@@ -1188,12 +1167,11 @@ class Store:
 
     @staticmethod
     def begin_cycle(db, sid: str, origin: str, state: str, then: str | None = None, tokens: int | None = None) -> str:
-        """A new compaction cycle, its cut-off taken (#150): its id."""
+        """A new compaction cycle: its id."""
         assert origin in COMPACTION_ORIGINS and state in COMPACTION_ACTIVE
         cid = secrets.token_hex(4)
         db.execute("UPDATE sessions SET compaction = ?, compaction_id = ?, compaction_origin = ?, compaction_then = ?, "
                    "compaction_at = ?, compaction_item = NULL WHERE id = ?", (state, cid, origin, then, stamp(), sid))
-        Store.compact_cut(db, sid, fresh=True)   # first: the task item, posted after, is never locked
         s = db.execute("SELECT * FROM sessions WHERE id = ?", (sid,)).fetchone()
         tokens = tokens or s["context_tokens"]   # a tab's from its transcript (tokens), a host's as it reports
         ref = Store._insert_item(db, sid, "task", compaction_title(s, tokens), "", "running")
@@ -1273,7 +1251,6 @@ class Store:
                     db.execute("UPDATE items SET title = ? WHERE session_id = ? AND ref = ?",
                                (compaction_title(s, tokens), sid, s["compaction_item"]))
             if moved and state in COMPACTION_ENDS:
-                db.execute("DELETE FROM settings WHERE key = ?", (COMPACT_CUTOFF + sid,))
                 if was[0] == "requested":
                     self.drop_compact_command(db, sid)
         return bool(moved)
@@ -1438,7 +1415,6 @@ class Store:
     def sessions(self) -> list[sqlite3.Row]:
         return self._all(
             f"""SELECT s.*,
-                 (SELECT value FROM settings WHERE key = '{COMPACT_CUTOFF}' || s.id) AS compact_cutoff,
                  -- what waits on the person: a question unanswered or a command not yet run (#364)
                  (SELECT count(*) FROM items i WHERE i.session_id = s.id AND i.status = 'open'
                     AND (i.kind = 'command' OR i.kind = 'question' AND NOT {PROCESSING})) AS open_questions,
@@ -1688,8 +1664,8 @@ class Store:
             db.execute("DELETE FROM sessions WHERE id = ?", (sid,))
             db.execute("DELETE FROM compaction_stages WHERE session_id = ?", (sid,))
             db.execute("DELETE FROM host_crashes WHERE session_id = ?", (sid,))
-            # its PR merges held for a resume that won't come (steps.held_key), its compaction's cut-off
-            db.execute("DELETE FROM settings WHERE key IN (?, ?)", (f"step.held.{sid}", COMPACT_CUTOFF + sid))
+            # its PR merges held for a resume that won't come (steps.held_key)
+            db.execute("DELETE FROM settings WHERE key = ?", (f"step.held.{sid}",))
 
     # items
 

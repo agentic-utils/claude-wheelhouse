@@ -90,7 +90,7 @@ The eye is blue whenever `compaction` is active. `TUI.compacting()` reads that c
 
 ## 5. The task item
 
-The store posts it in the transaction that starts the cycle (`Store.begin_cycle`), marked `{"from": "compaction"}` (`COMPACTION_TASK`), after the cut-off is taken, so the #150 lock never covers it, and moves it with every stage (`Store.staged`, which also keeps the stage in `compaction_stages`), whoever writes the move: host, hub sweep or store. It is left out of the After Compact reminder, `list_items` and the keepalive's check (`wheelhouse_item`), so the model never sees it. Every origin gets it, Claude Code's own included (Q2).
+The store posts it in the transaction that starts the cycle (`Store.begin_cycle`), marked `{"from": "compaction"}` (`COMPACTION_TASK`), and moves it with every stage (`Store.staged`, which also keeps the stage in `compaction_stages`), whoever writes the move: host, hub sweep or store. It is left out of the After Compact reminder, `list_items` and the keepalive's check (`wheelhouse_item`), so the model never sees it. Every origin gets it, Claude Code's own included (Q2).
 
 - Title: **"Compact {name}: {k}k context"**.
 - `requested`: running, note "asked for by {origin}".

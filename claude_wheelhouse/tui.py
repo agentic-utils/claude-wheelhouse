@@ -78,7 +78,7 @@ from .knurl import KnurlRender
 from .splitter import SlotSplitter, Splitter, fit
 from textual.css.scalar import Unit
 from .tour import LIT as tour_lit, NOTES, PAUSED, ROWS as tour_rows, SHUN as tour_shun, TOPUP, TOUR, Tour, offered, opening
-from .store import (DEFAULT_THEN, DELETED, HOST_QUESTION, DISMISSABLE, FINISHED_RANK, PARENTS, RUNNABLE, SETTLED, SETTLED_RANK, SessionGone, Store, db_path, default_runner,
+from .store import (DEFAULT_THEN, DELETED, DISMISSABLE, FINISHED_RANK, PARENTS, RUNNABLE, SETTLED, SETTLED_RANK, SessionGone, Store, db_path, default_runner,
                     family, inbox_rank, mcp_servers, mode, pinned, runner, spared, stamp, standing)
 from .unsent import Unsent
 
@@ -106,7 +106,6 @@ DWELL = 1.0
 # every few tens of ms, so a gap longer than both means every key has been let go
 QUIET = 0.6
 NOTHING_SELECTED = "Select an item, or a session to follow its conversation."
-COMPACTING_LOCKED = "That session is compacting: its items open once it's done"   # a pick of a locked item (#150)
 UNDO_LANDING = "{key}: the undo is still putting rows back, try again in a moment"   # Delete asked mid-undo (#235)
 # the person's words in terminal green, Claude's in white as in the Claude app
 VOICE = {"you": MATRIX, "claude": "#e8e8e8", "pr": "#e8e8e8", "head": "#05d9e8",
@@ -1650,30 +1649,6 @@ class ItemList(SinkList):
         self.marked: set[str] = set()
         self.anchor: str | None = None
         self.toggles: dict[str, bool] = {}   # each parent row's key: whether its children are hidden
-        self.locked: set[str] = set()   # rows of a session being compacted: clicks on them do nothing (#150)
-
-    def unlocked_from(self, key: str, came: str | None) -> str | None:
-        """The row an arrow onto locked key goes to instead: the next unlocked one on the way
-        it was going (from came), else came again if it's still here; None if there's neither."""
-        keys = self.keys()
-        at = keys.index(key)
-        step = -1 if came in keys and keys.index(came) > at else 1
-        i = at + step
-        while 0 <= i < len(keys):
-            if keys[i] and keys[i] not in self.locked:
-                return keys[i]
-            i += step
-        return came if came in keys else None
-
-    def locked_at(self, event) -> bool:
-        row = event.style.meta.get("row", -1)
-        return 0 <= row < self.row_count and self.keys()[row] in self.locked
-
-    def _on_mouse_down(self, event) -> None:
-        if self.locked_at(event):
-            self.press = None
-            return
-        super()._on_mouse_down(event)
 
     def _render_line(self, y: int, x1: int, x2: int, base_style: Style) -> Strip:
         """The row's line, and on a parent's its + / - (TOGGLE) in the line's last cell, a
@@ -1713,10 +1688,6 @@ class ItemList(SinkList):
 
     async def _on_click(self, event) -> None:
         if self.swallowed(event):
-            return
-        if self.locked_at(event):   # its session is being compacted: nothing to pick (#150)
-            event.prevent_default()
-            event.stop()
             return
         meta = event.style.meta
         if "toggle" in meta:   # a parent's + / -: its children shown or hidden, the row not selected
@@ -5225,7 +5196,6 @@ class WheelhouseApp(App):
         text-opacity: 100%; opacity: 100%; }}
     Button.-style-default:disabled {{ border-top: tall {OFF}; border-bottom: tall {OFF}; }}
     Button.-style-default.-textual-compact:disabled {{ border: none; }}
-    #detail.compacting, #detail-more.compacting, #detail-bar.compacting {{ opacity: 50%; }}
     #session-steps-rows {{ height: auto; max-height: 60vh; }}
     #conversation-buttons #mode, #session-buttons Button.wide {{ column-span: 2; }}
     #dialog {{ width: 80; max-width: 100%; height: auto; max-height: 100%; overflow-y: auto; padding: 1 2;
@@ -5399,7 +5369,6 @@ class WheelhouseApp(App):
         self.arranged: tuple | None = None   # arrangement's last answer, and its stamp
         self.true_ranks: tuple[dict, dict] = ({}, {})   # ... and as it sorts, unpinned, with its group (arrow_only)
         self.sort_keys: dict[tuple, tuple] = {}   # each item's sort key as it stands (sort_key)
-        self.compacting_drawn: bool | None = None   # whether Detail is drawn dimmed (paint_compacting)
         self.detail_parts_found: list = []   # detail_boxes, once found
         self.cells_kept: dict[tuple, tuple] = {}   # each inbox row's cells as last made (item_cells)
         self.tour_offered: tuple | None = None   # tour_offer's last answer, and what it was for
@@ -5684,8 +5653,6 @@ class WheelhouseApp(App):
             screen.action_leave()
         elif self.shown_doc:
             self.open_doc(*self.shown_doc)
-        elif "|".join(self.selected) in self.items_table.locked:   # its session is being compacted (#150)
-            self.notify(COMPACTING_LOCKED, severity="warning")
         else:
             self.saw(*self.selected)
             self.open_full(*self.selected)
@@ -6009,7 +5976,6 @@ class WheelhouseApp(App):
             self.paint_items()
         self.focus_compactions()
         self.paint_away()
-        self.paint_compacting()
         self.each_pane("tick")
         self.client.finish_relaunches()
         self.paint_session_info()
@@ -6126,8 +6092,8 @@ class WheelhouseApp(App):
             if self.filter_sid not in (None, sid):
                 self.clear_filter()
                 self.paint_items()
-            if self.show_item(sid, ref):
-                self.items_table.focus()
+            self.show_item(sid, ref)
+            self.items_table.focus()
         elif any(s["id"] == sid for s in self.sessions):
             self.follow(sid)
             self.session_list.focus()
@@ -6408,7 +6374,7 @@ class WheelhouseApp(App):
         version = getattr(self.client, "inbox_version", None)   # the sessions' part it reads is in the key itself
         quick = None if version is None else (
             version, self.items_state(), tuple(self.conversation_sids()), frozenset(self.compacting()),
-            frozenset(self.lifeless_sids()), tuple(self.session_names().items()), tuple(sorted(self.cutoffs().items())), self.cleanse_due is not None and datetime.now(timezone.utc) >= self.cleanse_due)   # listable's clock
+            frozenset(self.lifeless_sids()), tuple(self.session_names().items()), self.cleanse_due is not None and datetime.now(timezone.utc) >= self.cleanse_due)   # listable's clock
         if quick is not None and self.items_painted is not None and not self.repin and self.item_sink.move is None \
                 and (self.items_painted[3] == quick or self.arrow_only(quick)):
             self.items_painted = (*self.items_painted[:3], (*quick[:1], self.items_state(), *quick[2:]))
@@ -6433,11 +6399,10 @@ class WheelhouseApp(App):
         busy = queued | awaiting
         found = self.listable(found, busy)   # a Delete's rows gone already (#234); autocleanse's hidden (#235)
         compacting, dead = self.compacting(), self.lifeless_sids()
-        cuts = self.cutoffs()
         every = self.client.all_items() if self.item_sort == ordering.ITEMS_DEFAULT else None
         # all it reads (#268): the same as at the last paint, and nothing moving, shows the same
         read = (every is None, frozenset(processing), frozenset(queued), frozenset(awaiting), frozenset(compacting),
-                frozenset(dead), tuple(sorted(cuts.items())), tuple(names.items()), tuple(self.conversation_sids()))
+                frozenset(dead), tuple(names.items()), tuple(self.conversation_sids()))
         if quick is None and self.items_painted is not None and (read, self.items_state()) == self.items_painted[0] \
                 and same_rows(found, self.items_painted[1]) and (every is None or same_rows(every, self.items_painted[2])) \
                 and not self.repin and self.item_sink.move is None:
@@ -6445,7 +6410,6 @@ class WheelhouseApp(App):
             self.paint_detail()
             return
         keyed = self.ranked_keyed(found, processing, busy, names, every)
-        table.locked = {key for key, it in keyed if self.locks(it, cuts)}
         key_of = {id(it): key for key, it in keyed}   # each item's row key, made once
         active, settled, finished = bands = ([], [], [])   # by their ranks as shown: a selected item's held
         for key, it in keyed:
@@ -6477,7 +6441,7 @@ class WheelhouseApp(App):
         for it, nested, _ in rows:
             row = key_of[id(it)]
             rows_out.append((row, self.item_cells(it, nested, names, queued, processing, awaiting, busy,
-                                                  row in table.locked, it["session_id"] in dead)))
+                                                  it["session_id"] in dead)))
             tips[row] = item_tip(it)
         if len(self.cells_kept) > 2 * len(rows) + 100:   # the rows gone, kept no longer
             self.cells_kept = {k: v for k, v in self.cells_kept.items() if f"{k[0]}|{k[1]}" in tips}
@@ -6528,14 +6492,13 @@ class WheelhouseApp(App):
                               quick and (*quick[:1], self.items_state(), *quick[2:]))
         self.paint_detail()
 
-    def item_cells(self, it, nested, names, queued, processing, awaiting, busy, locked: bool, dead: bool) -> tuple:
+    def item_cells(self, it, nested, names, queued, processing, awaiting, busy, dead: bool) -> tuple:
         """An inbox row's cells (paint_items), made again only when something they show from
         changes: the item, its place, its session's name, whether it is queued, processing or
-        awaiting a reply, locked, or its session dead (#268). Kept as the table holds them
+        awaiting a reply, or its session dead (#268). Kept as the table holds them
         (plain), so fill finds an unchanged row's cells the very ones it shows."""
         key = (it["session_id"], it["ref"])
-        on = (row_values(it), nested, names.get(key[0], ""), key in queued, key in processing, key in awaiting,
-              locked, dead)
+        on = (row_values(it), nested, names.get(key[0], ""), key in queued, key in processing, key in awaiting, dead)
         if (kept := self.cells_kept.get(key)) is not None and kept[0] == on:
             return kept[1]
         # an unfinished item of any kind with an answer waiting to be sent shows as queued, and one
@@ -6566,9 +6529,8 @@ class WheelhouseApp(App):
             cells = (pin, "", ref_text(it, child=True), shown, titled(it, "dim"))
         else:   # a subagent, tucked under its session's name
             cells = (pin, name if nested == 0 else "", ref_text(it, child=True), shown, titled(it, "dim"))
-        # dimmed, clicks and keys ignored, until it's compacted (#150); or dimmed alone, its
-        # session dead and not parked (#252)
-        if locked or dead:
+        # dimmed, its session dead and not parked (#252); a compacting one's show as ever (#383)
+        if dead:
             cells = faded(cells)
         cells = tuple(plain(c) for c in cells)
         self.cells_kept[key] = (on, cells)
@@ -7027,16 +6989,12 @@ class WheelhouseApp(App):
     def go_to_item(self, sid: str, ref: str) -> None:
         """An item gone to (#273, #274): one the inbox shows highlighted there, scrolled to, and in
         Detail, as a click on its row; its parents' children shown if they were hidden. One
-        it hides shown in Detail alone, the inbox unchanged, Detail saying it's hidden. One of
-        a compacting session isn't, as its row isn't picked (#150)."""
+        it hides shown in Detail alone, the inbox unchanged, Detail saying it's hidden."""
         item = self.client.item(sid, ref)
         if item is None:
             self.notify(f"{ref} has gone", severity="warning")
             return
         key, table = item_key(item), self.items_table
-        if key in table.locked or self.locks(item, self.cutoffs()):
-            self.notify(COMPACTING_LOCKED, severity="warning")
-            return
         _, _, queued, awaiting = inbox = self.client.inbox(self.filter_sid)
         if key in self.inbox_shows(inbox.items, queued | awaiting):
             parent, seen = parent_of(item), set()
@@ -7056,17 +7014,13 @@ class WheelhouseApp(App):
         self.paint_items()
         self.paint_sendbar()
 
-    def show_item(self, sid: str, ref: str) -> bool:
+    def show_item(self, sid: str, ref: str) -> None:
         """A module's pick of an item (api.Context.show_item, the PRs pane's row that is one):
         shown in Detail with its thread and answer box, and highlighted in the inbox if listed
-        there (one autocleanse hid back in sight, as selected); if not, the inbox's highlight hidden, not left on another item (#148). An item
-        of a compacting session isn't picked, as its inbox row isn't: Detail keeps what it
-        showed, and False said (#165)."""
+        there (one autocleanse hid back in sight, as selected); if not, the inbox's highlight hidden, not left on another item (#148).
+        A compacting session's as any other (#383)."""
         key, table = f"{sid}|{ref}", self.items_table
-        hidden = key not in table.rows and (item := self.client.item(sid, ref)) is not None
-        if key in table.locked or (hidden and self.locks(item, self.cutoffs())):   # one autocleanse hid too
-            self.notify(COMPACTING_LOCKED, severity="warning")
-            return False
+        hidden = key not in table.rows and self.client.item(sid, ref) is not None
         self.peeked = None
         if hidden:   # autocleanse hid it (a Landed line, a merged PR): selected, it's back (#235)
             self.select_row(key)
@@ -7078,7 +7032,6 @@ class WheelhouseApp(App):
         table.show_cursor = key in table.rows
         self.select_row(key)
         self.paint_sendbar()
-        return True
 
     def unselect(self, note: str) -> None:
         """A module's pick of something that isn't an item (api.Context.unselect, a PR no
@@ -7259,21 +7212,6 @@ class WheelhouseApp(App):
                 box.quoted = title
                 box.border_title = Content(title) if title else None   # plain: the doc's own text
 
-    def paint_compacting(self) -> None:
-        """Detail dimmed while it shows a locked row's item or conversation (#150): not a new
-        item its session posted while compacting. A module's parts there (a PR's buttons and
-        detail) dim with it, and their buttons are off until it's compacted (#165)."""
-        key = f"{self.viewing}|" if self.viewing else "|".join((self.selected[0], self.selected[1] or "")) \
-            if self.selected else None
-        locked = not self.shown_doc and key in self.items_table.locked
-        if locked == self.compacting_drawn:   # each paint_detail and tick: drawn only when it changes (#268)
-            return
-        self.compacting_drawn = locked
-        self.detail.set_class(locked, "compacting")
-        for part in self.detail_boxes():
-            part.set_class(locked, "compacting")
-            part.disabled = locked
-
     def detail_boxes(self) -> list[Widget]:
         """#detail-more and #detail-bar, where the modules' parts of Detail go: composed once
         with the main screen, so found there once, not by a query of every widget at each
@@ -7283,7 +7221,6 @@ class WheelhouseApp(App):
         return self.detail_parts_found
 
     def paint_detail(self) -> None:
-        self.paint_compacting()
         agent, doc, shown = False, self.selected_doc(), self.shown_doc
         self.detail.doc_key = ("file", shown[0]) if shown else None if self.viewing or not doc else self.selected
         self.detail.doc_path, gone = None, ""
@@ -7993,34 +7930,14 @@ class WheelhouseApp(App):
         return True
 
     def compacting(self) -> set[str]:
-        """The running sessions being compacted (hub.compacting_now, from the store): what locks and
-        dims their items. A stopped host's cycle locks nothing, though its eye stays blue (blue) until
-        the hub's sweep ends it (#165, #249)."""
+        """The running sessions being compacted (hub.compacting_now, from the store): their
+        conversation rows dim and Compact is off. A stopped host's cycle counts for neither, though
+        its eye stays blue (blue) until the hub's sweep ends it (#165, #249)."""
         return {s["id"] for s in self.sessions if compacting_now(s) and self.running(s["id"])}
 
     def blue(self) -> set[str]:
         """The sessions in an operation (hub.operating, #249): their eye is blue, running or not."""
         return {s["id"] for s in self.sessions if operating(s)}
-
-    def cutoffs(self) -> dict[str, int | None]:
-        """Each compacting session's cut-off, from its listed row (Store.sessions serves it as
-        compact_cutoff): the newest item id it had as the compaction started (Store.compact_cut),
-        the same for every app."""
-        return {s["id"]: int(c) if (c := s["compact_cutoff"] if "compact_cutoff" in s.keys() else None) is not None
-                else None for s in self.sessions if s["id"] in self.compacting()}
-
-    @staticmethod
-    def locks(it, cuts: dict) -> bool:
-        """Whether an item of a compacting session (cuts) is locked: at or below its cut-off.
-        One posted since is never locked; without a cut-off, all are. Never a call the session's
-        turn waits on (an open permission, or the host's AskUserQuestion): answering it is allowed
-        during a cycle (#244), or the turn, and the notes ask behind it, would never end."""
-        if it["session_id"] not in cuts:
-            return False
-        if it["status"] == "open" and (it["kind"] == "permission" or models.field(it, "answer") == HOST_QUESTION
-                                       or models.field(it, "host_question")):
-            return False
-        return cuts[it["session_id"]] is None or it["id"] <= cuts[it["session_id"]]
 
     def press(self, sid: str, button: str, ref: str | None = None) -> None:
         """A busy button's action sent: the button off from now (busy_buttons)."""
@@ -8690,12 +8607,6 @@ class WheelhouseApp(App):
                 self.follow(sid)
             self.paint_session_info()
         key = self.items_table.cursor_key()
-        if key is not None and key != self.items_cursor and key in self.items_table.locked:
-            # a compacting session's row: the arrow goes on past it, or back (#150)
-            if (key := self.items_table.unlocked_from(key, self.items_cursor)) is None:
-                return
-            with self.items_table.prevent(DataTable.RowHighlighted):
-                self.items_table.move_cursor(row=self.items_table.get_row_index(key), animate=False)
         if key is not None and key != self.items_cursor:
             self.items_cursor = key
             self.select_row(key)
@@ -8722,9 +8633,6 @@ class WheelhouseApp(App):
     @on(DataTable.RowSelected, "#items")
     def open_thread(self, event: DataTable.RowSelected) -> None:
         self.settle()
-        if event.row_key.value in self.items_table.locked:   # its session is being compacted (#150)
-            self.notify(COMPACTING_LOCKED, severity="warning")
-            return
         sid, ref = event.row_key.value.split("|")
         self.saw(sid, ref or None)
         if ref:
@@ -9232,9 +9140,8 @@ class WheelhouseApp(App):
             return
         found, _, queued, awaiting = self.client.inbox(self.filter_sid)
         busy = queued | awaiting
-        cuts = self.cutoffs()   # a compacting session's rows are locked, its keys ignored (#150)
         picked = [it for it in found if completed(it, busy) and standing(it, busy) == "settled"
-                  and item_key(it) not in self.going and not self.locks(it, cuts)]
+                  and item_key(it) not in self.going]
         families = {item_key(it): self.family(it) for it in picked}
         by_key = {item_key(it): it for it in found}
 
