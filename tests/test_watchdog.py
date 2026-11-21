@@ -173,7 +173,7 @@ def test_an_old_declaration_is_not_named_again(sub):
 def cells(item):
     """The inbox row's status cell for an item, as the app draws it."""
     app = SimpleNamespace(cells_kept={})
-    return WheelhouseApp.item_cells(app, item, None, {}, set(), set(), set(), frozenset(), False, False)[3]
+    return WheelhouseApp.item_cells(app, item, None, {}, set(), set(), set(), frozenset(), False)[3]
 
 
 @pytest.mark.parametrize("then, quiet, desc", [
