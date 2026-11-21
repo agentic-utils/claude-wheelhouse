@@ -84,7 +84,7 @@ BEYOND = "_Older turns are in the transcript:_ `{path}`"
 
 @dataclass
 class Entry:
-    who: str     # you | claude | tool | note | stage | crew | dock (a compaction's, #244, #287)
+    who: str     # you | claude | tool | note | stage | crew | dock (a compaction's, #244, #287) | crash (#381)
     text: str
     at: str = ""  # ISO timestamp, UTC
 
@@ -538,6 +538,8 @@ def entry_block(e: Entry, label: str | None = None) -> tuple[str, str]:
         return "note", f"_{e.text}{_hhmm(e.at)}_"
     if e.who in ("stage", "dock"):   # plain Text, never Markdown (#244): the app renders it as is
         return e.who, e.text
+    if e.who == "crash":   # plain Text too: an error's own words (#381)
+        return e.who, f"{e.text}{_hhmm(e.at)}"
     text = hard_breaks(e.text) if e.who == "you" else e.text
     return e.who, f"**{label or e.who}**{_hhmm(e.at)}\n\n{text}"
 

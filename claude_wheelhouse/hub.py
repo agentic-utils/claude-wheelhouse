@@ -92,6 +92,21 @@ VERBS = {
 UNPARKED_RUNNING = "migrated.unparked-running"
 SDK_USAGE_EVERY = 10   # seconds between looks for an SDK session's plan usage reading
 RELAUNCH_WAIT = 30   # seconds a host has to stop for Relaunch before it gives up and says so
+# a host that crashed (#381) is relaunched by the hub (Hub.relaunch_crashed), at most CRASH_RELAUNCHES
+# times in CRASH_WINDOW seconds: past that it stays stopped. One found more than CRASH_FRESH seconds
+# after (the wheelhouse wasn't running) is left for the person, as any dead host is
+CRASH_RELAUNCHES = 3
+CRASH_WINDOW = 10 * 60
+CRASH_FRESH = 5 * 60
+CRASH_LINE = "✖ The host crashed: {why}"
+CRASH_RELAUNCHED = "Relaunched automatically, and told what happened."
+CRASH_GAVE_UP = (f"✖ Not relaunched: the host crashed {CRASH_RELAUNCHES + 1} times in {CRASH_WINDOW // 60} minutes, "
+                 "so it stays stopped. Relaunch it once the cause is fixed (hosts/{sid}.log).")
+CRASH_LEFT = "Not relaunched automatically: {why}."
+# the relaunched session's note: the turn the crash cut off is lost, Claude Code with it
+CRASH_NOTE = ("Your wheelhouse host crashed at {at} and was relaunched automatically: {why}. The turn under way "
+              "then was cut off, so a tool call or command in flight may or may not have finished. Check where "
+              "you had got to, then carry on with what you were doing.")
 AGENTS_FOLLOWED = 2   # subagent conversations followed at once: the inbox's and a full screen's
 DOCS_KEPT = 4   # docs whose last read the hub keeps (Hub.document), the newest asked for
 # A host's restart writes its whole context to the prompt cache again: past this many
@@ -147,6 +162,18 @@ def compaction_entries(stages, active: bool, at: float | None = None) -> list:
     due = [excerpt for when, excerpt in compactor.schedule(cid, windows, scenes[cid]) if when <= at]
     out.append(transcript.Entry("dock", compactor.dock_text(scenes[cid], st["state"], epoch(st["at"]), cid,
                                                             due[-1] if due else ()), st["at"]))
+    return out
+
+
+def crash_entries(crashes) -> list:
+    """A session's host crashes (#381) as conversation entries, placed by time among the
+    transcript's: each crash, and what the hub did about it once it has."""
+    out = []
+    for c in crashes:
+        out.append(transcript.Entry("crash", CRASH_LINE.format(why=c["why"]), c["at"]))
+        if c["outcome"]:
+            out.append(transcript.Entry("crash" if c["outcome"].startswith("✖") else "note", c["outcome"],
+                                        c["outcome_at"]))
     return out
 
 
@@ -381,7 +408,8 @@ class Hub:
         # a monotonic deadline and the stopped host, (pid, start time). Kept in the store too
         # (relaunch_under_way), so a hub started again carries on those an earlier one began
         # in time. One past its deadline (lapsed: the wheelhouse was down, or the machine off)
-        # is never started again: the wheelhouse never restores a dead host by itself
+        # is never started again: the wheelhouse restores a dead host by itself only after a
+        # crash (relaunch_crashed)
         under_way = self.store.relaunches()
         self.relaunching: dict[str, tuple[float, tuple]] = {
             sid: (time.monotonic() + deadline - time.time(), host) for sid, (deadline, host, _) in under_way.items()}
@@ -924,6 +952,50 @@ class Hub:
                 self.announce(f"{display_name(s)}'s host didn't stop within {RELAUNCH_WAIT}s, so it wasn't "
                               f"relaunched: see hosts/{sid}.log", "error")
         self.after_turns()
+        self.relaunch_crashed()
+
+    def relaunch_crashed(self) -> None:
+        """Each host crash (#381) acted on once its host has gone: relaunched as a host, as it
+        ran, and told what happened in a note (CRASH_NOTE). Not when the person's intent says
+        otherwise (parked, asked to park or end, a Relaunch under way), when it was found late
+        (CRASH_FRESH), nor past CRASH_RELAUNCHES in CRASH_WINDOW: a crash loop stays stopped. A
+        host still alive is waited for. What was done is the crash's line in the conversation;
+        the hub does this by itself, so it goes to every listener too."""
+        for c in self.store.crashes(unsettled=True):
+            sid = c["session_id"]
+            s = self.by_id.get(sid)
+            if s is None:
+                continue
+            age = time.time() - epoch(c["at"])
+            alive = liveness.is_alive(s["claude_pid"], s["claude_start"], s["boot_id"])
+            if alive and age < CRASH_FRESH:
+                continue
+            why = ("it was parked" if s["parked"] else f"it was asked to {requested(s)}" if requested(s)
+                   else "a Relaunch was under way" if sid in self.relaunching
+                   else "it was running again" if alive
+                   else f"it was found {age // 60:.0f} minutes later" if age >= CRASH_FRESH else None)
+            if why is not None:
+                self.store.settle_crash(c["rowid"], CRASH_LEFT.format(why=why))
+                self.emit(Event("landed", sid=sid))
+                continue
+            since = time.time() - CRASH_WINDOW
+            if sum(x["relaunched"] and epoch(x["at"]) >= since for x in self.store.crashes(sid)) >= CRASH_RELAUNCHES:
+                self.store.settle_crash(c["rowid"], CRASH_GAVE_UP.format(sid=sid))
+                self.announce(f"{display_name(s)}'s host crashed again: {c['why']}. Not relaunched: it crashed "
+                              f"{CRASH_RELAUNCHES + 1} times in {CRASH_WINDOW // 60} minutes", "error")
+            else:
+                try:
+                    launch.open_host(self.store, sid, notice=False)
+                except Exception as e:   # still starting, or a launch failure: said, left stopped
+                    self.store.fail_launch(sid)
+                    self.store.settle_crash(c["rowid"], f"✖ Not relaunched: {e}")
+                    self.announce(f"{display_name(s)}'s host crashed: {c['why']}. Not relaunched: {e}", "error")
+                else:
+                    self.store.notice(sid, CRASH_NOTE.format(at=c["at"][11:16] + "Z", why=c["why"]))
+                    self.store.settle_crash(c["rowid"], CRASH_RELAUNCHED, relaunched=True)
+                    self.statuses[sid] = liveness.status(self.row(sid), waking=self.waking)   # not dead for a tick
+                    self.announce(f"{display_name(s)}'s host crashed: {c['why']}. Relaunched it", "error")
+            self.emit(Event("landed", sid=sid))
 
     def in_turn(self, s) -> bool | None:
         """Whether a session is in a turn, for Relaunch all's wait (after_turn, #378), read from the
@@ -1936,7 +2008,7 @@ class Hub:
         # sent, not yet passed on: the wheelhouse's own notices aren't the person's words
         sending = tuple(m["body"] for m in self.store.pending(sid) if m["item_ref"] is None and m["kind"] != "notice")
         tab = None if runner(s) == "sdk" and not s["shell"] else launch.tab_title(s)
-        stages = compaction_entries(self.store.stages(sid), compacting_now(s))
+        stages = compaction_entries(self.store.stages(sid), compacting_now(s)) + crash_entries(self.store.crashes(sid))
         key = (s["name"] or short(sid), tab, follower.seen, depth, queued, sending, tuple(stages))
         if follower.blocks_key != key:   # parsed once per change, not on every refresh tick
             more, capped = follower.more(depth), depth >= transcript.MAX_OLDER   # read back no further there

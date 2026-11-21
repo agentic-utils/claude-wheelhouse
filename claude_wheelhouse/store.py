@@ -372,6 +372,18 @@ CREATE TABLE IF NOT EXISTS compaction_stages (
     note       TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS compaction_stages_session ON compaction_stages (session_id, at);
+-- each crash of a session's host (#381), for its conversation, and what the hub did about it:
+-- outcome is NULL until the hub has acted, then the line the conversation shows. relaunched: 1
+-- if the hub started the host again (the crash loop's count, Hub.relaunch_crashed)
+CREATE TABLE IF NOT EXISTS host_crashes (
+    session_id TEXT NOT NULL,
+    at         TEXT NOT NULL,
+    why        TEXT NOT NULL,
+    outcome    TEXT,
+    outcome_at TEXT,
+    relaunched INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS host_crashes_session ON host_crashes (session_id, at);
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -1213,6 +1225,26 @@ class Store:
         return self._all("SELECT cycle_id, state, at, origin, note FROM compaction_stages WHERE session_id = ? "
                          "ORDER BY at, rowid", (sid,))
 
+    # host crashes (#381)
+
+    def record_crash(self, sid: str, why: str) -> None:
+        """The host stopped on an error (Host.run): kept for the conversation, and for the hub to act on."""
+        with self.tx() as db:
+            db.execute("INSERT INTO host_crashes (session_id, at, why) VALUES (?, ?, ?)", (sid, stamp(), why))
+
+    def crashes(self, sid: str | None = None, unsettled: bool = False) -> list[sqlite3.Row]:
+        """A session's host crashes (every session's for None), oldest first; unsettled: only
+        those the hub has yet to act on."""
+        where = " AND ".join(w for w, on in (("session_id = ?", sid is not None), ("outcome IS NULL", unsettled)) if on)
+        return self._all(f"SELECT rowid, * FROM host_crashes {'WHERE ' + where if where else ''} ORDER BY at, rowid",
+                         (sid,) if sid is not None else ())
+
+    def settle_crash(self, rowid: int, outcome: str, relaunched: bool = False) -> None:
+        """What the hub did about a crash: the line the conversation shows."""
+        with self.tx() as db:
+            db.execute("UPDATE host_crashes SET outcome = ?, outcome_at = ?, relaunched = ? WHERE rowid = ?",
+                       (outcome, stamp(), int(relaunched), rowid))
+
     def start_compaction(self, sid: str, origin: str, state: str = "requested", then: str | None = None,
                          tokens: int | None = None) -> str | None:
         """The host starts a cycle of its own (the quiet mark's, Park's Compact first, Claude Code's
@@ -1655,6 +1687,7 @@ class Store:
         with self.tx() as db:
             db.execute("DELETE FROM sessions WHERE id = ?", (sid,))
             db.execute("DELETE FROM compaction_stages WHERE session_id = ?", (sid,))
+            db.execute("DELETE FROM host_crashes WHERE session_id = ?", (sid,))
             # its PR merges held for a resume that won't come (steps.held_key), its compaction's cut-off
             db.execute("DELETE FROM settings WHERE key IN (?, ?)", (f"step.held.{sid}", COMPACT_CUTOFF + sid))
 
