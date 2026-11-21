@@ -2951,8 +2951,8 @@ class DocEditor(FollowsCursor):
         """Opened again on the doc at `path`, which its viewer shows, with the edits kept for
         it, the cursor where it was: Keep editing, once the selection has gone back to it
         (WheelhouseApp.leaving). came: a module's doc's path and title, gone back to again if
-        the selection moves off. One that couldn't be gone back to (gone, its session
-        compacting) says where its edits are, never leaving them unsaid."""
+        the selection moves off. One that couldn't be gone back to (gone) says where its
+        edits are, never leaving them unsaid."""
         if path not in self.edits or not self.live:
             return
         if self.view.doc_path != path:

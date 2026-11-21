@@ -541,6 +541,7 @@ TOUR_AT = "tour_at"   # settings: where a tour under way, or paused, resumes ("t
 # settings: the one-off move to the tour's record (.plan/tutorial-overhaul.md, Migration) has run
 TOUR_MIGRATED = "migrated_tour"
 RETIRED_TUTORIAL_SEEN = "tutorial_seen"   # settings: the old checklist's record, deleted on open
+RETIRED_CUTOFF = "compact.cutoff."   # settings: the #150 lock's cut-offs, by session id (#383), deleted on open and at an end
 # settings: when this database was first opened by code that tracks subagents. Subagents
 # that had finished by then (or by when their session joined) get no item (#69)
 AGENTS_SINCE = "agents_since"
@@ -776,6 +777,7 @@ class Store:
                 db.execute("INSERT INTO settings (key, value) VALUES (?, '1')", (TOUR_MIGRATED,))
             # the old tutorial checklist's record (#78 stage 3): the tour keeps its own steps in the app
             db.execute("DELETE FROM settings WHERE key = ?", (RETIRED_TUTORIAL_SEEN,))
+            db.execute("DELETE FROM settings WHERE key LIKE ? || '%'", (RETIRED_CUTOFF,))
 
     @contextmanager
     def tx(self):
@@ -1669,8 +1671,9 @@ class Store:
             db.execute("DELETE FROM sessions WHERE id = ?", (sid,))
             db.execute("DELETE FROM compaction_stages WHERE session_id = ?", (sid,))
             db.execute("DELETE FROM host_crashes WHERE session_id = ?", (sid,))
-            # its PR merges held for a resume that won't come (steps.held_key)
-            db.execute("DELETE FROM settings WHERE key = ?", (f"step.held.{sid}",))
+            # its PR merges held for a resume that won't come (steps.held_key), and a cut-off older
+            # code may still write (RETIRED_CUTOFF)
+            db.execute("DELETE FROM settings WHERE key IN (?, ?)", (f"step.held.{sid}", RETIRED_CUTOFF + sid))
 
     # items
 
@@ -2573,18 +2576,18 @@ class Store:
         """The sessions with drafts held for a compaction's end (after_cycle)."""
         return {r[0] for r in self._all("SELECT DISTINCT session_id FROM messages WHERE draft = 1 AND after_cycle = 1")}
 
-    def send_held(self, sid: str, send: bool = True) -> int:
+    def send_held(self, sid: str) -> int:
         """Once the session's compaction has ended (completed, failed or cancelled) and no other
         operation is under way: its held drafts sent, as one batch, alone (a queued answer of
-        Queued mode's waits for Send as ever). send False (the session isn't running): let go,
-        left in its queue. How many went; 0, still held, while it's busy."""
+        Queued mode's waits for Send as ever). The hub calls it only while the session runs, so
+        one that stopped mid-cycle keeps them held until it's back (sweep_held). How many went;
+        0, still held, while it's busy."""
         with self.tx() as db:
             s = db.execute("SELECT * FROM sessions WHERE id = ?", (sid,)).fetchone()
-            if s is None or send and operating(s) is not None:
+            if s is None or operating(s) is not None:
                 return 0
-            went = db.execute("UPDATE messages SET after_cycle = 0, draft = ? WHERE session_id = ? AND draft = 1 "
-                              "AND after_cycle = 1", (int(not send), sid)).rowcount
-        return went if send else 0
+            return db.execute("UPDATE messages SET after_cycle = 0, draft = 0 WHERE session_id = ? AND draft = 1 "
+                              "AND after_cycle = 1", (sid,)).rowcount
 
     def drafts(self, sid: str | None = None) -> list[sqlite3.Row]:
         return self._all("SELECT * FROM messages WHERE draft = 1 AND (? IS NULL OR session_id = ?) ORDER BY id",

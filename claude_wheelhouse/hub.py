@@ -520,10 +520,11 @@ class Hub:
 
     def sweep_held(self) -> None:
         """What the person sent mid-compaction (Send now, Immediate, Send: after_cycle), sent once
-        the cycle has ended, completed, failed or cancelled, and nothing else is under way (#383);
-        a session not running has it let go, left in its queue for its wake."""
+        the cycle has ended, completed, failed or cancelled, and nothing else is under way (#383).
+        A session not running (stopped mid-cycle, parked) keeps it held until it runs again: a
+        relaunch, by hand or after a crash, or an unpark."""
         for sid in self.store.held():
-            if sid in self.statuses and (n := self.store.send_held(sid, self.statuses[sid] in RUNNING)):
+            if self.statuses.get(sid) in RUNNING and (n := self.store.send_held(sid)):
                 self.announce(f"sent {self.sent_note(sid, n)}: its compaction is over", sid=sid)
 
     def sweep_compactions(self) -> None:
@@ -1447,7 +1448,7 @@ class Hub:
         """Every queue but a dead or parked session's, which stays queued until it's relaunched
         or unparked (#62)."""
         queued = dict.fromkeys(m["session_id"] for m in self.store.drafts())
-        sent, held, refused = [], [], []
+        sent, holding, refused = [], [], []
         for sid in queued:
             if self.dead(sid):
                 continue
@@ -1456,12 +1457,12 @@ class Hub:
                     sent.append((sid, n))
             except Busy as e:   # its queue waits for the operation's end (#244, #249), a compaction's held (#383)
                 if e.kind == "compact" and self.store.hold_drafts(sid):
-                    held.append(CYCLE_HELD.format(name=display_name(self.row(sid))))
+                    holding.append(CYCLE_HELD.format(name=display_name(self.row(sid))))
                 else:
                     refused.append(str(e))
-        if sent or held:
+        if sent or holding:
             done = Done().say("sent " + "; ".join(self.sent_note(sid, n) for sid, n in sent)) if sent else Done()
-            for why in held:
+            for why in holding:
                 done.say(why)
             for why in refused:
                 done.say(why, "warning")

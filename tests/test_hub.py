@@ -1913,6 +1913,51 @@ def test_send_all_holds_a_compacting_sessions_queue_and_names_it(hub, store, sid
     assert not store.drafts() and store.pending(sid), "sent as the cycle ended"
 
 
+@pytest.mark.parametrize("parked, desc", [
+    (False, "relaunched (by hand, or after a crash, #381)"),
+    (True, "parked as it stopped: held until unparked and running"),
+])
+def test_a_held_send_waits_out_a_host_that_stops_mid_cycle(hub, store, sid, monkeypatch, parked, desc):
+    """#383 review: a session that stops mid-compaction (its cycle failed by the sweep) keeps
+    what the person sent meanwhile held, never let go into its queue, and sends it once, as it
+    runs again."""
+    host(store, sid)
+    life = {"now": "live"}
+    monkeypatch.setattr(liveness, "status", lambda s, **kw: life["now"])
+    in_cycle(store, sid)
+    hub.refresh()
+    assert hub.submit((sid, None), "use Postgres", now=True).ok, desc
+    events = []
+    hub.listen(events.append)
+    life["now"] = "dead"
+    if parked:
+        store.set_parked(sid, True)
+    for _ in range(2):
+        hub.refresh()
+    assert store.compaction(sid)["state"] == "failed", f"{desc}: the sweep ended the cycle"
+    assert store.held() == {sid} and not store.pending(sid), f"{desc}: still held while it isn't running"
+    if parked:
+        store.set_parked(sid, False)
+    life["now"] = "live"
+    for _ in range(2):
+        hub.refresh()
+    assert [m["body"] for m in store.pending(sid)] == ["use Postgres"] and not store.drafts(sid), f"{desc}: sent once"
+    assert [e.text for e in events] == ["sent 1 to demo: its compaction is over"], f"{desc}: {[e.text for e in events]}"
+
+
+def test_the_old_cut_offs_go_on_open_and_at_an_end(db_file, store, sid):
+    """#383: the #150 lock's settings rows (RETIRED_CUTOFF), which older code may still write."""
+    from claude_wheelhouse.store import RETIRED_CUTOFF
+    other = store.create_session("/tmp", name="other")
+    for s in (sid, other):
+        store.set_setting(RETIRED_CUTOFF + s, "3")
+    Store(db_file)
+    assert store.setting(RETIRED_CUTOFF + sid) is None and store.setting(RETIRED_CUTOFF + other) is None, "on open"
+    store.set_setting(RETIRED_CUTOFF + sid, "3")
+    store.end(sid)
+    assert store.setting(RETIRED_CUTOFF + sid) is None, "at its end"
+
+
 def test_an_answer_to_a_waiting_permission_goes_at_once_whatever_the_mode(hub, store, sid):
     ref = store.post_item(sid, "question", "which?")
     store.set_answer(sid, ref, '{"from": "AskUserQuestion"}')
