@@ -103,6 +103,8 @@ CRASH_RELAUNCHED = "Relaunched automatically, and told what happened."
 CRASH_GAVE_UP = (f"✖ Not relaunched: the host crashed {CRASH_RELAUNCHES + 1} times in {CRASH_WINDOW // 60} minutes, "
                  "so it stays stopped. Relaunch it once the cause is fixed (hosts/{sid}.log).")
 CRASH_LEFT = "Not relaunched automatically: {why}."
+# a host that died with no crash of its own recorded (killed, or out of memory): seen by the hub (watch_hosts)
+DIED = "the host process died without a word (killed, or out of memory?)"
 # the relaunched session's note: the turn the crash cut off is lost, Claude Code with it
 CRASH_NOTE = ("Your wheelhouse host crashed at {at} and was relaunched automatically: {why}. The turn under way "
               "then was cut off, so a tool call or command in flight may or may not have finished. Check where "
@@ -404,6 +406,7 @@ class Hub:
         # its turn ends (after_turns, #378), with whether it may come back in a tab. Kept in memory
         # only: a hub started again forgets them, and their ⟳ stays for Relaunch all again
         self.after_turn: dict[str, bool] = {}
+        self.hosts_seen: set[str] = set()   # hosted sessions seen running by this hub (watch_hosts)
         # sessions whose host Relaunch has stopped: started again once it has gone. Each has
         # a monotonic deadline and the stopped host, (pid, start time). Kept in the store too
         # (relaunch_under_way), so a hub started again carries on those an earlier one began
@@ -952,7 +955,28 @@ class Hub:
                 self.announce(f"{display_name(s)}'s host didn't stop within {RELAUNCH_WAIT}s, so it wasn't "
                               f"relaunched: see hosts/{sid}.log", "error")
         self.after_turns()
+        self.watch_hosts()
         self.relaunch_crashed()
+
+    def watch_hosts(self) -> None:
+        """A host this hub saw running that has died without recording a crash (killed, or out
+        of memory): recorded as one (DIED), for relaunch_crashed. A host's own stop leaves its
+        activity line empty if deliberate, "stopped: ..." if a crash it recorded, so a line left
+        as it ran says it died unwarned. Only a death seen by this hub: one dead at its start
+        (after a reboot) is the person's to relaunch. Parked, asked to park or end, being
+        relaunched, or out in a shell tab: never a crash."""
+        for s in self.sessions:
+            sid, st = s["id"], self.statuses.get(s["id"])
+            if runner(s) != "sdk" or s["shell"]:
+                self.hosts_seen.discard(sid)
+            elif st in ("live", "stalled"):
+                self.hosts_seen.add(sid)
+            elif st == "dead" and sid in self.hosts_seen:
+                self.hosts_seen.discard(sid)
+                activity = s["activity"] or ""
+                if (activity and not activity.startswith("stopped") and not s["parked"] and not requested(s)
+                        and sid not in self.relaunching and not self.store.crashes(sid, unsettled=True)):
+                    self.store.record_crash(sid, DIED)
 
     def relaunch_crashed(self) -> None:
         """Each host crash (#381) acted on once its host has gone: relaunched as a host, as it
@@ -963,15 +987,16 @@ class Hub:
         the hub does this by itself, so it goes to every listener too."""
         for c in self.store.crashes(unsettled=True):
             sid = c["session_id"]
-            s = self.by_id.get(sid)
+            s = self.store.session(sid)   # read now: a launch since the refresh is starting already
             if s is None:
                 continue
             age = time.time() - epoch(c["at"])
             alive = liveness.is_alive(s["claude_pid"], s["claude_start"], s["boot_id"])
             if alive and age < CRASH_FRESH:
                 continue
+            launching = liveness.status(s) == "starting" or (operating(s) or ("",))[0] in ("relaunch", "start")
             why = ("it was parked" if s["parked"] else f"it was asked to {requested(s)}" if requested(s)
-                   else "a Relaunch was under way" if sid in self.relaunching
+                   else "a Relaunch was under way" if sid in self.relaunching or launching
                    else "it was running again" if alive
                    else f"it was found {age // 60:.0f} minutes later" if age >= CRASH_FRESH else None)
             if why is not None:
@@ -991,7 +1016,10 @@ class Hub:
                     self.store.settle_crash(c["rowid"], f"✖ Not relaunched: {e}")
                     self.announce(f"{display_name(s)}'s host crashed: {c['why']}. Not relaunched: {e}", "error")
                 else:
-                    self.store.notice(sid, CRASH_NOTE.format(at=c["at"][11:16] + "Z", why=c["why"]))
+                    told = any(m["kind"] == "notice" and m["body"].startswith(CRASH_NOTE[:30])
+                               for m in self.store.pending(sid))
+                    if not told:   # one note waiting is enough: a start-failure loop never stacks them
+                        self.store.notice(sid, CRASH_NOTE.format(at=c["at"][11:16] + "Z", why=c["why"]))
                     self.store.settle_crash(c["rowid"], CRASH_RELAUNCHED, relaunched=True)
                     self.statuses[sid] = liveness.status(self.row(sid), waking=self.waking)   # not dead for a tick
                     self.announce(f"{display_name(s)}'s host crashed: {c['why']}. Relaunched it", "error")

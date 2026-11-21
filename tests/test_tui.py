@@ -639,6 +639,7 @@ LONG_SYNOPSIS = " ".join(f"Sentence {n} of the synopsis says what the session is
     ("sdk", True, "running Bash: " + "x" * 300, "running Bash: " + "x" * 300, "a long one, cropped to its two rows"),
     ("sdk", False, "thinking", "", "none while it isn't running"),
     ("sdk", False, "stopped: Claude Code exited", "stopped: Claude Code exited", "but why its host crashed (#381)"),
+    ("sdk", False, "stopped", "", "an older host's bare stop: not a crash, not shown"),
     ("tab", True, "thinking", "", "none for a tab, which has its own terminal"),
 ])
 async def test_the_activity_has_its_own_rows(store, tmp_path, monkeypatch, runner_, live, activity, after, desc):
@@ -655,7 +656,7 @@ async def test_the_activity_has_its_own_rows(store, tmp_path, monkeypatch, runne
         box, scroll = app.query_one("#session-info"), app.query_one("#session-info-scroll")
         line, text = app.query_one("#session-activity"), app.query_one("#session-info-text")
         assert (app._activity_text, bool(activity) and activity in app._info_text) == (after, False), desc
-        assert (line.content.style == tui.VOICE["crash"]) == after.startswith("stopped"), f"{desc}: a crash in red"
+        assert (line.content.style == tui.VOICE["crash"]) == after.startswith("stopped:"), f"{desc}: a crash in red"
         rows = 2 if runner_ == "sdk" else 0   # a tab's session has no activity, so no rows for one
         assert line.region.height == rows and (not rows or line.region.y == scroll.region.bottom), \
             f"{desc}: {rows} rows under the scroll"

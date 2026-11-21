@@ -8478,7 +8478,7 @@ class WheelhouseApp(App):
         if activity != getattr(self, "_activity_text", None):
             self._activity_text = activity
             # plain: the session's own words, never markup. A host's crash in red (#381)
-            self.session_activity.update(Text(activity, style=VOICE["crash"] if activity.startswith("stopped") else ""))
+            self.session_activity.update(Text(activity, style=VOICE["crash"] if activity.startswith("stopped:") else ""))
         before = [b.display for b in self.session_controls]
         for grid, buttons in ((self.session_buttons, self.lifecycle_buttons(s)),
                               (self.conversation_buttons, self.controls(s))):
@@ -8536,7 +8536,7 @@ class WheelhouseApp(App):
         """What a session run in the wheelhouse is doing now, for the line under its description;
         once it has stopped, why, if its host crashed (#381): only a crash leaves a reason."""
         activity = s["activity"] or ""
-        return activity if runner(s) == "sdk" and (self.running(s["id"]) or activity.startswith("stopped")) else ""
+        return activity if runner(s) == "sdk" and (self.running(s["id"]) or activity.startswith("stopped:")) else ""
 
     # selection
 

@@ -151,17 +151,17 @@ def crash(store, sid, ago=0.0, relaunched=None):
 
 
 @pytest.mark.parametrize("setup, launched, line, note, severity, desc", [
-    (lambda s, sid, h: None, ["host"], hub_mod.CRASH_RELAUNCHED, True, "error", "a fresh crash: relaunched and told"),
-    (lambda s, sid, h: [crash(s, sid, 60 * k, True) for k in (1, 2, 3)], [], "✖ Not relaunched: the host crashed 4",
+    (lambda s, sid, h, mp: None, ["host"], hub_mod.CRASH_RELAUNCHED, True, "error", "a fresh crash: relaunched and told"),
+    (lambda s, sid, h, mp: [crash(s, sid, 60 * k, True) for k in (1, 2, 3)], [], "✖ Not relaunched: the host crashed 4",
      False, "error", "a fourth crash in 10 minutes: left stopped, said in red"),
-    (lambda s, sid, h: [crash(s, sid, 60 * k, True) for k in (1, 2, 11)], ["host"], hub_mod.CRASH_RELAUNCHED, True,
+    (lambda s, sid, h, mp: [crash(s, sid, 60 * k, True) for k in (1, 2, 11)], ["host"], hub_mod.CRASH_RELAUNCHED, True,
      "error", "relaunches older than the window don't count"),
-    (lambda s, sid, h: s.set_parked(sid, True), [], "Not relaunched automatically: it was parked", False, None,
+    (lambda s, sid, h, mp: s.set_parked(sid, True), [], "Not relaunched automatically: it was parked", False, None,
      "a parked session isn't brought back"),
-    (lambda s, sid, h: s.request(sid, "end"), [], "Not relaunched automatically: it was asked to end", False, None,
-     "nor one asked to end"),
-    (lambda s, sid, h: h.relaunching.update({sid: (float("inf"), (4242, 1))}), [], "a Relaunch was under way",
+    (lambda s, sid, h, mp: h.relaunching.update({sid: (float("inf"), (4242, 1))}), [], "a Relaunch was under way",
      False, None, "a Relaunch carries it on itself"),
+    (lambda s, sid, h, mp: mp.setattr(liveness, "status", lambda row, **kw: "starting"), [], "a Relaunch was under way",
+     False, None, "a launch already starting (the person's Relaunch): left to it, never failed"),
 ])
 def test_a_crashed_host_is_relaunched_and_told(hub, store, sid, heard, monkeypatch, setup, launched, line, note,
                                                severity, desc):
@@ -171,7 +171,7 @@ def test_a_crashed_host_is_relaunched_and_told(hub, store, sid, heard, monkeypat
     monkeypatch.setattr(launch, "open_host", lambda store, sid, notice=True: calls.append("host" if not notice else "x"))
     crash(store, sid)
     hub.refresh()
-    setup(store, sid, hub)
+    setup(store, sid, hub, monkeypatch)
     hub.refresh()
     hub.relaunch_crashed()
     assert calls == launched, desc
@@ -182,6 +182,45 @@ def test_a_crashed_host_is_relaunched_and_told(hub, store, sid, heard, monkeypat
     assert [sev for text, sev in heard if "crashed" in text] == ([severity] if severity else []), f"{desc}: {heard}"
     hub.relaunch_crashed()
     assert calls == launched, f"{desc}: acted on once"
+
+
+def test_a_crash_loops_note_waits_once(hub, store, sid, monkeypatch):
+    host(store, sid)
+    monkeypatch.setattr(liveness, "is_alive", lambda *a: False)
+    monkeypatch.setattr(launch, "open_host", lambda store, sid, notice=True: None)
+    for _ in range(2):   # Claude Code not starting, twice: its note never claimed between
+        crash(store, sid)
+        hub.refresh()
+        hub.relaunch_crashed()
+    assert sum(m["kind"] == "notice" for m in store.pending(sid)) == 1, [dict(c) for c in store.crashes(sid)]
+    assert [c["relaunched"] for c in store.crashes(sid)] == [1, 1], "both relaunched"
+
+
+@pytest.mark.parametrize("before, then, activity, crashed, desc", [
+    ("live", "dead", "running Bash: make test", True, "killed mid-turn (SIGKILL, out of memory): a crash"),
+    ("live", "dead", "idle", True, "killed while idle: a crash too"),
+    ("dead", "dead", "running Bash: make test", False, "dead at the hub's start (a reboot): the person's to relaunch"),
+    ("live", "dead", "", False, "a deliberate stop leaves its line empty"),
+    ("live", "dead", "stopped: boom", False, "a crash the host recorded itself: not twice"),
+    ("live", "park", "idle", False, "parked: never a crash"),
+])
+def test_a_host_that_dies_unwarned_is_a_crash(hub, store, sid, monkeypatch, before, then, activity, crashed, desc):
+    host(store, sid)
+    store.set_activity(sid, activity)
+    state = {"st": before}
+    monkeypatch.setattr(liveness, "status", lambda s, **kw: state["st"])
+    monkeypatch.setattr(liveness, "is_alive", lambda *a: state["st"] == "live")
+    calls = []
+    monkeypatch.setattr(launch, "open_host", lambda store, sid, notice=True: calls.append("host"))
+    hub.refresh()
+    hub.finish_relaunches()
+    if then == "park":
+        store.set_parked(sid, True)
+    state["st"] = "dead"
+    hub.refresh()
+    hub.finish_relaunches()
+    assert [c["why"] for c in store.crashes(sid) if c["why"] == hub_mod.DIED] == ([hub_mod.DIED] if crashed else []), desc
+    assert calls == (["host"] if crashed else []), f"{desc}: relaunched as any crash is"
 
 
 @pytest.mark.parametrize("ago, alive, settled, desc", [
