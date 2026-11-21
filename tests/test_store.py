@@ -1113,39 +1113,6 @@ def test_a_docs_new_replies(store, sid, tmp_path, kind, replies, seen, left, des
     assert store.item(sid, ref)["new_replies"] == left, desc
 
 
-@pytest.mark.parametrize("steps_, cut, desc", [
-    ([("command",), ("post",)], "1", "Compact pressed: the newest item then, not one posted since"),
-    ([("activity", "compacting after 8 quiet hours: collecting notes"), ("post",)], "1",
-     "the host's own compaction: its first line marks it"),
-    ([("command",), ("post",), ("activity", "compacting: collecting notes"), ("activity", "compacting")], "1",
-     "kept through the compaction's lines"),
-    ([("command",), ("post",), ("cancelled",), ("command",)], "3",
-     "pressed again after a cycle: from then (its task item, T2, and Q1 posted before)"),
-    ([("command",), ("cancelled",)], None, "a cycle's end: let go"),
-    ([("command",), ("activity", "idle · compacted")], None, "compacted: let go"),
-    ([("command",), ("activity", "interrupted")], None, "interrupted: let go"),
-    ([("command",), ("activity", "thinking")], "1", "its notes' turn starting: kept"),
-    ([("command",), ("end",)], None, "forgotten: let go"),
-])
-def test_a_compactions_cut_off(store, sid, steps_, cut, desc):
-    from claude_wheelhouse.store import COMPACT_CUTOFF
-    store.post_item(sid, "task", "there before")
-    for step in steps_:
-        if step[0] == "command":
-            store.command(sid, "compact")
-        elif step[0] == "post":
-            store.post_item(sid, "question", "since")
-        elif step[0] == "activity":
-            store.set_activity(sid, step[1])
-        elif step[0] == "cancelled":
-            store.move_compaction(sid, store.compaction(sid)["id"], "cancelled")
-        else:
-            store.end(sid)
-    assert store.setting(COMPACT_CUTOFF + sid) == cut, desc
-    if cut is not None:
-        assert next(s for s in store.sessions() if s["id"] == sid)["compact_cutoff"] == cut, f"{desc}: on its row"
-
-
 @pytest.mark.parametrize("waiting, promoted, plan, desc", [
     (None, True, ("keep the plan", "compact"), "nothing waiting: the Compact command, with the keep text"),
     ("interrupt", False, (None, None), "the person's command waiting: left alone"),
@@ -1328,8 +1295,6 @@ def test_the_cycles_task_item_follows_it(store, sid, moves, status, note, desc):
     assert item["status"] == status, desc
     assert [m["body"] for m in store.thread(sid, c["item"])][-1] == note, desc
     assert [s["state"] for s in store.stages(sid)] == ["requested", *[m[0] if isinstance(m, tuple) else m for m in moves]], desc
-    assert store.setting("compact.cutoff." + sid) is None or int(store.setting("compact.cutoff." + sid)) < int(
-        item["id"]), f"{desc}: posted after the cut-off, never locked"
 
 
 def test_the_session_never_sees_its_compaction_task(store, sid):

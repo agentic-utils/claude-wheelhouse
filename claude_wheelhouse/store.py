@@ -142,9 +142,7 @@ PROTOCOL_VERSION = 32
 # confused one can't loop: seconds since its last accepted request
 MODEL_COMPACT_GAP = 30 * 60
 PARKED_UNCOMPACTED = "Parked without compacting"   # the decision a session's reason not to compact is posted as
-# a compaction's cut-off (Store.compact_cut), in settings by session id, and the activity lines
-# that end one: the host's idle and interrupted lines, and its errors and stops
-COMPACT_CUTOFF = "compact.cutoff."
+# the activity lines that end a turn: the host's idle and interrupted lines, and its errors and stops
 COMPACT_ENDS = ("idle", "interrupted", "error", "stopped")
 DRAFTS_VERSION = 2   # the first that holds a queued answer until it is sent
 # How a session's answers go until the person toggles it: "queued" holds them until sent,
@@ -206,6 +204,8 @@ BUSY_REFUSED = "{name} is busy {doing}: {action} once it's done, or Interrupt to
 # said to the session itself, refusing its own call mid-operation
 SESSION_BUSY = "this session is busy {doing}: call {call} again once that has finished"
 NOT_THE_SESSIONS = "{ref} is the wheelhouse's own record of a compaction: there's no session to send it to"
+# said of a send held until a compaction ends (#383): queued, and sent by the hub once it has
+CYCLE_HELD = "{name} is compacting: sent once it's done"
 # the cycle's task item (#244), the wheelhouse's own: never in what the session is told or lists
 COMPACTION_TASK = '{"from": "compaction"}'
 # the task item's status at each state, and its note there ({origin}, {why}: stage notes)
@@ -526,7 +526,10 @@ ADDED_COLUMNS = [("sessions", "end_requested_at", "TEXT"), ("sessions", "park_re
                  ("sessions", "idle_at", "TEXT"),
                  # a command item's run under way (#339): when it was started (UTC), and its tab's process
                  # as JSON [pid, start time, boot id] (liveness.is_alive) once the tab has taken it up
-                 ("items", "run_at", "TEXT"), ("items", "run_tab", "TEXT")]
+                 ("items", "run_at", "TEXT"), ("items", "run_tab", "TEXT"),
+                 # a draft the person sent mid-compaction (Send now, Immediate, Send): held, and sent by
+                 # the hub once the cycle has ended (send_held, #383)
+                 ("messages", "after_cycle", "INTEGER NOT NULL DEFAULT 0")]
 # older databases may also carry sessions.transcript_title and sessions.renamed_at,
 # from a /rename pickup since dropped, and items.seq (RETIRED_TRIGGER): unused, and left in place
 DECISIONS_CLOSE = "migrated_decisions_close"   # settings: the one-off migration above has run
@@ -538,6 +541,7 @@ TOUR_AT = "tour_at"   # settings: where a tour under way, or paused, resumes ("t
 # settings: the one-off move to the tour's record (.plan/tutorial-overhaul.md, Migration) has run
 TOUR_MIGRATED = "migrated_tour"
 RETIRED_TUTORIAL_SEEN = "tutorial_seen"   # settings: the old checklist's record, deleted on open
+RETIRED_CUTOFF = "compact.cutoff."   # settings: the #150 lock's cut-offs, by session id (#383), deleted on open and at an end
 # settings: when this database was first opened by code that tracks subagents. Subagents
 # that had finished by then (or by when their session joined) get no item (#69)
 AGENTS_SINCE = "agents_since"
@@ -773,6 +777,7 @@ class Store:
                 db.execute("INSERT INTO settings (key, value) VALUES (?, '1')", (TOUR_MIGRATED,))
             # the old tutorial checklist's record (#78 stage 3): the tour keeps its own steps in the app
             db.execute("DELETE FROM settings WHERE key = ?", (RETIRED_TUTORIAL_SEEN,))
+            db.execute("DELETE FROM settings WHERE key LIKE ? || '%'", (RETIRED_CUTOFF,))
 
     @contextmanager
     def tx(self):
@@ -900,25 +905,11 @@ class Store:
 
     def set_activity(self, sid: str, text: str) -> None:
         """What the host's session is doing now, one line: idle, thinking, running Bash...
-        A compaction's first line ("compacting...") marks its cut-off, if Compact pressed
-        hasn't already; a line that ends one (COMPACT_ENDS) lets it go (compact_cut)."""
+        A line that ends a turn (COMPACT_ENDS) stamps idle_at."""
         with self.tx() as db:
             db.execute("UPDATE sessions SET activity = ? WHERE id = ?", (text, sid))
-            if text.startswith("compacting"):
-                self.compact_cut(db, sid, fresh=False)
-            elif text.startswith(COMPACT_ENDS):
-                db.execute("DELETE FROM settings WHERE key = ?", (COMPACT_CUTOFF + sid,))
+            if text.startswith(COMPACT_ENDS):
                 db.execute("UPDATE sessions SET idle_at = ? WHERE id = ?", (stamp(), sid))   # a turn has ended
-
-    @staticmethod
-    def compact_cut(db, sid: str, fresh: bool) -> None:
-        """Where a compaction starts, once for every app: the newest item id the session has
-        then (settings, COMPACT_CUTOFF), served on its row as compact_cutoff. Items at or
-        below it are locked while it compacts (#150); one posted after never is. fresh: a
-        Compact pressed, over any left behind."""
-        db.execute(f"""INSERT INTO settings (key, value) SELECT ?, coalesce(max(id), 0) FROM items
-                       WHERE session_id = ? ON CONFLICT (key) DO {"UPDATE SET value = excluded.value" if fresh else "NOTHING"}""",
-                   (COMPACT_CUTOFF + sid, sid))
 
     def set_context(self, sid: str, tokens: int, max_tokens: int) -> None:
         """The context size the host's Claude Code reports, and when: the stats read it after
@@ -974,7 +965,6 @@ class Store:
                 and (operating(s) or ("", ""))[0] == "compact"):
             return False
         db.execute("UPDATE sessions SET compaction = 'cancelled', compaction_at = ? WHERE id = ?", (stamp(), s["id"]))
-        db.execute("DELETE FROM settings WHERE key = ?", (COMPACT_CUTOFF + s["id"],))
         Store.staged(db, s["id"], "cancelled", "you wrote in, so it was called off")
         return True
 
@@ -984,7 +974,6 @@ class Store:
         never coming, or parked without compacting): its cycle, still requested, is cancelled."""
         if db.execute("UPDATE sessions SET compaction = 'cancelled', compaction_at = ? WHERE id = ? "
                       "AND compaction = 'requested' AND compaction_origin = 'park'", (stamp(), sid)).rowcount:
-            db.execute("DELETE FROM settings WHERE key = ?", (COMPACT_CUTOFF + sid,))
             Store.staged(db, sid, "cancelled", "the park was called off")
 
     def cancel_park_cycle(self, sid: str) -> None:
@@ -1012,7 +1001,6 @@ class Store:
                                  "compaction_id = ? AND compaction = 'requested' AND compaction_at < ?",
                                  (stamp(), sid, cid, cutoff)).rowcount
             if expired:
-                db.execute("DELETE FROM settings WHERE key = ?", (COMPACT_CUTOFF + sid,))
                 self.drop_compact_command(db, sid)
                 self.staged(db, sid, "failed", f"no host took it up within {within:g} s")
         return bool(expired)
@@ -1072,7 +1060,6 @@ class Store:
             db.execute("UPDATE sessions SET park_compact = 0, park_keep = NULL WHERE id = ?", (sid,))
             if s["compaction_origin"] == "park" and compacting_now(s):
                 db.execute("UPDATE sessions SET compaction = ?, compaction_at = ? WHERE id = ?", (ends, stamp(), sid))
-                db.execute("DELETE FROM settings WHERE key = ?", (COMPACT_CUTOFF + sid,))
                 Store.drop_compact_command(db, sid)
                 Store.staged(db, sid, ends, why)
         if s[f"{what}_told_at"] or (what == "park" and s["op_state"] == "parking"):
@@ -1121,7 +1108,6 @@ class Store:
             elif s["op_state"] == "parking":
                 if s["compaction_origin"] == "park" and compacting_now(s):
                     db.execute("UPDATE sessions SET compaction = 'failed', compaction_at = ? WHERE id = ?", (stamp(), sid))
-                    db.execute("DELETE FROM settings WHERE key = ?", (COMPACT_CUTOFF + sid,))
                     self.staged(db, sid, "failed", why)
             else:
                 self.unpark_request(db, sid, s["op"], s, "failed", why)
@@ -1188,12 +1174,11 @@ class Store:
 
     @staticmethod
     def begin_cycle(db, sid: str, origin: str, state: str, then: str | None = None, tokens: int | None = None) -> str:
-        """A new compaction cycle, its cut-off taken (#150): its id."""
+        """A new compaction cycle: its id."""
         assert origin in COMPACTION_ORIGINS and state in COMPACTION_ACTIVE
         cid = secrets.token_hex(4)
         db.execute("UPDATE sessions SET compaction = ?, compaction_id = ?, compaction_origin = ?, compaction_then = ?, "
                    "compaction_at = ?, compaction_item = NULL WHERE id = ?", (state, cid, origin, then, stamp(), sid))
-        Store.compact_cut(db, sid, fresh=True)   # first: the task item, posted after, is never locked
         s = db.execute("SELECT * FROM sessions WHERE id = ?", (sid,)).fetchone()
         tokens = tokens or s["context_tokens"]   # a tab's from its transcript (tokens), a host's as it reports
         ref = Store._insert_item(db, sid, "task", compaction_title(s, tokens), "", "running")
@@ -1273,7 +1258,6 @@ class Store:
                     db.execute("UPDATE items SET title = ? WHERE session_id = ? AND ref = ?",
                                (compaction_title(s, tokens), sid, s["compaction_item"]))
             if moved and state in COMPACTION_ENDS:
-                db.execute("DELETE FROM settings WHERE key = ?", (COMPACT_CUTOFF + sid,))
                 if was[0] == "requested":
                     self.drop_compact_command(db, sid)
         return bool(moved)
@@ -1438,7 +1422,6 @@ class Store:
     def sessions(self) -> list[sqlite3.Row]:
         return self._all(
             f"""SELECT s.*,
-                 (SELECT value FROM settings WHERE key = '{COMPACT_CUTOFF}' || s.id) AS compact_cutoff,
                  -- what waits on the person: a question unanswered or a command not yet run (#364)
                  (SELECT count(*) FROM items i WHERE i.session_id = s.id AND i.status = 'open'
                     AND (i.kind = 'command' OR i.kind = 'question' AND NOT {PROCESSING})) AS open_questions,
@@ -1688,8 +1671,9 @@ class Store:
             db.execute("DELETE FROM sessions WHERE id = ?", (sid,))
             db.execute("DELETE FROM compaction_stages WHERE session_id = ?", (sid,))
             db.execute("DELETE FROM host_crashes WHERE session_id = ?", (sid,))
-            # its PR merges held for a resume that won't come (steps.held_key), its compaction's cut-off
-            db.execute("DELETE FROM settings WHERE key IN (?, ?)", (f"step.held.{sid}", COMPACT_CUTOFF + sid))
+            # its PR merges held for a resume that won't come (steps.held_key), and a cut-off older
+            # code may still write (RETIRED_CUTOFF)
+            db.execute("DELETE FROM settings WHERE key IN (?, ?)", (f"step.held.{sid}", RETIRED_CUTOFF + sid))
 
     # items
 
@@ -2568,17 +2552,42 @@ class Store:
             db.execute("INSERT INTO messages (session_id, author, body, created_at, kind) "
                        "VALUES (?, 'person', ?, ?, 'notice')", (sid, body, now()))
 
-    def queue(self, sid: str, body: str, item_ref: str | None = None) -> None:
+    def queue(self, sid: str, body: str, item_ref: str | None = None, after_cycle: bool = False) -> None:
         """A message from the person, held as a draft until dispatch() sends it. An answer to
         an unseen decision marks it seen, in the same transaction (_mark_seen). Allowed during any
-        operation (Q244): only dispatch waits. It still calls off the quiet mark's cycle (call_off_quiet)."""
+        operation (Q244): only dispatch waits. It still calls off the quiet mark's cycle (call_off_quiet).
+        after_cycle: one the person sent mid-compaction, sent once the cycle ends (send_held, #383)."""
         with self.tx() as db:
             self.refuse_wheelhouse_item(db, sid, item_ref)
             self._require(db, sid)
             self.call_off_quiet(db, db.execute("SELECT * FROM sessions WHERE id = ?", (sid,)).fetchone())
             self._mark_seen(db, sid, item_ref)
-            db.execute("INSERT INTO messages (session_id, item_ref, author, body, created_at, draft) "
-                       "VALUES (?, ?, 'person', ?, ?, 1)", (sid, item_ref, body, now()))
+            db.execute("INSERT INTO messages (session_id, item_ref, author, body, created_at, draft, after_cycle) "
+                       "VALUES (?, ?, 'person', ?, ?, 1, ?)", (sid, item_ref, body, now(), int(after_cycle)))
+
+    def hold_drafts(self, sid: str) -> int:
+        """Send pressed mid-compaction (#383): the session's drafts held, to be sent once the
+        cycle ends (send_held). How many."""
+        with self.tx() as db:
+            return db.execute("UPDATE messages SET after_cycle = 1 WHERE session_id = ? AND draft = 1",
+                              (sid,)).rowcount
+
+    def held(self) -> set[str]:
+        """The sessions with drafts held for a compaction's end (after_cycle)."""
+        return {r[0] for r in self._all("SELECT DISTINCT session_id FROM messages WHERE draft = 1 AND after_cycle = 1")}
+
+    def send_held(self, sid: str) -> int:
+        """Once the session's compaction has ended (completed, failed or cancelled) and no other
+        operation is under way: its held drafts sent, as one batch, alone (a queued answer of
+        Queued mode's waits for Send as ever). The hub calls it only while the session runs, so
+        one that stopped mid-cycle keeps them held until it's back (sweep_held). How many went;
+        0, still held, while it's busy. Sent as new rows (send_last), so a notice written since
+        they were held (a resume, a crash's) is read before them."""
+        with self.tx() as db:
+            s = db.execute("SELECT * FROM sessions WHERE id = ?", (sid,)).fetchone()
+            if s is None or operating(s) is not None:
+                return 0
+            return self.send_last(db, sid, held=True)
 
     def drafts(self, sid: str | None = None) -> list[sqlite3.Row]:
         return self._all("SELECT * FROM messages WHERE draft = 1 AND (? IS NULL OR session_id = ?) ORDER BY id",
@@ -2601,12 +2610,24 @@ class Store:
                               (sid,)).fetchall()
         return len(sent)
 
+    @staticmethod
+    def send_last(db, sid: str, held: bool = False) -> int:
+        """Inside a write: the session's drafts (held: only those held for a compaction's end)
+        sent as new rows, behind every message sent before them, so the wheelhouse's context (a
+        resume or crash notice) is read first and the person's words after, oldest first; each
+        keeps its text, item and time. How many went."""
+        which = "draft = 1" + (" AND after_cycle = 1" if held else "")
+        moved = db.execute("INSERT INTO messages (session_id, item_ref, author, body, created_at, kind) "
+                           "SELECT session_id, item_ref, author, body, created_at, kind FROM messages "
+                           f"WHERE session_id = ? AND {which} ORDER BY id", (sid,)).rowcount
+        db.execute(f"DELETE FROM messages WHERE session_id = ? AND {which}", (sid,))
+        return moved
+
     def dispatch_last(self, sid: str, body: str | None = None, item_ref: str | None = None, waking: bool = False) -> int:
         """Send the session's drafts, and body if given, behind every message sent before them,
         in one transaction: a session woken to send them (Hub.wake_and_send) reads the resume
         notice its launch left first, then the person's words, oldest first, in the one batch
-        the monitor or host claims. The drafts are sent as new rows, so their order follows the
-        notice's; each keeps its text, item and time. Returns how many went. Refused during a
+        the monitor or host claims (send_last). Returns how many went. Refused during a
         operation (Busy), and on a compaction's task item (Refused)."""
         with self.tx() as db:
             self.refuse_wheelhouse_item(db, sid, item_ref)
@@ -2616,10 +2637,7 @@ class Store:
             if not own:
                 self.refuse_busy(db, sid, "send", person=True)
             first = db.execute("SELECT coalesce(max(id), 0) + 1 FROM messages").fetchone()[0]
-            moved = db.execute("INSERT INTO messages (session_id, item_ref, author, body, created_at, kind) "
-                               "SELECT session_id, item_ref, author, body, created_at, kind FROM messages "
-                               "WHERE session_id = ? AND draft = 1 ORDER BY id", (sid,)).rowcount
-            db.execute("DELETE FROM messages WHERE session_id = ? AND draft = 1", (sid,))
+            moved = self.send_last(db, sid)
             if body is not None:
                 self._mark_seen(db, sid, item_ref)
                 db.execute("INSERT INTO messages (session_id, item_ref, author, body, created_at) "

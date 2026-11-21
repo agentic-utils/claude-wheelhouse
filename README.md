@@ -936,7 +936,8 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
   never the one forked.
   While it is busy, sending (now, Ctrl+S, Send, Send all) and every other operation (Park,
   Park now, Stop & Forget either way, Relaunch, Unpark, Fork, Handover, Compact) are refused
-  with one message ("demo is busy parking: send once it's done, or Interrupt to abort it.").
+  with one message ("demo is busy parking: send once it's done, or Interrupt to abort it."),
+  but a send during a compaction alone is held until it ends (below, compaction).
   Drafting, queueing and Shell (a quick shell is no operation) stay open, and an answer to a
   permission or question the session is waiting on still goes. Interrupt aborts the operation and nothing else: a park or Stop &
   Forget not yet passed on is dropped silently; one the session has heard, or a park already
@@ -957,9 +958,13 @@ the session has said nothing on it for 15 minutes. Nothing ever closes by itself
   the question's Compact, Relaunch or Park compacting first, the session's own request, the
   8-hour mark, or Claude Code compacting by itself at full context): from the press until
   `/compact` has ended, or the cycle fails or is cancelled, the session is busy, as during
-  any operation (below, Operations). Throughout, Compact is off, the session's inbox items and Detail dim
-  and ignore clicks, and its eye in the session list sweeps blue instead of red. Its conversation
-  row dims but stays selectable, and as the cycle starts the app shows that conversation and
+  any operation (below, Operations). Throughout, Compact is off and its eye in the session list
+  sweeps blue instead of red. Its items open, read and act as ever (decisions, docs and their
+  editor, questions, tasks, PRs). An answer given meanwhile in Queued mode is queued as ever,
+  for Send. One that would go at once (Send now, Immediate mode, a module's send) and the queue
+  Send or Ctrl+S sends are held instead ("demo is compacting: sent once it's done"), and sent
+  together the moment the cycle ends, completed, failed or cancelled; never into its notes turn
+  or `/compact`. A session on code too old to queue still refuses it, the text left in the box. Its conversation row dims but stays selectable, and as the cycle starts the app shows that conversation and
   puts the focus on its inbox row (not while you're typing in a text box: the row is selected,
   focus stays, and the answer box's text is never swapped, so then it's left as it was). If the
   session is still writing its notes after 2 minutes, a question asks whether to keep

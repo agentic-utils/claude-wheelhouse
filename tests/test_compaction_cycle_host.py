@@ -648,3 +648,68 @@ def test_a_locked_context_write_never_stops_a_cycle_ending(host, store, sid, mon
     monkeypatch.setattr(store, "set_context", lambda *a: (_ for _ in ()).throw(sqlite3.OperationalError("locked")))
     end(host, compacted=True)
     assert store.compaction(sid)["state"] == "completed" and host.cycle is None
+
+
+@pytest.mark.parametrize("ending, desc", [
+    ("completed", "compacted: sent once /compact has ended"),
+    ("failed", "failed with /compact sent: sent once it has failed"),
+    ("cancelled", "cancelled in its notes turn: sent once it is cancelled"),
+])
+@pytest.mark.parametrize("how", ["now", "immediate", "ctrl+s"])
+def test_a_send_mid_cycle_is_held_and_goes_once_it_ends(host, store, sid, monkeypatch, ending, desc, how):
+    """#383: Send now, Immediate mode or Send mid-compaction is held, said, kept out of the notes
+    turn and /compact, and sent once, as soon as the cycle ends, however it ends."""
+    from claude_wheelhouse import liveness
+    from claude_wheelhouse.hub import Hub
+    from claude_wheelhouse.store import CYCLE_HELD
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
+    store.set_runner(sid, "sdk")
+    store.mark_version(sid)
+    ref = store.post_item(sid, "question", "which db?")
+    hub = Hub(store)
+    store.command(sid, "compact")
+    run(host.poll())
+    cid = store.compaction(sid)["id"]
+    if how == "immediate":
+        store.set_mode(sid, "immediate")
+    if how == "ctrl+s":
+        store.queue(sid, "use Postgres", ref)
+        done = hub.send_queue(sid)
+    else:
+        done = hub.submit((sid, ref), "use Postgres", now=how == "now")
+    assert done.ok and [n.text for n in done.notices] == [CYCLE_HELD.format(name="demo")], f"{how}, {desc}: {done.notices}"
+    hub.refresh()
+    if ending == "cancelled":
+        store.move_compaction(sid, cid, "cancelled", "test")
+        end(host)
+    else:
+        notes(host)
+        run(host.poll())
+        hub.refresh()
+        assert [m["body"] for m in store.drafts(sid)] == ["use Postgres"], f"{how}, {desc}: held through /compact"
+        if ending == "failed":
+            store.move_compaction(sid, cid, "failed", "test")
+        end(host, compacted=ending == "completed")
+    during = list(host.client.queries)
+    assert not any("use Postgres" in q for q in during), f"{how}, {desc}: never in the cycle's turns: {during}"
+    for _ in range(2):   # once, however often the hub looks
+        hub.refresh()
+        run(host.poll())
+    assert not store.drafts(sid), f"{how}, {desc}: sent"
+    assert sum("use Postgres" in q for q in host.client.queries[len(during):]) == 1, f"{how}, {desc}: {host.client.queries}"
+
+
+def test_a_send_now_mid_cycle_on_code_that_cant_queue_is_refused(host, store, sid, monkeypatch):
+    """#383: a session on code older than DRAFTS_VERSION has no queue to hold it, so Send now
+    mid-compaction is refused as busy, nothing kept or sent (the app leaves the text in its box)."""
+    from claude_wheelhouse import liveness
+    from claude_wheelhouse.hub import Hub
+    monkeypatch.setattr(liveness, "status", lambda s, waking=False: "live")
+    store.set_runner(sid, "sdk")
+    store.db.execute("UPDATE sessions SET code_version = 1 WHERE id = ?", (sid,))
+    ref = store.post_item(sid, "question", "which db?")
+    store.command(sid, "compact")
+    run(host.poll())
+    done = Hub(store).submit((sid, ref), "use Postgres", now=True)
+    assert not done.ok and "is busy compacting" in done.notices[0].text, done.notices
+    assert not store.drafts(sid) and not [m for m in store.messages(sid) if m["author"] == "person"]
