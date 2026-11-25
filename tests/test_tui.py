@@ -276,7 +276,7 @@ async def test_confirm_keys_stay_in_the_dialog(store, sid, key, expected, desc):
         await pilot.press(key)
         await pilot.pause()
         assert answers == [expected], desc
-        assert [type(s).__name__ for s in app.screen_stack] == ["Screen"], desc
+        assert [type(s).__name__ for s in app.screen_stack] == ["MainScreen"], desc
 
 
 @pytest.mark.anyio
@@ -290,7 +290,7 @@ async def test_enter_on_a_destructive_confirm_declines(store, sid):
         await pilot.pause()
         await pilot.press("enter")
         await pilot.pause()
-        assert [type(s).__name__ for s in app.screen_stack] == ["Screen"]
+        assert [type(s).__name__ for s in app.screen_stack] == ["MainScreen"]
     assert store.session(sid) is not None
 
 
@@ -301,10 +301,10 @@ async def test_escape_closes_new_session(store, sid):
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.press("alt+n")
         await pilot.pause()
-        assert [type(s).__name__ for s in app.screen_stack] == ["Screen", "NewSession"]
+        assert [type(s).__name__ for s in app.screen_stack] == ["MainScreen", "NewSession"]
         await pilot.press("escape")
         await pilot.pause()
-        assert [type(s).__name__ for s in app.screen_stack] == ["Screen"]
+        assert [type(s).__name__ for s in app.screen_stack] == ["MainScreen"]
 
 
 def adoptable(sid="adopt-me", pid=None):
@@ -314,8 +314,8 @@ def adoptable(sid="adopt-me", pid=None):
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("alive_on_adopt, launched, stack, desc", [
-    (None, [("adopt-me", "LG plugin fix")], ["Screen"], "an exited session is adopted at once"),
-    (4242, [], ["Screen", "AdoptSession"], "a running one stays in the dialog until /exit"),
+    (None, [("adopt-me", "LG plugin fix")], ["MainScreen"], "an exited session is adopted at once"),
+    (4242, [], ["MainScreen", "AdoptSession"], "a running one stays in the dialog until /exit"),
 ])
 async def test_adopt(store, monkeypatch, alive_on_adopt, launched, stack, desc):
     from claude_wheelhouse import adopt, liveness
@@ -359,7 +359,7 @@ async def test_escape_closes_adopt(store, monkeypatch):
         await pilot.pause()
         await pilot.press("escape")
         await pilot.pause()
-        assert [type(s).__name__ for s in app.screen_stack] == ["Screen"]
+        assert [type(s).__name__ for s in app.screen_stack] == ["MainScreen"]
 
 
 @pytest.mark.anyio
@@ -1122,20 +1122,20 @@ async def test_session_keys_do_nothing_with_none_selected(store, sid, tmp_path, 
         app.session_list.focus()
         await pilot.press(key)
         await pilot.pause()
-        assert [type(s).__name__ for s in app.screen_stack] == ["Screen"], f"{desc}: no dialog"
+        assert [type(s).__name__ for s in app.screen_stack] == ["MainScreen"], f"{desc}: no dialog"
         assert [n.message for n in app._notifications] == [], f"{desc}: nothing said"
         assert (launched, [bool(store.session(s)["parked"]) for s in (sid, other)]) == ([], [False, False]), desc
 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("status, clicks, keys, stack, opened, desc", [
-    ("dead", 1, (), ["Screen", "Confirm"], 0, "a click on a dead session offers to relaunch it"),
-    ("dead", 2, (), ["Screen", "Confirm"], 0, "a double-click offers it once: its second click is the dialog's"),
-    ("dead", 1, ("alt+y",), ["Screen"], 1, "a click, then Alt+Y: relaunched"),
-    ("dead", 2, ("alt+y",), ["Screen"], 1, "a double-click, then Alt+Y: relaunched, no second offer left behind"),
-    ("dead", 1, ("alt+n", "down"), ["Screen"], 0, "a click, then Alt+N: declined"),
-    ("dead", 2, ("alt+n", "down"), ["Screen"], 0, "a double-click, then Alt+N: declined, no second offer left behind"),
-    ("live", 2, (), ["Screen"], 0, "a double-click on a running session offers nothing"),
+    ("dead", 1, (), ["MainScreen", "Confirm"], 0, "a click on a dead session offers to relaunch it"),
+    ("dead", 2, (), ["MainScreen", "Confirm"], 0, "a double-click offers it once: its second click is the dialog's"),
+    ("dead", 1, ("alt+y",), ["MainScreen"], 1, "a click, then Alt+Y: relaunched"),
+    ("dead", 2, ("alt+y",), ["MainScreen"], 1, "a double-click, then Alt+Y: relaunched, no second offer left behind"),
+    ("dead", 1, ("alt+n", "down"), ["MainScreen"], 0, "a click, then Alt+N: declined"),
+    ("dead", 2, ("alt+n", "down"), ["MainScreen"], 0, "a double-click, then Alt+N: declined, no second offer left behind"),
+    ("live", 2, (), ["MainScreen"], 0, "a double-click on a running session offers nothing"),
 ])
 async def test_a_double_click_on_a_dead_session_offers_one_relaunch(store, sid, tmp_path, monkeypatch, status, clicks,
                                                                     keys, stack, opened, desc):
@@ -1932,21 +1932,21 @@ async def test_a_raw_burst_acts_in_the_order_typed(store, tmp_path, monkeypatch,
     ("items", "qa", ("enter", "x", "y", "q"), ("ThreadView", "xyq", [], False, "park"),
      "review 15 (1): Q behind Enter is typed in the item's box, it doesn't quit"),
     ("items", "qa", ("enter", "q"), ("ThreadView", "q", [], False, "park"), "review 15 (1): raw Enter Q doesn't quit"),
-    ("items", "conversation", ("enter", "h", "i"), ("Screen", "hi", [], False, "park"),
+    ("items", "conversation", ("enter", "h", "i"), ("MainScreen", "hi", [], False, "park"),
      "Enter on the conversation row goes to its box, and the letters behind it land there"),
-    ("session-list", "gone", ("enter", "alt+n", "ctrl+q", "ctrl+q"), ("Screen", "", [], True, "park"),
+    ("session-list", "gone", ("enter", "alt+n", "ctrl+q", "ctrl+q"), ("MainScreen", "", [], True, "park"),
      "Enter on a dead session offers a relaunch: Alt+N declines it, then Ctrl+Q twice quits"),
-    ("items", "qa", ("delete", "alt+n", "ctrl+q", "ctrl+q"), ("Screen", "", [], True, "park"),
+    ("items", "qa", ("delete", "alt+n", "ctrl+q", "ctrl+q"), ("MainScreen", "", [], True, "park"),
      "review 15 (2): Delete's Confirm takes Alt+N, then Ctrl+Q twice quits"),
-    ("items", "qa", ("delete", "alt+y", "alt+y"), ("Screen", "", [], False, "park"),
+    ("items", "qa", ("delete", "alt+y", "alt+y"), ("MainScreen", "", [], False, "park"),
      "review 15 (2): a second Alt+Y once the dialog has closed doesn't dismiss it again"),
     ("items", "qa", ("delete", "alt+n", "alt+n"), ("NewSession", "", [], False, "park"),
      "review 15 (2): a second Alt+N once the dialog has closed is the inbox's: New session"),
-    ("session-list", "alpha", ("alt+p", "alt+c", "ctrl+q", "ctrl+q"), ("Screen", "", [], True, None),
+    ("session-list", "alpha", ("alt+p", "alt+c", "ctrl+q", "ctrl+q"), ("MainScreen", "", [], True, None),
      "review 15 (2): Alt+P on a session asked to park offers the Choice, Alt+C cancels the request, then Ctrl+Q twice quits"),
     ("session-list", "alpha", ("alt+p", "alt+c", "alt+c"), ("CompactSession", "", [], False, None),
      "review 15 (2): a second Alt+C once the Choice has closed is the inbox's: Compact"),
-    ("items", "qa", ("f1", "f1"), ("Screen", "", [], False, "park"),
+    ("items", "qa", ("f1", "f1"), ("MainScreen", "", [], False, "park"),
      "F1 opens the keys, and the F1 behind it closes them"),
 ])
 @pytest.mark.both
@@ -2018,31 +2018,31 @@ async def burst_outcome(store, tmp_path, monkeypatch, focus, at, burst, desc, sl
 @pytest.mark.usefixtures("sdk_on")
 @pytest.mark.anyio
 @pytest.mark.parametrize("focus, at, burst, want, desc", [
-    ("items", "qa", ("delete", "enter", "alt+y"), {"stack": ("Screen",), "open": ["which db?"]},
+    ("items", "qa", ("delete", "enter", "alt+y"), {"stack": ("MainScreen",), "open": ["which db?"]},
      "review 16 (1): Delete's Confirm opens on No, so Enter answers No, and the Y behind it isn't a Yes"),
-    ("items", "qa", ("delete", "enter", "ctrl+q", "ctrl+q"), {"stack": ("Screen",), "open": ["which db?"], "quit": True},
+    ("items", "qa", ("delete", "enter", "ctrl+q", "ctrl+q"), {"stack": ("MainScreen",), "open": ["which db?"], "quit": True},
      "review 16 (1): Enter on No answers No, then Q quits"),
-    ("session-list", "gone", ("enter", "enter", "alt+y"), {"stack": ("Screen",), "launched": []},
+    ("session-list", "gone", ("enter", "enter", "alt+y"), {"stack": ("MainScreen",), "launched": []},
      "review 16 (1): Relaunch's Confirm opens on No, so Enter declines, and the Y behind it doesn't relaunch"),
-    ("session-list", "alpha", ("alt+p", "enter", "alt+o"), {"stack": ("Screen",), "pending": None, "parked": False},
+    ("session-list", "alpha", ("alt+p", "enter", "alt+o"), {"stack": ("MainScreen",), "pending": None, "parked": False},
      "review 16 (1): the Choice opens on Cancel request: Enter cancels the request, and the F behind it isn't Force"),
-    ("session-list", "alpha", ("alt+p", "enter", "escape"), {"stack": ("Screen",), "pending": None},
+    ("session-list", "alpha", ("alt+p", "enter", "escape"), {"stack": ("MainScreen",), "pending": None},
      "review 16 (1): Enter cancels the request, and the Esc behind it isn't Leave it"),
-    ("session-list", "alpha", ("alt+r", "x", "enter", "ctrl+q", "ctrl+q"), {"stack": ("Screen",), "names": ["gone", "x"], "quit": True},
+    ("session-list", "alpha", ("alt+r", "x", "enter", "ctrl+q", "ctrl+q"), {"stack": ("MainScreen",), "names": ["gone", "x"], "quit": True},
      "review 16 (1): Rename takes X, Enter renames to it, then Q quits"),
-    ("session-list", "alpha", ("alt+r", "enter", "enter"), {"stack": ("Screen",), "names": ["alpha", "gone"]},
+    ("session-list", "alpha", ("alt+r", "enter", "enter"), {"stack": ("MainScreen",), "names": ["alpha", "gone"]},
      "review 16 (2): Enter closes Rename once, and the second Enter is the session list's"),
-    ("session-list", "alpha", ("alt+r", "x", "enter", "enter"), {"stack": ("Screen",), "names": ["gone", "x"]},
+    ("session-list", "alpha", ("alt+r", "x", "enter", "enter"), {"stack": ("MainScreen",), "names": ["gone", "x"]},
      "review 16 (2): X Enter renames, and the second Enter is the session list's"),
-    ("session-list", "alpha", ("alt+n", "tab", "enter", "escape"), {"stack": ("Screen", "NewSession"), "focus": "browse"},
+    ("session-list", "alpha", ("alt+n", "tab", "enter", "escape"), {"stack": ("MainScreen", "NewSession"), "focus": "browse"},
      "review 16 (3): Enter on Browse opens the picker, and the Esc behind it closes the picker, not New session"),
-    ("session-list", "alpha", ("alt+p", "alt+c", "alt+p"), {"stack": ("Screen", "ParkSession"), "pending": None},
+    ("session-list", "alpha", ("alt+p", "alt+c", "alt+p"), {"stack": ("MainScreen", "ParkSession"), "pending": None},
      "C cancels the request before the P behind it, which asks afresh: Park's dialog, as alpha runs in the wheelhouse"),
-    ("session-list", "alpha", ("alt+m", "down", "enter"), {"stack": ("Screen",), "model": "claude-sonnet-5-5"},
+    ("session-list", "alpha", ("alt+m", "down", "enter"), {"stack": ("MainScreen",), "model": "claude-sonnet-5-5"},
      "M opens Model, Down moves to the next model before Enter takes it"),
-    ("items", "qa", ("alt+m", "enter", "ctrl+q", "ctrl+q"), {"stack": ("Screen",), "model": "claude-opus-5-5", "quit": True},
+    ("items", "qa", ("alt+m", "enter", "ctrl+q", "ctrl+q"), {"stack": ("MainScreen",), "model": "claude-opus-5-5", "quit": True},
      "Model's Enter takes the highlighted model, then the Q behind it quits"),
-    ("session-list", "alpha", ("alt+m", "escape", "alt+m", "escape"), {"stack": ("Screen",), "model": None},
+    ("session-list", "alpha", ("alt+m", "escape", "alt+m", "escape"), {"stack": ("MainScreen",), "model": None},
      "Esc leaves the model as it was, each time"),
     ("stats", "alpha", ("right", "right", "left"), {"effort": "xhigh", "focus": "stats"},
      "the effort slider: each arrow moves on from where the last left it"),
@@ -7673,7 +7673,7 @@ async def test_model_and_effort_are_offered_only_for_a_hosted_session(store, tmp
         app.session_list.focus()
         await pilot.press("alt+m")
         await pilot.pause()
-        assert [type(s).__name__ for s in app.screen_stack] == (["Screen", "ChooseModel"] if slider else ["Screen"])
+        assert [type(s).__name__ for s in app.screen_stack] == (["MainScreen", "ChooseModel"] if slider else ["MainScreen"])
         if slider:
             assert tui.MODEL_WARNING in str(app.screen.query_one("#model-warning", Label).content), "the cache warning"
             options = app.screen.query_one("#models")
@@ -7816,7 +7816,7 @@ async def test_model_in_a_full_screen_item_says_so(store, tmp_path, monkeypatch)
         await pilot.press("alt+m")
         await pilot.pause()
         assert (got, notes) == ([], ["Model doesn't apply here: it's with the session list's buttons"])
-        assert [type(s).__name__ for s in app.screen_stack] == ["Screen", "ThreadView"]
+        assert [type(s).__name__ for s in app.screen_stack] == ["MainScreen", "ThreadView"]
 
 
 @pytest.mark.usefixtures("sdk_on")
@@ -9790,7 +9790,7 @@ async def test_ctrl_delete_deletes_every_completed_item_and_ctrl_z_brings_them_b
         app.items_table.focus()
         await pilot.press("ctrl+delete")
         await pilot.pause()
-        assert [type(s).__name__ for s in app.screen_stack] == ["Screen"], "no dialog"
+        assert [type(s).__name__ for s in app.screen_stack] == ["MainScreen"], "no dialog"
         await landed(app, pilot)
         assert [store.item(sid, r)["dismissed"] or store.item(sid, r)["status"] for r in gone] == \
             ["done", "done", "done", "closed"], "every completed one deleted"
@@ -9955,7 +9955,7 @@ async def test_delete_is_refused_while_an_undo_lands(store, sid):
         await pilot.pause()
         assert notes.count(tui.UNDO_LANDING.format(key="Delete")) == 2, notes
         assert not app.behind, "nothing held to act later"
-        assert [type(s).__name__ for s in app.screen_stack] == ["Screen"], "no dialog asked mid-undo"
+        assert [type(s).__name__ for s in app.screen_stack] == ["MainScreen"], "no dialog asked mid-undo"
         gate.set()
         await landed(app, pilot)
         assert not app.undoing
@@ -10382,7 +10382,7 @@ async def test_double_click_on_detail_goes_full_screen_and_back(store, sid, tmp_
             raw_click(app, app.screen, at)
             await pilot.pause(0.05)
         await pilot.pause(0.2)
-        assert type(app.screen).__name__ == (full or "Screen"), desc
+        assert type(app.screen).__name__ == (full or "MainScreen"), desc
         opened = kind == "doc" and times == 1
         assert (app.detail_editor.key is not None) == opened, f"{desc}: Detail's editor"
         assert bool(app.doc_quotes) == opened, f"{desc}: a comment's quote, as the editor"
@@ -10876,6 +10876,76 @@ async def test_a_dialogs_shade_is_textuals_drawn_a_line_at_a_time(store, sid, mo
         assert "zebra" in drawn and drawn == theirs, f"{desc}: a real frame, as Textual draws it"
         if not nested:   # nested, Textual's own leaves the middle dialog's shade as it was: so does ours
             assert live == theirs, f"{desc}: the frame after a change beneath, redrawn where it changed"
+
+
+@pytest.mark.anyio
+async def test_a_change_beneath_a_dialog_shades_only_its_lines_again(store, sid, monkeypatch):
+    """#385: a change beneath an open dialog draws again only the lines it touched, on every
+    frame after it too. Textual marked the screen beneath for a repaint of all of it as it
+    passed the change up, so every frame after the first change shaded the whole screen."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        dialog = tui.Confirm("Delete it?")
+        app.push_screen(dialog)
+        await pilot.pause(0.1)
+        drawn: list[int] = []
+        beneath = tui.Dialog.lines_beneath
+        monkeypatch.setattr(tui.Dialog, "lines_beneath", lambda self, rows: (drawn.append(len(rows)), beneath(self, rows))[1])
+        for i in range(3):
+            store.post_item(sid, "question", f"zebra {i}")
+            app.refresh_data()
+            await pilot.pause(0.05)
+        assert drawn and max(drawn) < dialog.size.height, f"only the lines changed: {drawn}"
+
+
+@pytest.mark.anyio
+async def test_a_dialog_shows_its_box_before_the_screen_beneath(store, sid, monkeypatch):
+    """#385: the frame that first shows a dialog draws beneath it the lines the last dialog
+    there drew (Dialog.kept), not the screen beneath again, and the next frame draws the screen
+    beneath as it is now. The first ever open has no lines kept: a plain shade."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        tui.Dialog.kept.clear()
+        seen: list[tuple] = []
+        render, beneath = tui.Dialog.render_lines, tui.Dialog.lines_beneath
+        monkeypatch.setattr(tui.Dialog, "render_lines", lambda self, crop: (seen.append(("frame", self.shading)), render(self, crop))[1])
+        monkeypatch.setattr(tui.Dialog, "lines_beneath", lambda self, rows: (seen.append(("beneath", len(rows))), beneath(self, rows))[1])
+        for prompt in ("First?", "Second?"):
+            seen.clear()
+            app.push_screen(tui.Confirm(prompt))
+            await pilot.pause(0.1)
+            assert seen[0] == ("frame", False), f"{prompt}: the box first: {seen}"
+            assert seen.index(("frame", True)) < seen.index(("beneath", 30)), f"{prompt}: then all beneath: {seen}"
+            assert app.screen.shading, f"{prompt}: shading from then on"
+            await pilot.press("escape")
+            await pilot.pause()
+        assert len(tui.Dialog.kept) == 30, "each line beneath kept for the next open"
+
+
+@pytest.mark.anyio
+async def test_new_session_opens_a_spare_built_before_the_key(store, sid, monkeypatch):
+    """#385: New session opens a dialog built while the app was idle (WheelhouseApp.spare),
+    so Alt+N costs a layout and a frame, not building ~70 widgets; once it closes another is
+    built, so no typing is left over from the last."""
+    monkeypatch.setattr(WheelhouseApp, "STOCK_AFTER", 0.01)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause(0.2)
+        spare = app.spares.get(tui.NewSession)
+        assert spare is not None and spare.is_mounted and spare not in app.screen_stack, "built ahead, not shown"
+        await pilot.press("alt+n")
+        await pilot.pause()
+        assert app.screen is spare, "Alt+N opens the spare"
+        spare.query_one("#name", Input).value = "typed"
+        await pilot.press("escape")
+        await pilot.pause(0.2)
+        fresh = app.spares.get(tui.NewSession)
+        assert fresh is not None and fresh is not spare, "another built once it closed"
+        await pilot.press("alt+n")
+        await pilot.pause()
+        assert app.screen is fresh and fresh.query_one("#name", Input).value == "", "nothing left from the last"
 
 
 def overlay_rows(app) -> list[str]:
