@@ -19,6 +19,7 @@ from rich.style import Style
 from rich.text import Text
 from textual import events
 from textual.app import App, ComposeResult
+from textual.coordinate import Coordinate
 from textual.containers import VerticalScroll
 from textual.pilot import _get_mouse_message_arguments
 from textual.strip import Strip
@@ -4570,6 +4571,7 @@ async def test_the_animation_rests_unfocused_only_when_nothing_is_busy(store, si
                                                                         animating, desc):
     state = {"busy": busy}
     monkeypatch.setattr(WheelhouseApp, "busy", lambda self, s: state["busy"])
+    monkeypatch.setattr(tui, "LATE", 10.0)   # real time on a test's busy loop: no frame counts as late (frame_due)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
@@ -4585,6 +4587,40 @@ async def test_the_animation_rests_unfocused_only_when_nothing_is_busy(store, si
         await pilot.pause(0.4)
         assert (app.frame > frame) is animating, f"{desc}: frames {frame} to {app.frame}"
         assert (app.title_bar.look != title) is animating, f"{desc}: the shimmer moves only while it runs"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("steps, drawn, desc", [
+    ([0.0, 0.2, 0.4, 0.6], [True, True, True, True], "frames on time: each drawn"),
+    (["input 0.1", 0.2, 0.4, 0.6, 0.8, 1.0, 1.2], [False] * 5 + [True], "a key, click or pointer move: a second's rest"),
+    ([0.0, 0.25, 0.45, 0.65, 0.85, 1.05, 1.25, 1.45, 1.65, 1.85, 2.05, 2.25, 2.45],
+     [True, False, False, False, False, True, False, False, False, False, True, True, True],
+     "a frame 50 ms late: one a second, until frames have come on time for two seconds"),
+])
+async def test_the_animation_yields(store, sid, monkeypatch, steps, drawn, desc):
+    """Fix 3 of #385: the animation rests REST seconds after input, and falls to SLOW_FPS
+    while its timer fires more than LATE seconds late."""
+    monkeypatch.setattr(WheelhouseApp, "busy", lambda self, s: True)
+    at = [100.0]
+    monkeypatch.setattr(WheelhouseApp, "wall", staticmethod(lambda: at[0]))
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.animation.pause()   # the test's frames alone
+        app.fired_at, app.drawn_at, app.slow_until = None, -1.0, 0.0
+        frames = []
+        monkeypatch.setattr(app, "animate", lambda: frames.append(at[0]))
+        got = []
+        for step in steps:
+            if isinstance(step, str):   # input at that time
+                at[0] = 100.0 + float(step.split()[1])
+                await app.on_event(events.Key("x", "x"))
+                continue
+            at[0] = 100.0 + step
+            n = len(frames)
+            app.frame_due()
+            got.append(len(frames) > n)
+        assert got == drawn, desc
 
 
 def cells(strip) -> list[tuple]:
@@ -4629,12 +4665,13 @@ async def test_an_eye_frame_draws_the_busy_rows_alone(store, sid, tmp_path, monk
     async with app.run_test(size=(160, 40)) as pilot:
         await pilot.pause()
         t = app.session_list
-        drawn = []
-        monkeypatch.setattr(t, "refresh_coordinate", lambda c: drawn.append(tuple(c)))
+        regions = []
+        monkeypatch.setattr(t, "draw_again", regions.extend)
         count = t._update_count
         app.sweep_eyes()
         assert t._update_count == count, "the table's data is as it was: its caches stand"
-        assert drawn == [(t.get_row_index(sid), len(t.columns) - 1)], "the busy row's eye cell alone is drawn again (#327)"
+        assert drawn_cells(t, regions) == [(t.get_row_index(sid), len(t.columns) - 1)], \
+            "the busy row's eye cell alone is drawn again (#327)"
 
 
 @pytest.mark.anyio
@@ -4863,12 +4900,21 @@ async def test_a_dot_that_flashes_draws_its_cell_alone(store, sid, monkeypatch, 
         await pilot.pause()
         t = app.session_list
         t.sweep(first)
-        rows, cells_ = [], []
+        rows, regions = [], []
         monkeypatch.setattr(t, "refresh_row", lambda r: rows.append(r))
-        monkeypatch.setattr(t, "refresh_coordinate", lambda c: cells_.append(c))
+        monkeypatch.setattr(t, "draw_again", regions.extend)
         t.sweep(then)
         r = t.get_row_index(sid)
-        assert not rows and cells_ == [(r, len(t.columns) - 1)] * eye + [(r, 0)] * dot, desc
+        assert not rows and drawn_cells(t, regions) == [(r, len(t.columns) - 1)] * eye + [(r, 0)] * dot, desc
+        if eye:   # of the eye's cell, only what looks different (#385)
+            lo, hi = tui.eye_change(tui.eye_at(first), tui.eye_at(then))
+            assert regions[0].width == hi - lo < SessionList.EYE, desc
+
+
+def drawn_cells(table, regions) -> list[tuple[int, int]]:
+    """The cells, (row, column), that each region drawn again lies within."""
+    return [next((row, col) for row in range(table.row_count) for col in range(len(table.columns))
+                 if table._get_cell_region(Coordinate(row, col)).contains_region(region)) for region in regions]
 
 
 def shown_buttons(app) -> set[str]:
@@ -8010,10 +8056,10 @@ async def test_an_eye_that_stays_put_draws_nothing_again(store, sid, monkeypatch
         t = app.session_list
         assert (tui.eye_at(first) != tui.eye_at(then)) == drawn, desc
         t.sweep(first)
-        rows = []
-        monkeypatch.setattr(t, "refresh_coordinate", lambda c: rows.append(c) if c.column else None)
+        regions = []
+        monkeypatch.setattr(t, "draw_again", regions.extend)
         t.sweep(then)
-        assert bool(rows) == drawn, desc
+        assert any(col for _, col in drawn_cells(t, regions)) == drawn, desc
         assert t.eye_frame == then, f"{desc}: the frame drawn from is the latest"
 
 
