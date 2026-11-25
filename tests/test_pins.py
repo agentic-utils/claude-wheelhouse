@@ -159,6 +159,45 @@ async def test_the_pin_column_toggles(store, sid, tmp_path, how, desc):
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("via", ["threaded"], indirect=True)
+@pytest.mark.parametrize("answer, kept, said, desc", [
+    ("ok", True, "pinned", "the daemon pins it: the pin stays, and is said"),
+    ("refused", False, "no such item", "the daemon refuses: the pin goes again, and why is said"),
+])
+async def test_a_pin_shows_before_the_daemon_answers(store, sid, tmp_path, via, answer, kept, said, desc):
+    """Acknowledge, then work (#385): Alt+P draws the pin at once, the command on the lane."""
+    import asyncio
+    import threading
+    t = post(store, sid, tmp_path, "task", "t")
+    app = WheelhouseApp(store)
+    go, sent = threading.Event(), threading.Event()
+    real = app.client.set_pinned
+
+    def held(s, ref, on):
+        sent.set()
+        go.wait(10)
+        if answer == "refused":
+            raise KeyError("no such item")
+        return real(s, ref, on)
+    app.client.set_pinned = held
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        table = app.items_table
+        table.move_cursor(row=table.get_row_index(f"{sid}|{t}"))
+        table.focus()
+        await pilot.press("alt+p")
+        await asyncio.get_running_loop().run_in_executor(None, sent.wait, 10)
+        assert str(table.get_row(f"{sid}|{t}")[0]) == PIN, f"{desc}: drawn before the daemon answers"
+        assert not store.item(sid, t)["pinned"], f"{desc}: the daemon hasn't it yet"
+        go.set()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert bool(store.item(sid, t)["pinned"]) == kept, desc
+        assert str(table.get_row(f"{sid}|{t}")[0]) == (PIN if kept else UNPINNED), desc
+        assert any(said in n for n in notices(app)), f"{desc}: {notices(app)}"
+
+
+@pytest.mark.anyio
 async def test_ctrl_a_never_marks_a_pinned_row(store, sid, tmp_path):
     done = post(store, sid, tmp_path, "task", "done", status="done")
     kept = post(store, sid, tmp_path, "task", "kept", status="done", pinned=True)
