@@ -314,6 +314,11 @@ class RemoteClient:
         self.version = 0
         self.inbox_version = 0   # ... and the inbox's alone: a session's heartbeat leaves it (paint_items)
         self.stamped: dict[str, object] = {}   # the sessions and the inbox as the version stamps them
+        # the inbox's items as the daemon last stamped them, by key, in id order, and that stamp
+        # (epoch, version): asked for as "since", so the daemon sends only what changed (#385).
+        # None from a daemon on older code, which sends every item each time
+        self.inbox_rows: dict[tuple, dict] = {}
+        self.inbox_at: tuple[str, int] | None = None
 
     def make_http(self, read: float):
         """A connection whose every request carries the token."""
@@ -354,13 +359,14 @@ class RemoteClient:
 
     # requests
 
-    def request(self, method: str, path: str, body=None, key: str | None = None, timeout: float | None = None):
+    def request(self, method: str, path: str, body=None, key: str | None = None, timeout: float | None = None,
+                headers: dict | None = None):
         """One request, answered as JSON, or Refused with the daemon's error (a 401 for a
         token that isn't the daemon's). Unreachable if it couldn't connect; the httpx error
         as it is if the answer was lost after sending."""
         if not self.connected and self.threads:   # lost: the stream says when it's back, so not tried meanwhile
             raise Unreachable(UNREACHABLE)
-        headers = {"Idempotency-Key": key} if key else {}
+        headers = {**({"Idempotency-Key": key} if key else {}), **(headers or {})}
         try:
             r = self.http.request(method, path, json=body, headers=headers,
                                   **({"timeout": timeout} if timeout is not None else {}))
@@ -386,13 +392,30 @@ class RemoteClient:
         KeyError, ValueError); otherwise the daemon's JSON. What it changed: with refetch "now",
         fetched by the next read, at once; "later", by the fetching thread, shown at a refresh
         once it lands; "none", by the caller (mark_seen). A client with no threads of its own
-        (synchronous) always fetches at the next read (#268)."""
+        (synchronous) always fetches at the next read (#268). On the command lane (deferred), the
+        answer brings the inbox as the command left it (X-Inbox-Since), waiting for land, so
+        fetch_now needn't fetch it (#385)."""
         key = str(uuid.uuid4())
         sent = False   # once it may have reached the daemon, a failure is LOST, never "nothing was sent"
+        lane = getattr(self.local, "deferred", False) and self.threads
+        if lane:   # the last command sent decides: one that raises or brings none leaves fetch_now to fetch it
+            self.local.brought = False
         try:
             for attempt in range(2):
                 try:
-                    return self.request("POST", path, {} if body is None else body, key)
+                    if not lane:
+                        return self.request("POST", path, {} if body is None else body, key)
+                    seq = self.next_seq()
+                    with self.lock:
+                        since = self.since()
+                    answer = self.request("POST", path, {} if body is None else body, key,
+                                          headers={"X-Inbox-Since": since or ""})
+                    if isinstance(answer, dict) and isinstance(answer.get("inbox"), dict):
+                        self.local.brought = True
+                        with self.lock:
+                            if ("inbox",) not in self.waiting or self.waiting[("inbox",)][0] < seq:
+                                self.waiting[("inbox",)] = (seq, answer.pop("inbox"))
+                    return answer
                 except Unreachable:
                     if sent:
                         raise Unreachable(LOST) from None
@@ -456,13 +479,18 @@ class RemoteClient:
 
     def catch_up(self) -> None:
         """After a command, what it changed, fetched before anything is read again: the
-        sessions and the inbox at once, and the threads and conversations when next shown.
-        As the hub in process, whose next read of the store had it."""
+        sessions and the inbox at once. The threads and conversations held are kept, shown as
+        they were, and fetched again by the fetching thread, so a row clicked next isn't fetched
+        on the UI thread (#385); with no threads of its own (synchronous), let go and fetched
+        when next shown, as the hub in process, whose next read of the store had it."""
         with self.lock:
             if not self.connected and self.threads:   # lost: fetched once the stream is back
                 return
             forced, self.forced = self.forced, False
-            if forced:
+            if forced and self.threads:
+                self.dirty |= set(self.cache)
+                self.lock.notify_all()
+            elif forced:
                 for key in list(self.cache):
                     self.forget(key)
         if forced:
@@ -485,8 +513,10 @@ class RemoteClient:
         """The sessions and the inbox fetched now, on the caller's thread (never the UI's: a
         worker's), into waiting for land or the next refresh. One that fails, however (the
         daemon lost, bad JSON, the client closed under it by a stream revive), is left to the
-        fetching thread, and an expect let go meanwhile stays shown until it has (expected)."""
-        for key in (("sessions",), ("inbox",)):
+        fetching thread, and an expect let go meanwhile stays shown until it has (expected).
+        The inbox isn't fetched if the command just sent on this thread brought it (command)."""
+        brought, self.local.brought = getattr(self.local, "brought", False), False
+        for key in (("sessions",),) if brought else (("sessions",), ("inbox",)):
             seq = self.next_seq()
             try:
                 data = self.fetch(key)
@@ -506,7 +536,7 @@ class RemoteClient:
         """The commands sent on this thread (the app's command lane, never the UI thread) leave
         what they changed to be fetched by the caller (fetch_now, then land on the UI thread), not
         by the next read, which is the UI thread's (#385)."""
-        self.local.deferred = True
+        self.local.deferred, self.local.brought = True, False
         try:
             yield
         finally:
@@ -589,7 +619,9 @@ class RemoteClient:
         if kind == "sessions":
             return self.get("/sessions")
         if kind == "inbox":
-            return self.get("/inbox")
+            with self.lock:
+                since = self.since()
+            return self.get("/inbox", {"since": since} if since else None)
         if kind == "usage":
             return self.get("/usage")
         try:
@@ -615,9 +647,53 @@ class RemoteClient:
                 return None
             raise
 
+    def since(self) -> str | None:
+        """The inbox's stamp as held, for the daemon to send what changed since (under the lock)."""
+        return f"{self.inbox_at[0]}:{self.inbox_at[1]}" if self.inbox_at else None
+
+    def merged(self, data: dict) -> dict | None:
+        """An inbox answer as a whole inbox, its items in id order, as a full one is (under the
+        lock): a delta's rows laid over those held and its keys gone dropped. None if it can't be
+        laid over what's held, which is then fetched again: a delta from another daemon, one
+        since a version newer than held (the changes between would be missed), or any answer
+        older than held (two fetches answered out of turn). A daemon on older code stamps
+        nothing: every answer is full."""
+        if "version" not in data:
+            self.inbox_rows, self.inbox_at = {}, None
+            return data
+        at = (data["epoch"], data["version"])
+        held = self.inbox_at
+        if held is not None and held[0] == at[0] and at[1] < held[1]:
+            return None   # older than what's shown
+        rest = {k: v for k, v in data.items() if k not in ("epoch", "version", "delta", "since", "removed", "items")}
+        if not data.get("delta"):
+            rows = {(it["session_id"], it["ref"]): it for it in data["items"]}
+        elif held is None or held[0] != at[0] or data["since"] > held[1]:
+            return None   # laid over nothing, another daemon's rows, or with changes between missed
+        else:
+            rows, grew = dict(self.inbox_rows), False
+            for key in data["removed"]:
+                rows.pop(tuple(key), None)
+            for it in data["items"]:
+                key = (it["session_id"], it["ref"])
+                grew = grew or key not in rows or rows[key]["id"] != it["id"]
+                rows[key] = it
+            if grew:
+                rows = dict(sorted(rows.items(), key=lambda kv: kv[1]["id"]))
+        self.inbox_rows, self.inbox_at = rows, at
+        return {"items": list(rows.values()), **rest}
+
     def apply(self, key: tuple, data, seq: int) -> None:
-        """A fetch's answer, as shown from now: under the lock."""
+        """A fetch's answer, as shown from now: under the lock. An inbox delta that can't be laid
+        over what's held (merged) is let go and the inbox fetched again."""
         kind = key[0]
+        if kind == "inbox":
+            data = self.merged(data)
+            if data is None:
+                self.dirty.add(key)
+                self.forced = self.forced or not self.threads
+                self.lock.notify_all()
+                return
         self.shown_seq[key] = seq
         if kind in ("sessions", "inbox") and data != self.stamped.get(kind):   # the same again moves nothing
             self.stamped[kind] = data

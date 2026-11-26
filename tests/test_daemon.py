@@ -1626,3 +1626,68 @@ def test_a_compacting_conversation_is_republished_as_the_crew_comes_due(daemon, 
     daemon.publish_grown()
     daemon.publish_grown()
     assert published.count(("conversation", sid)) == 2, f"first seen, then the next excerpt due: {published}"
+
+
+async def test_the_inbox_sends_what_changed_since_the_version_held(daemon, store, sid):
+    """#385: given since, the version a client holds, the inbox sends only the items changed
+    since and the keys of those gone; every item for a version it can't answer from."""
+    t1, t2 = store.post_item(sid, "task", "one"), store.post_item(sid, "task", "two")
+    full = (await call(daemon, "GET", "/inbox")).json()
+    assert ([i["ref"] for i in full["items"]], full.get("delta")) == ([t1, t2], None), "none held: every item"
+    held = f"{full['epoch']}:{full['version']}"
+    same = (await call(daemon, "GET", f"/inbox?since={held}")).json()
+    assert (same["delta"], same["items"], same["removed"], same["version"]) == (True, [], [], full["version"]), \
+        "nothing changed: nothing sent, the version kept"
+    store.set_pinned(sid, t2, True)
+    t3 = store.post_item(sid, "task", "three")
+    with store.tx() as db:
+        db.execute("DELETE FROM items WHERE session_id = ? AND ref = ?", (sid, t1))
+    delta = (await call(daemon, "GET", f"/inbox?since={held}")).json()
+    assert (sorted(i["ref"] for i in delta["items"]), delta["removed"]) == ([t2, t3], [[sid, t1]]), \
+        "the changed and new sent, the gone named"
+    assert delta["version"] > full["version"] and "drafts" in delta, "a new version; the rest whole, as ever"
+    for since, desc in [(f"other:{full['version']}", "another daemon's version"),
+                        (f"{full['epoch']}:{delta['version'] + 5}", "a version this daemon never made"),
+                        ("rubbish", "not a version")]:
+        r = (await call(daemon, "GET", f"/inbox?since={since}")).json()
+        assert (r.get("delta"), sorted(i["ref"] for i in r["items"])) == (None, [t2, t3]), f"{desc}: every item"
+
+
+def test_a_version_older_than_the_tombstones_kept_gets_every_item():
+    """#385: past InboxLog.TOMBSTONES gone rows, a version before the oldest let go can't learn of
+    it: answered in full."""
+    log = daemon_mod.InboxLog()
+    log.TOMBSTONES = 2
+    rows = [{"session_id": "s", "ref": f"T{i}", "id": i} for i in range(5)]
+    log.update(rows)
+    first = f"{log.epoch}:{log.version}"
+    for n in (4, 3, 2):   # three gone, one version each: the first tombstone let go
+        log.update(rows[:n])
+    assert log.since(first) is None, "the first gone was let go: every item"
+    assert log.since(f"{log.epoch}:{log.version - 1}") == ([], [("s", "T2")]), "a later version still answered"
+
+
+async def test_a_command_given_the_inbox_version_answers_with_the_inbox(daemon, store, sid):
+    """#385: a command sent with X-Inbox-Since answers with the inbox as it left it, since that
+    version, so the client fetches nothing more to show it; one without, as ever."""
+    t1 = store.post_item(sid, "task", "one")
+    full = (await call(daemon, "GET", "/inbox")).json()
+    r = await call(daemon, "POST", f"/items/{sid}/{t1}/pin", {"pinned": True},
+                   x_inbox_since=f"{full['epoch']}:{full['version']}")
+    assert r.status_code == 200, r.text
+    inbox = r.json()["inbox"]
+    assert (inbox["delta"], [(i["ref"], i["pinned"]) for i in inbox["items"]]) == (True, [(t1, 1)]), inbox
+    plain = await call(daemon, "POST", f"/items/{sid}/{t1}/pin", {"pinned": False})
+    assert "inbox" not in plain.json(), "not asked for: not sent"
+
+
+async def test_a_command_whose_inbox_cant_be_read_still_answers_done(daemon, store, sid, monkeypatch):
+    """#385 review: the inbox read after a command (with_inbox) failing never says a command
+    that was done failed: answered without the inbox, which the client then fetches."""
+    t1 = store.post_item(sid, "task", "one")
+
+    def busy(since):
+        raise sqlite3.OperationalError("database is locked")
+    monkeypatch.setattr(daemon, "inbox_answer", busy)
+    r = await call(daemon, "POST", f"/items/{sid}/{t1}/pin", {"pinned": True}, x_inbox_since="x:1")
+    assert (r.status_code, "inbox" in r.json(), store.item(sid, t1)["pinned"]) == (200, False, 1), r.text
