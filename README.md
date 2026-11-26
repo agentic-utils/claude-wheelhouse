@@ -1080,7 +1080,9 @@ the stats bars move; fractions are allowed, up to 30. The title and the eyes dra
 compaction overlay at most 4, whatever the rate, leaving the UI thread to your keys. Every rate moves them at the same
 speed: a lower one draws fewer steps. While the terminal window is unfocused and no
 session is busy, the animation rests, and starts again when you come back or a session
-gets busy. The daemon reads only the settings it uses: `PORT`, `USAGE_MODE`,
+gets busy. It also gives way to you: it rests for a second after any key, click or pointer
+move, and while the app or the machine is too busy to keep its frames on time (one more than
+20 ms late) it draws one frame a second until they have kept time for two seconds. The daemon reads only the settings it uses: `PORT`, `USAGE_MODE`,
 `KEEPALIVE_HOURS` and `GITLAB_CA_CERT`.
 
 A GitLab merge request on any host counts as a PR: its URL's shape,

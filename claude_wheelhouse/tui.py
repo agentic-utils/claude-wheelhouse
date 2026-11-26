@@ -68,7 +68,7 @@ from textual.widgets import (
     TextArea,
 )
 
-from . import api, away, callout, compactor, quickshell, columns, docblocks, docroots, emoji, features, helper, models, ordering, prs, search, steps, subagents, transcript, transcript_usage, tutorial, whatsnew
+from . import api, away, callout, compactor, quickshell, repaint, columns, docblocks, docroots, emoji, features, helper, models, ordering, prs, search, steps, subagents, transcript, transcript_usage, tutorial, whatsnew
 from .rows import KIND_COLOUR, KeepColours, RowTips, faded, marked, plain
 from .callout import TourCallout
 from .client import LOST, LocalClient, Unreachable
@@ -81,6 +81,8 @@ from .tour import LIT as tour_lit, NOTES, PAUSED, ROWS as tour_rows, SHUN as tou
 from .store import (DEFAULT_THEN, DELETED, DISMISSABLE, FINISHED_RANK, PARENTS, RUNNABLE, SETTLED, SETTLED_RANK, SessionGone, Store, db_path, default_runner,
                     family, inbox_rank, mcp_servers, mode, pinned, runner, spared, stamp, standing)
 from .unsent import Unsent
+
+repaint.install()   # a partial update renders and writes only what it changes (#385)
 
 MATRIX = "#00ff41"
 OFF = "#666666"   # a disabled button's dark grey, under black text (#107)
@@ -120,6 +122,13 @@ ART_STYLE = {"wall": "#2f8cff", "seam": "#1f5daa", "crew": "bold #9cc8ff", "slud
              "alert": "bold #ff4b3e", "flash": "bold #ffffff", "text": "#2f8cff"}
 DOCK_FPS = 4   # the compaction overlay's frames a second (#287, #327), no more than the app's own rate (features.animation_fps)
 EYES_FPS = 5   # the most frames a second the title's shimmer and the eyes are drawn at, whatever ANIMATION_FPS asks (#327)
+# the animation yields (#385): it rests REST seconds after a key, click or pointer move, and a
+# frame due more than LATE seconds late (the loop or the core busy) draws it at SLOW_FPS until
+# its frames have come on time for SLOW_HOLD seconds
+REST = 1.0
+LATE = 0.020
+SLOW_FPS = 1
+SLOW_HOLD = 2.0
 # a doc block (doc_blocks) longer than this is rendered on a thread (Transcript._layout): a
 # 42 KB one takes Rich a second or two, which the loop would otherwise stall for
 RENDER_OFF_LOOP = 2000
@@ -305,6 +314,13 @@ DETAIL_ROOM = 40   # the columns Detail keeps on a narrow terminal while the oth
 def eye_at(frame: int, width: int = 8) -> int:
     """Where the eye is at `frame`: all that changes from one of its frames to the next (cylon)."""
     return round((math.sin(frame / 4) + 1) / 2 * (width - 1))
+
+
+def eye_change(was: int, now: int, width: int = 8) -> tuple[int, int] | None:
+    """The eye's cells, first and past the last, that look different with its head at `now`
+    rather than `was` (cylon): None if none do."""
+    looks = [i for i in range(width) if min(abs(i - was), 3) != min(abs(i - now), 3)]
+    return (looks[0], looks[-1] + 1) if looks else None
 
 
 def dot_dimmed(frame: int) -> bool:
@@ -1115,6 +1131,22 @@ class SinkList(RowTips, KeepColours, DataTable):
     DROP_UNDER, DROP_OVER = Style(underline=True), Style(overline=True)
     CREEP = 0.05   # seconds between rows, while a drag holds the pointer at an edge
 
+    pass_style: Style | None = None   # the table's style for the lines being drawn (render_lines)
+
+    def render_lines(self, crop: Region) -> list[Strip]:
+        """As DataTable draws them, its style worked out once for the lines, not once a line:
+        DOMNode.rich_style walks every ancestor's styles uncached, and an eye frame draws
+        a line for each busy row (#385)."""
+        self.pass_style = DataTable.rich_style.fget(self)
+        try:
+            return super().render_lines(crop)
+        finally:
+            self.pass_style = None
+
+    @property
+    def rich_style(self) -> Style:
+        return DataTable.rich_style.fget(self) if self.pass_style is None else self.pass_style
+
     def __init__(self, **kwargs):
         self.blank_lines: LRUCache[tuple, Strip] = LRUCache(1000)   # _render_line
         super().__init__(**kwargs)
@@ -1436,6 +1468,7 @@ class SessionList(SinkList):
         self.eye_frame = 0
         self.swept: tuple | None = None   # the busy rows and the eye's place as last drawn again (sweep)
         self.blinked = False   # whether the busy rows' dots were last drawn dimmed (sweep)
+        self.eyed: dict[tuple, tuple[Strip, Strip]] = {}   # busy rows' lines as drawn, eye and all (_render_line)
 
     def name_room(self, rows: list[tuple]) -> int:
         """The cells a name may have, ⟳ and all: the pane's width less every other column's as
@@ -1451,21 +1484,36 @@ class SessionList(SinkList):
         (_render_line), and those rows alone drawn again. Never in the table's data, where
         each change would draw every row again: DataTable's caches key on its count of them.
         Not if the eyes are where they were last drawn, on the same rows: a frame can leave them there.
-        Their dots flash the same way (dot_dimmed): with the eyes still, only the dots' cells drawn again."""
+        On the same rows, only the eye's cells that look different are drawn again (eye_change),
+        a few of its eight (#385). Their dots flash the same way (dot_dimmed): with the eyes
+        still, only the dots' cells drawn again."""
         self.eye_frame = frame
         swept = (frozenset(self.eyes), frozenset(self.blue), eye_at(frame, self.EYE))   # a row the table draws anew, it draws as it is
         blinked = dot_dimmed(frame)
         if swept == self.swept and blinked == self.blinked:
             return
-        moved, flashed, self.swept, self.blinked = swept != self.swept, blinked != self.blinked, swept, blinked
+        was, moved, flashed = self.swept, swept != self.swept, blinked != self.blinked
+        self.swept, self.blinked = swept, blinked
+        cells = eye_change(was[2], swept[2], self.EYE) if moved and was is not None and was[:2] == swept[:2] else None
         eye = len(self.columns) - 1   # the eye's cell, the last (_render_line): its cells alone drawn again (#327)
+        drawn = []
         for sid in self.eyes:
             if sid in self.rows:
                 row = self.get_row_index(sid)
                 if moved:
-                    self.refresh_coordinate(Coordinate(row, eye))
+                    cell = self._get_cell_region(Coordinate(row, eye))
+                    drawn.append(cell if cells is None else
+                                 Region(cell.x + self.cell_padding + cells[0], cell.y, cells[1] - cells[0], 1))
                 if flashed:
-                    self.refresh_coordinate(Coordinate(row, 0))
+                    drawn.append(self._get_cell_region(Coordinate(row, 0)))
+        self.draw_again(drawn)
+
+    def draw_again(self, regions: list[Region]) -> None:
+        """The table's `regions` (cells, as DataTable._refresh_region takes them) drawn again,
+        those in sight, in one refresh: each refresh empties the widget's caches (#385)."""
+        window, offset = self.window_region, self.scroll_offset
+        if shown := [r.translate(-offset) for r in regions if window.overlaps(r)]:
+            self.refresh(*shown)
 
     def _render_line(self, y: int, x1: int, x2: int, base_style: Style) -> Strip:
         """The line as DataTable draws it, with a busy row's eye over its blank cell, and its
@@ -1479,6 +1527,21 @@ class SessionList(SinkList):
             return strip
         if line or row_key.value not in self.eyes:
             return strip
+        # the line as the table drew it (its cache gives the same strip while nothing else
+        # changed: the cursor, the pointer, the data) with the eye where it is: each eye frame
+        # draws a row again, and building the eye each time was most of what a frame cost (#385)
+        key = (id(strip), eye_at(self.eye_frame, self.EYE), row_key.value in self.blue, dot_dimmed(self.eye_frame), self.show_cursor)
+        kept = self.eyed.get(key)
+        if kept is not None and kept[0] is strip:
+            return kept[1]
+        if len(self.eyed) > 4 * self.EYE * max(len(self.eyes), 1):
+            self.eyed.clear()
+        drawn = self.eye_line(strip, row_key, x1)
+        self.eyed[key] = (strip, drawn)
+        return drawn
+
+    def eye_line(self, strip: Strip, row_key, x1: int) -> Strip:
+        """A busy row's line as the table drew it, with its eye and its dot (_render_line)."""
         if dot_dimmed(self.eye_frame):
             strip = self.dim_dot(strip, x1)
         *before, _ = self.ordered_columns
@@ -1495,7 +1558,7 @@ class SessionList(SinkList):
             self.cursor_background_priority == "css")
         under = next(iter(strip.crop(lo, lo + 1)), None)
         base = under.style if under is not None and under.style else Style()
-        eye = Strip([Segment(seg.text, base + seg.style + post) for seg in cylon(self.eye_frame, colours=EYE_BLUE if row_key.value in self.blue else EYE_RED).render(self.app.console)])
+        eye = Strip([Segment(seg.text, base + seg.style + post) for seg in cylon(self.eye_frame, colours=EYE_BLUE if row_key.value in self.blue else EYE_RED).render(self.app.console)]).simplify()
         return Strip.join([strip.crop(0, lo), eye.crop(lo - x, hi - x), strip.crop(hi)])
 
     def dim_dot(self, strip: Strip, x1: int) -> Strip:
@@ -2006,6 +2069,7 @@ class CompactorOverlay(Widget, can_focus=False):
     linger = None   # an end's one-shot: the final frame's LINGER seconds out
     shown: "compactor.Docked | None" = None
     drawn = None   # what the last frame drew (paint): the same again draws nothing
+    drawn_at = -1.0   # when its timer last drew, by WheelhouseApp.wall (frame_due)
     fps = 0.0   # its rate, read as it opens (show)
     under: Widget | None = None   # the conversation it's centred on (WheelhouseApp.on_mount)
 
@@ -2039,7 +2103,7 @@ class CompactorOverlay(Widget, can_focus=False):
         if self.timer is None:   # the rate read as it opens, never at each frame (it reads the .env files)
             self.fps = min(DOCK_FPS, features.animation_fps())
         if self.fps and self.timer is None:
-            self.timer = self.set_interval(1 / self.fps, self.paint)
+            self.timer = self.set_interval(1 / self.fps, self.frame_due)
 
     def ends(self) -> None:
         """An end's final frame: dismissed LINGER seconds after that stage began."""
@@ -2088,6 +2152,15 @@ class CompactorOverlay(Widget, can_focus=False):
         big = self.big()
         moving = big and self.fps > 0
         return self.shown.state, big, int(max(0.0, self.now() - self.shown.since) * compactor.TICKS) if moving else -1
+
+    def frame_due(self) -> None:
+        """Its timer: a frame (paint), unless the app's animation rests (WheelhouseApp.resting,
+        #385); the preview's app (preview.py) never does."""
+        resting = getattr(self.app, "resting", None)
+        at = self.app.wall() if resting else 0.0
+        if resting is None or not resting(at, self.drawn_at):
+            self.drawn_at = at
+            self.paint()
 
     def paint(self) -> None:
         """The frame for now, drawn only if it differs from the last."""
@@ -3239,7 +3312,7 @@ class TitleBar(Static):
         key = (self.look, y)
         line = self.lines.get(key)
         if line is None:
-            line = self.lines[key] = super().render_line(y)
+            line = self.lines[key] = super().render_line(y).simplify()   # the shimmer's letters in pairs share a colour: a segment a pair
         return line
 
 
@@ -5314,6 +5387,11 @@ class WheelhouseApp(App):
         self.blink = False   # whether the busy dots were last dimmed (animate, dot_dimmed)
         self.steps_chosen = False   # the first-press dialog answered, here or before (first_press)
         self.animating = True   # whether it runs: paused while unfocused with nothing busy (pace)
+        self.input_at = -REST   # when the last key, click or pointer move came: the animation rests after it (frame_due)
+        self.frame_period = 0.0   # seconds between animate's timer's fires (frame_due)
+        self.fired_at = None   # when animate's timer last fired, and when a frame last drew, by WheelhouseApp.wall (frame_due)
+        self.drawn_at = -1.0
+        self.slow_until = 0.0   # a late frame's slow pace lasts until then (frame_due)
         self.filter_sid: str | None = None
         self.followed: str | None = None   # the session last followed, which a key picks again (SessionList.reveal)
         self.cycles_seen: set[tuple] | None = None   # the compaction cycles under way at the last refresh (focus_compactions)
@@ -5553,7 +5631,8 @@ class WheelhouseApp(App):
         self.client.start(self.post)   # the daemon's stream, now there's an app to tell
         self.started = self.now()
         if fps := features.animation_fps():   # 0: no animation, the title and eyes drawn still
-            self.animation = self.set_interval(1 / min(fps, EYES_FPS), self.animate)
+            self.frame_period = 1 / min(fps, EYES_FPS)
+            self.animation = self.set_interval(self.frame_period, self.frame_due)
         self.paint_title()
         self.set_interval(1.0, self.tick)
         # a screen over the inbox, or a thread opened, is a break in looking: the dwell restarts
@@ -5696,6 +5775,8 @@ class WheelhouseApp(App):
         the widgets: an answer box would move its cursor and drop its selection, and the
         screen would take it for a click and clear its own."""
         woke = False
+        if isinstance(event, (events.Key, events.MouseEvent)) and not event.is_forwarded:
+            self.input_at = self.wall()   # the animation rests a moment (frame_due)
         if isinstance(event, (events.Key, events.MouseDown, events.MouseScrollDown, events.MouseScrollUp)) \
                 and not event.is_forwarded:
             shown = self.away_window
@@ -5930,6 +6011,12 @@ class WheelhouseApp(App):
         """The animation's clock (animate): a test runs it on one of its own."""
         return time.monotonic()
 
+    @staticmethod
+    def wall() -> float:
+        """The clock the animation yields by (frame_due): real time, as input and late timers
+        come, apart from the frames' own (now), which a test runs on its own."""
+        return time.monotonic()
+
     def animate(self) -> None:
         """A frame: everything where the time elapsed puts it, counted in FRAMES a second, so
         at any rate (features.animation_fps) the shimmer, the eyes and the bars move at the
@@ -5945,6 +6032,28 @@ class WheelhouseApp(App):
             self.sweep_eyes()
             if moved:
                 self.each_pane("animate", half)
+
+    def frame_due(self) -> None:
+        """The animation's timer: a frame (animate), unless it yields (#385). Not within REST
+        seconds of a key, click or pointer move, and at SLOW_FPS while the timer fires more than
+        LATE seconds late, as it does on a busy core or behind a slow refresh: the input a frame
+        would hold up counts for more."""
+        # Late is a gap between fires longer than the period: a callback timer isn't told when
+        # its fire was due. A timer late by the same amount each time keeps the period's gap, so
+        # it shows only when it varies, as a busy core's lateness does, or reaches a period, when
+        # Textual's timer drops the beats it missed and the gap doubles
+        at, before = self.wall(), self.fired_at
+        self.fired_at = at
+        if before is not None and at - before - self.frame_period > LATE:
+            self.slow_until = at + SLOW_HOLD
+        if not self.resting(at, self.drawn_at):
+            self.drawn_at = at
+            self.animate()
+
+    def resting(self, at: float, drawn_at: float) -> bool:
+        """Whether an animation that last drew at `drawn_at` skips the frame due `at`
+        (frame_due): within REST of input, or under SLOW_FPS while frames come late."""
+        return at - self.input_at < REST or (at < self.slow_until and at - drawn_at < 1 / SLOW_FPS)
 
     def tick(self) -> None:
         """The refresh, each second, skipped while a key lands (land): a refresh settles, and a
@@ -5973,6 +6082,7 @@ class WheelhouseApp(App):
         terminal that never reports focus counts as focused (Textual's app_focus starts True)."""
         run = self.app_focus or bool(self.session_list.eyes)
         if self.animation is not None and run and not self.animating:
+            self.fired_at = None   # the pause is no late frame (frame_due)
             self.animation.resume()
         elif self.animation is not None and not run and self.animating:
             self.animation.pause()
