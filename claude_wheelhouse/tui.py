@@ -5386,6 +5386,7 @@ class WheelhouseApp(App):
         self.steps_chosen = False   # the first-press dialog answered, here or before (first_press)
         self.animating = True   # whether it runs: paused while unfocused with nothing busy (pace)
         self.input_at = -REST   # when the last key, click or pointer move came: the animation rests after it (frame_due)
+        self.frame_period = 0.0   # seconds between animate's timer's fires (frame_due)
         self.fired_at = None   # when animate's timer last fired, and when a frame last drew, by WheelhouseApp.wall (frame_due)
         self.drawn_at = -1.0
         self.slow_until = 0.0   # a late frame's slow pace lasts until then (frame_due)
@@ -5620,7 +5621,8 @@ class WheelhouseApp(App):
         self.client.start(self.post)   # the daemon's stream, now there's an app to tell
         self.started = self.now()
         if fps := features.animation_fps():   # 0: no animation, the title and eyes drawn still
-            self.animation = self.set_interval(1 / min(fps, EYES_FPS), self.frame_due)
+            self.frame_period = 1 / min(fps, EYES_FPS)
+            self.animation = self.set_interval(self.frame_period, self.frame_due)
         self.paint_title()
         self.set_interval(1.0, self.tick)
         # a screen over the inbox, or a thread opened, is a break in looking: the dwell restarts
@@ -6023,9 +6025,13 @@ class WheelhouseApp(App):
         seconds of a key, click or pointer move, and at SLOW_FPS while the timer fires more than
         LATE seconds late, as it does on a busy core or behind a slow refresh: the input a frame
         would hold up counts for more."""
+        # Late is a gap between fires longer than the period: a callback timer isn't told when
+        # its fire was due. A timer late by the same amount each time keeps the period's gap, so
+        # it shows only when it varies, as a busy core's lateness does, or reaches a period, when
+        # Textual's timer drops the beats it missed and the gap doubles
         at, before = self.wall(), self.fired_at
         self.fired_at = at
-        if before is not None and at - before - self.animation._interval > LATE:
+        if before is not None and at - before - self.frame_period > LATE:
             self.slow_until = at + SLOW_HOLD
         if not self.resting(at, self.drawn_at):
             self.drawn_at = at
