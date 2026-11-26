@@ -201,6 +201,7 @@ async def test_a_pin_shows_before_the_daemon_answers(store, sid, tmp_path, via, 
 @pytest.mark.parametrize("via", ["threaded"], indirect=True)
 @pytest.mark.parametrize("case, desc", [
     ("pin ctrl+z", "Ctrl+Z typed while T2's pin is on the lane waits for it: T2's pin undone, T1's kept"),
+    ("pin ctrl+z pin", "Alt+P on T1, Ctrl+Z, Alt+P on T1, the first held: the last reads the undo, T1 pinned"),
     ("allow ctrl+r", "Ctrl+R typed while an Allow is on the lane reaches the daemon after it, as typed"),
     ("fetch_now raises", "fetch_now raising after the pin is sent: the pin still lands, the lane free"),
     ("inbox unfetched", "the lane's inbox fetch failing: the pin stays drawn until a fresh inbox shows it"),
@@ -210,7 +211,6 @@ async def test_the_lane_keeps_order_and_always_lands(store, sid, tmp_path, via, 
     Ctrl+Z and Ctrl+R wait behind it, as they would behind a Delete (behind_deletes)."""
     import asyncio
     import threading
-    from textual.worker import WorkerFailed
     t1, t2 = post(store, sid, tmp_path, "task", "one"), post(store, sid, tmp_path, "task", "two")
     q = post(store, sid, tmp_path, "question", "which db?", status="closed")
     p = store.post_item(sid, "permission", "Bash: make")
@@ -236,12 +236,11 @@ async def test_the_lane_keeps_order_and_always_lands(store, sid, tmp_path, via, 
 
         async def landed():
             go.set()
-            for _ in range(2):
-                try:
-                    await app.workers.wait_for_complete()
-                except WorkerFailed:   # fetch_now's error, left to the worker's log
-                    assert case == "fetch_now raises", desc
+            for _ in range(50):   # each write behind another starts as that one lands
+                await app.workers.wait_for_complete()
                 await pilot.pause()
+                if not (app.sending or app.calls or app.behind):
+                    break
         if case == "pin ctrl+z":
             await on(t1)
             await pilot.press("alt+p")   # T1's pin landed first
@@ -249,6 +248,10 @@ async def test_the_lane_keeps_order_and_always_lands(store, sid, tmp_path, via, 
             await pilot.pause()
             app.client.set_pinned = held(app.client.set_pinned)
             await on(t2)
+            await pilot.press("alt+p")
+        elif case == "pin ctrl+z pin":
+            app.client.set_pinned = held(app.client.set_pinned)
+            await on(t1)
             await pilot.press("alt+p")
         elif case == "allow ctrl+r":
             await pilot.press("alt+v")   # the closed question in sight
@@ -272,17 +275,24 @@ async def test_the_lane_keeps_order_and_always_lands(store, sid, tmp_path, via, 
             await on(t1)
             await pilot.press("alt+p")
         await asyncio.get_running_loop().run_in_executor(None, sent.wait, 10)
-        if case == "pin ctrl+z":
+        if case.startswith("pin ctrl+z"):
             await pilot.press("ctrl+z")
+            if case == "pin ctrl+z pin":
+                await pilot.press("alt+p")
         elif case == "allow ctrl+r":
             await on(q)
             await pilot.press("ctrl+r")
             assert store.item(sid, q)["status"] == "closed", f"{desc}: not sent ahead of the Allow"
+        lane_workers = [w for w in app.workers if w.group == "lane" and not w.is_finished]
+        assert len(lane_workers) <= 1, f"{desc}: one thread of the pool however many queue (on_lane)"
         await landed()
         assert not (app.sending or app.holding), f"{desc}: the lane is free"
         if case == "pin ctrl+z":
             assert (store.item(sid, t1)["pinned"], store.item(sid, t2)["pinned"]) == (1, 0), f"{desc}: {notices(app)}"
             assert "undone: pinned T2" in notices(app), f"{desc}: {notices(app)}"
+        elif case == "pin ctrl+z pin":
+            assert store.item(sid, t1)["pinned"], f"{desc}: {notices(app)}"
+            assert notices(app)[-3:] == [f"pinned {t1}", f"undone: pinned {t1}", f"pinned {t1}"], desc
         elif case == "allow ctrl+r":
             assert store.item(sid, p)["status"] == "allowed", desc
             assert store.item(sid, q)["status"] == "answered", f"{desc}: {notices(app)}"

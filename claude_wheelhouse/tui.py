@@ -5362,6 +5362,9 @@ class WheelhouseApp(App):
         # does a Delete asked after it, and the app's close
         self.sending: list[threading.Event] = []
         self.holding: set[threading.Event] = set()   # those of them a key waits for (send_off's shown)
+        self.lane_jobs: list[Callable[[], None]] = []   # the commands waiting their turn on the lane (on_lane)
+        self.lane_lock = threading.Lock()
+        self.lane_running = False   # a worker is running them (drain_lane)
         self.lane_closed = threading.Event()   # set as the app closes: a call still waiting its turn isn't made (wait_turn)
         self.undoing = False   # a Ctrl+Z's calls under way (action_undo): Delete and Ctrl+Delete refused meanwhile
         self.deleting = 0   # those Deletes and Ctrl+Zs, counted: Ctrl+Z, Ctrl+R and a pin wait for them (behind_deletes)
@@ -8810,7 +8813,7 @@ class WheelhouseApp(App):
                 result = e
             self.as_typed(at, lambda: self.sent_landed(result, landed, failed, settled))
             return
-        waits = [*self.sending, *self.calls]
+        waits = list(self.calls)   # a Delete's or Ctrl+Z's; the commands before it run first on the lane (on_lane)
         made = threading.Event()
         self.sending.append(made)
         if not shown:
@@ -8840,11 +8843,38 @@ class WheelhouseApp(App):
                 if not self.post(land):
                     self.sending.remove(made)
                     self.holding.discard(made)
-        self.run_worker(work, thread=True, group="lane", exit_on_error=False)
+        self.on_lane(work)
+
+    def on_lane(self, job: Callable[[], None]) -> None:
+        """job run on the command lane, after those asked before it: one worker runs them all in
+        turn (drain_lane), so however many queue on a daemon that hangs, they hold one thread of
+        the pool, never the rest (a conversation's read, a spawn)."""
+        with self.lane_lock:
+            self.lane_jobs.append(job)
+            if self.lane_running:
+                return
+            self.lane_running = True
+        self.run_worker(self.drain_lane, thread=True, group="lane", exit_on_error=False)
+
+    def drain_lane(self) -> None:
+        """on_lane's jobs, in the order asked, until none is left. One that raises is logged and
+        the next still runs: its own finally has landed it (send_off)."""
+        while True:
+            with self.lane_lock:
+                if not self.lane_jobs:
+                    self.lane_running = False
+                    return
+                job = self.lane_jobs.pop(0)
+            try:
+                job()
+            except Exception as e:
+                self.log.error(f"command lane: {e!r}")
 
     def wait_turn(self, waits: list[threading.Event]) -> bool:
         """On a worker: each call asked before this one made, however long the daemon takes, so
         they reach it in the order asked. False if the app closes first (lane_closed)."""
+        if self.lane_closed.is_set():
+            return False
         for before in waits:
             while not before.wait(LANE_TURN):
                 if self.lane_closed.is_set():
@@ -9016,7 +9046,7 @@ class WheelhouseApp(App):
         lane, the commands on the lane too (send_off): Ctrl+Z's and Ctrl+R's calls are made off it,
         so would otherwise reach the hub before a pin or an Allow typed before them."""
         waits = self.calls_under_way() if lane else set(self.calls)
-        if not waits:
+        if not waits and not self.behind:   # behind another waiting write, it waits its turn too
             return False
         self.behind.append((waits, next(self.act_numbers), act))
         return True
@@ -9986,7 +10016,9 @@ class WheelhouseApp(App):
                 if self._next_callbacks:
                     await self._flush_next_callbacks()
                     continue
-                if commands and self.holding:   # the commands sent on the lane (send_off), landed as if typed slowly
+                # the commands sent on the lane (send_off), and the writes waiting for them or a Delete
+                # (behind_deletes), landed as if typed slowly: a key after a waiting Ctrl+Z reads what it undid
+                if commands and (self.holding or self.behind):
                     await asyncio.sleep(LANE_POLL)
                     continue
                 if not self.screen_stack:   # shutting down: nothing to act on
