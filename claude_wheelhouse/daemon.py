@@ -774,7 +774,10 @@ class Daemon:
                 since = request.headers.get("x-inbox-since")
                 if since is None or response.status_code != 200:
                     return response
-                return await run_in_threadpool(self.with_inbox, response, since)
+                try:
+                    return await run_in_threadpool(self.with_inbox, response, since)
+                except Exception:   # done all the same: answered without, the client fetches the inbox itself
+                    return response
             except ClientDisconnect:   # gone before it sent the body: nothing done, nobody to tell
                 return Response(status_code=499)
             except Exception as e:

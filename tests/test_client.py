@@ -711,3 +711,42 @@ def test_a_delta_that_cant_be_laid_over_whats_held_is_fetched_again(store, sid, 
         assert held(c) == whole(c), desc
     finally:
         c.disconnect()
+
+
+def test_a_command_keeps_the_threads_held_and_fetches_them_again_off_the_ui_thread(store, sid, served, heard):
+    """#385: a command sent from the UI thread (refetch now) no longer lets go of the threads
+    held, which the next click fetched again on the UI thread: kept, and the fetching thread
+    brings them up to date."""
+    d = served(store.path)
+    c = heard(d.client())
+    t1 = store.post_item(sid, "task", "one")
+    try:
+        c.refresh()
+        assert c.shown(("thread", sid, t1))["item"]["pinned"] == 0
+        assert c.set_pinned(sid, t1, True).ok
+        c.refresh()
+        assert ("thread", sid, t1) in c.cache, "kept through the command"
+        until(lambda: (c.shown(("thread", sid, t1)), c.refresh(), c.shown(("thread", sid, t1))["item"]["pinned"])[2] == 1,
+              desc="fetched again in the background, shown at a refresh")
+    finally:
+        c.disconnect()
+
+
+def test_a_lane_command_that_brings_no_inbox_leaves_fetch_now_to_fetch_it(store, sid, served):
+    """#385 review: the last command sent decides whether fetch_now fetches the inbox: one that
+    raises after one that brought it leaves it to fetch_now."""
+    d = served(store.path)
+    c = d.client()
+    c.threads = [object()]   # as started, without the stream
+    t1 = store.post_item(sid, "task", "one")
+    try:
+        c.refresh()
+        with c.deferred():
+            c.set_pinned(sid, t1, True)
+            assert c.local.brought, "the pin's answer brought the inbox"
+            with pytest.raises(KeyError):
+                c.command(f"/items/{sid}/T99/pin", {"pinned": True})
+            assert not c.local.brought, "the failed one brought none: fetch_now fetches it"
+    finally:
+        c.threads = []
+        c.disconnect()

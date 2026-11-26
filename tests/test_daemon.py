@@ -1679,3 +1679,15 @@ async def test_a_command_given_the_inbox_version_answers_with_the_inbox(daemon, 
     assert (inbox["delta"], [(i["ref"], i["pinned"]) for i in inbox["items"]]) == (True, [(t1, 1)]), inbox
     plain = await call(daemon, "POST", f"/items/{sid}/{t1}/pin", {"pinned": False})
     assert "inbox" not in plain.json(), "not asked for: not sent"
+
+
+async def test_a_command_whose_inbox_cant_be_read_still_answers_done(daemon, store, sid, monkeypatch):
+    """#385 review: the inbox read after a command (with_inbox) failing never says a command
+    that was done failed: answered without the inbox, which the client then fetches."""
+    t1 = store.post_item(sid, "task", "one")
+
+    def busy(since):
+        raise sqlite3.OperationalError("database is locked")
+    monkeypatch.setattr(daemon, "inbox_answer", busy)
+    r = await call(daemon, "POST", f"/items/{sid}/{t1}/pin", {"pinned": True}, x_inbox_since="x:1")
+    assert (r.status_code, "inbox" in r.json(), store.item(sid, t1)["pinned"]) == (200, False, 1), r.text

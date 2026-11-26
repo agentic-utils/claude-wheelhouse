@@ -398,6 +398,8 @@ class RemoteClient:
         key = str(uuid.uuid4())
         sent = False   # once it may have reached the daemon, a failure is LOST, never "nothing was sent"
         lane = getattr(self.local, "deferred", False) and self.threads
+        if lane:   # the last command sent decides: one that raises or brings none leaves fetch_now to fetch it
+            self.local.brought = False
         try:
             for attempt in range(2):
                 try:
@@ -477,13 +479,18 @@ class RemoteClient:
 
     def catch_up(self) -> None:
         """After a command, what it changed, fetched before anything is read again: the
-        sessions and the inbox at once, and the threads and conversations when next shown.
-        As the hub in process, whose next read of the store had it."""
+        sessions and the inbox at once. The threads and conversations held are kept, shown as
+        they were, and fetched again by the fetching thread, so a row clicked next isn't fetched
+        on the UI thread (#385); with no threads of its own (synchronous), let go and fetched
+        when next shown, as the hub in process, whose next read of the store had it."""
         with self.lock:
             if not self.connected and self.threads:   # lost: fetched once the stream is back
                 return
             forced, self.forced = self.forced, False
-            if forced:
+            if forced and self.threads:
+                self.dirty |= set(self.cache)
+                self.lock.notify_all()
+            elif forced:
                 for key in list(self.cache):
                     self.forget(key)
         if forced:
@@ -669,7 +676,7 @@ class RemoteClient:
                 rows.pop(tuple(key), None)
             for it in data["items"]:
                 key = (it["session_id"], it["ref"])
-                grew = grew or key not in rows
+                grew = grew or key not in rows or rows[key]["id"] != it["id"]
                 rows[key] = it
             if grew:
                 rows = dict(sorted(rows.items(), key=lambda kv: kv[1]["id"]))
