@@ -292,9 +292,13 @@ class RemoteClient:
         self.forced = True   # the next refresh fetches at once: the first, and after a command
         self.lock = threading.Condition()
         self.local = threading.local()   # deferred: this thread's commands leave their refetch to it (#385)
-        self.expecting: dict[tuple[str, str], list[dict]] = {}
+        self.expecting: dict[tuple[str, str], list[dict]] = {}   # each item's changes shown before the daemon has them (expect)
+        # those let go (expected) while the inbox shown predates a fetch_now that failed, the seq it
+        # took: they stay laid over it until an inbox fetched after that is shown (apply)
+        self.letting_go: list[dict] = []
+        self.unfetched = -1
         self.asides: list[Callable[[], object]] = []   # writes nobody waits on, to send in order (aside)
-        self.aside_thread: threading.Thread | None = None   # each item's changes shown before the daemon has them (expect)
+        self.aside_thread: threading.Thread | None = None
         self.stopping = False
         self.threads: list[threading.Thread] = []
         self.last_event: str | None = None
@@ -479,15 +483,18 @@ class RemoteClient:
 
     def fetch_now(self) -> None:
         """The sessions and the inbox fetched now, on the caller's thread (never the UI's: a
-        worker's), into waiting for land or the next refresh. One that fails is left to the
-        fetching thread."""
+        worker's), into waiting for land or the next refresh. One that fails, however (the
+        daemon lost, bad JSON, the client closed under it by a stream revive), is left to the
+        fetching thread, and an expect let go meanwhile stays shown until it has (expected)."""
         for key in (("sessions",), ("inbox",)):
             seq = self.next_seq()
             try:
                 data = self.fetch(key)
-            except (Unreachable, Refused, self.httpx.TransportError):
+            except Exception:
                 with self.lock:
                     self.dirty.add(key)
+                    if key == ("inbox",):
+                        self.unfetched = max(self.unfetched, seq)
                     self.lock.notify_all()
                 continue
             with self.lock:
@@ -518,18 +525,27 @@ class RemoteClient:
 
     def expected(self, token: object) -> None:
         """An expect let go, as its command lands, done or not: the item as fetched from now, the
-        version moved only if that differs from what was shown (a command that failed)."""
+        version moved only if that differs from what was shown (a command that failed). With the
+        inbox shown older than a fetch_now that failed, kept until a fresh one is (apply): else
+        a pin that was done would flicker off until then."""
         with self.lock:
-            shown = dict(self.by_key)
-            for key, tokens in list(self.expecting.items()):
-                if any(t is token for t in tokens):
-                    tokens[:] = [t for t in tokens if t is not token]
-                    if not tokens:
-                        del self.expecting[key]
-            self.overlay(moved=False)
-            if any(self.by_key.get(key) != it for key, it in shown.items()):
-                self.version += 1
-                self.inbox_version += 1
+            if self.shown_seq.get(("inbox",), -1) < self.unfetched:
+                self.letting_go.append(token)
+                return
+            self.let_go([token])
+
+    def let_go(self, gone: list) -> None:
+        """The expects in gone dropped, the inbox laid out again (under the lock), the version
+        moved only if that changes what was shown."""
+        shown = dict(self.by_key)
+        for key, tokens in list(self.expecting.items()):
+            tokens[:] = [t for t in tokens if not any(t is g for g in gone)]
+            if not tokens:
+                del self.expecting[key]
+        self.overlay(moved=False)
+        if any(self.by_key.get(key) != it for key, it in shown.items()):
+            self.version += 1
+            self.inbox_version += 1
 
     def overlay(self, moved: bool = True) -> None:
         """The inbox as fetched, with the changes expected laid over it, as shown (under the lock);
@@ -622,7 +638,10 @@ class RemoteClient:
                               {(d["session_id"], d["item_ref"]) for d in data["drafts"]},
                               {tuple(k) for k in data["awaiting"]})
             self.tutorial_state = data["tutorial"]
-            if self.expecting:
+            if self.letting_go and seq > self.unfetched:   # fresh since a fetch_now failed (expected)
+                gone, self.letting_go = self.letting_go, []
+                self.let_go(gone)
+            elif self.expecting:
                 self.overlay(moved=False)   # moved above, if the fetch brought anything new
             self.sdk = data.get("sdk", False)   # a daemon on older code doesn't say: off
             if features.sdk_enabled() and not self.sdk and not self.elsewhere and not self.sdk_said:

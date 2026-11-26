@@ -127,8 +127,9 @@ TOUR_OFFER_KEPT = 10   # seconds tour_offer's answer is kept while nothing it re
 DETAIL_SETTLE = 0.06   # seconds a selection rests before a conversation not yet rendered renders (show_detail)
 DETAIL_INLINE = 8   # ... and the most blocks not rendered yet that render on the loop at once
 OLDER_SETTLE = 0.3   # seconds a conversation rests at its top before a page more of it is read (reached_top, #347)
+LANE_TURN = 0.5   # seconds between a waiting call's looks at whether the app is closing (wait_turn)
 LANE_POLL = 0.005   # seconds between looks at the command lane, while a key waits for it to land (land)
-CALLS_WAIT = 10   # seconds the app's close waits for a Delete's calls under way (delete_off_thread)
+CALLS_WAIT = 10   # seconds the app's close waits, in all, for the calls under way: a Delete's, a Ctrl+Z's, the lane's (send_off)
 RENDERING = ("note", "_rendering…_")
 CONVERSATION_RETRY = 2   # seconds before a conversation fetch that brought nothing (unreachable, busy) is tried again
 READING = "_reading…_"   # a conversation while it's fetched off the loop (WheelhouseApp.conversation)
@@ -5361,6 +5362,7 @@ class WheelhouseApp(App):
         # does a Delete asked after it, and the app's close
         self.sending: list[threading.Event] = []
         self.holding: set[threading.Event] = set()   # those of them a key waits for (send_off's shown)
+        self.lane_closed = threading.Event()   # set as the app closes: a call still waiting its turn isn't made (wait_turn)
         self.undoing = False   # a Ctrl+Z's calls under way (action_undo): Delete and Ctrl+Delete refused meanwhile
         self.deleting = 0   # those Deletes and Ctrl+Zs, counted: Ctrl+Z, Ctrl+R and a pin wait for them (behind_deletes)
         self.behind: list[tuple[set, int, Callable[[], None]]] = []   # what waits, in the order asked: the calls it waits for, its number
@@ -5572,8 +5574,10 @@ class WheelhouseApp(App):
         helper's claude, if one runs, stopped. The last input kept, for the next start's card."""
         if self.last_input is not None and self.last_input != self.input_kept:
             self.client.note_input(away.stamp(self.last_input))
+        deadline = time.monotonic() + CALLS_WAIT   # in all, however many are queued on a daemon that hangs
         for made in [*self.calls, *self.sending]:   # a Delete's calls and the commands under way finish first
-            made.wait(CALLS_WAIT)
+            made.wait(max(0.0, deadline - time.monotonic()))
+        self.lane_closed.set()
         self.client.disconnect()
         if self.helper is not None:
             self.helper.stop()
@@ -8813,17 +8817,7 @@ class WheelhouseApp(App):
             self.holding.add(made)
 
         def work() -> None:
-            try:
-                for before in waits:
-                    before.wait(CALLS_WAIT)
-                try:
-                    with self.client.deferred():
-                        result = call()
-                except Exception as e:   # the daemon lost, the session gone, the item answered meanwhile
-                    result = e
-                self.client.fetch_now()
-            finally:
-                made.set()
+            result: object = None
 
             def land() -> None:
                 self.sending.remove(made)
@@ -8832,10 +8826,30 @@ class WheelhouseApp(App):
                     self.client.land()
                     self.as_typed(at, lambda: self.sent_landed(result, landed, failed, settled))
                     self.let_behind()
-            if not self.post(land):
-                self.sending.remove(made)
-                self.holding.discard(made)
+            try:
+                if not self.wait_turn(waits):
+                    return   # the app closed first: never sent
+                try:
+                    with self.client.deferred():
+                        result = call()
+                except Exception as e:   # the daemon lost, the session gone, the item answered meanwhile
+                    result = e
+                self.client.fetch_now()   # one that fails is left to the refresh (RemoteClient.fetch_now)
+            finally:   # whatever went wrong, the lane moves on and the key behind isn't held
+                made.set()
+                if not self.post(land):
+                    self.sending.remove(made)
+                    self.holding.discard(made)
         self.run_worker(work, thread=True, group="lane", exit_on_error=False)
+
+    def wait_turn(self, waits: list[threading.Event]) -> bool:
+        """On a worker: each call asked before this one made, however long the daemon takes, so
+        they reach it in the order asked. False if the app closes first (lane_closed)."""
+        for before in waits:
+            while not before.wait(LANE_TURN):
+                if self.lane_closed.is_set():
+                    return False
+        return True
 
     def sent_landed(self, result, landed, failed, settled) -> None:
         """send_off's command answered, on the UI thread: as its handler said it when it ran inline."""
@@ -8921,8 +8935,8 @@ class WheelhouseApp(App):
         def work() -> None:
             results = []
             try:
-                for before in waits:
-                    before.wait(CALLS_WAIT)
+                if not self.wait_turn(waits):
+                    return   # the app closed first: never sent
                 for item, family in acts:
                     try:
                         results.append(call(item, family))
@@ -8993,15 +9007,18 @@ class WheelhouseApp(App):
         finally:
             self.acting = acting
 
-    def behind_deletes(self, act: Callable[[], None]) -> bool:
+    def behind_deletes(self, act: Callable[[], None], lane: bool = False) -> bool:
         """A write to the inbox asked while a Delete is landing (delete_off_thread): True, and act
         done once the calls under way when it was asked have landed, in the order asked, so it
         never reaches the hub before the delete it follows (Ctrl+R straight after Delete would
         otherwise reopen, then be closed). act carries what the key acts on, taken as it was
-        pressed (#312): a later Delete isn't waited for, nor a move of the cursor followed."""
-        if not self.calls:
+        pressed (#312): a later Delete isn't waited for, nor a move of the cursor followed. With
+        lane, the commands on the lane too (send_off): Ctrl+Z's and Ctrl+R's calls are made off it,
+        so would otherwise reach the hub before a pin or an Allow typed before them."""
+        waits = self.calls_under_way() if lane else set(self.calls)
+        if not waits:
             return False
-        self.behind.append((set(self.calls), next(self.act_numbers), act))
+        self.behind.append((waits, next(self.act_numbers), act))
         return True
 
     def close_pinned(self, item, family: list) -> None:
@@ -9132,9 +9149,10 @@ class WheelhouseApp(App):
         self.settle()
         if isinstance(self.focused, (TextArea, Input)) or self.screen is not self.screen_stack[0]:
             return
-        if self.behind_deletes(self.undo_now):   # its act isn't the last until it lands
+        if self.behind_deletes(self.undo_now, lane=True):   # its act isn't the last until it lands
             self.undo_waits.add(self.behind[-1][1])
-            self.notify("Ctrl+Z: once the undo under way lands" if self.undoing else "Ctrl+Z: once the delete under way lands")
+            if self.calls:   # a command on the lane alone lands in a moment: nothing to say
+                self.notify("Ctrl+Z: once the undo under way lands" if self.undoing else "Ctrl+Z: once the delete under way lands")
             return
         self.undo_now()
 
@@ -9193,16 +9211,21 @@ class WheelhouseApp(App):
     def answer_permission(self, sid: str, ref: str, decision: str, message: str = "") -> None:
         """The person's Allow, Always or Deny: an explicit act, as Delete is, so selected, the
         item moves at once (ranked). Answered from the press (#385): the item shown allowed or
-        denied (expect), so its buttons go at once, and come back if the daemon refuses it."""
+        denied (expect), so its buttons go at once, and come back if the daemon refuses it. One
+        that isn't an open permission (answered meanwhile, or the cursor moved off it) is never
+        shown answered: the daemon says why, and the keys behind wait for it."""
         self.repin.add(f"{sid}|{ref}")
-        token = self.client.expect(sid, ref, status="denied" if decision == "deny" else "allowed")
+        item = self.client.item(sid, ref)
+        asking = bool(item) and item["kind"] == "permission" and item["status"] == "open"
+        token = asking and self.client.expect(sid, ref, status="denied" if decision == "deny" else "allowed")
         self.paint_sendbar()
 
         def settled() -> None:
-            self.client.expected(token)
+            if asking:
+                self.client.expected(token)
             self.repin.add(f"{sid}|{ref}")
         self.send_off(lambda: self.client.answer_permission(sid, ref, decision, message),
-                      settled=settled, shown=self.client.remote)
+                      settled=settled, shown=asking and self.client.remote)
 
     def close_marked(self, closed: bool = True, marks: set | None = None) -> None:
         """Delete on a multi-selection closes its questions and decisions and dismisses its
@@ -9502,7 +9525,7 @@ class WheelhouseApp(App):
         drafts = [m for m in self.client.drafts(target[0]) if m["item_ref"] == target[1]]
         if not drafts and self.focused is self.items_table:
             marks = set(self.items_table.marked)   # the row and marks as typed on (#312)
-            if self.behind_deletes(lambda: self.reopen_later(target, marks)):   # reopening what a Delete still landing takes
+            if self.behind_deletes(lambda: self.reopen_later(target, marks), lane=True):   # reopening what a Delete or a command still landing takes
                 return
             if self.reopen(target, marks):
                 return
@@ -9612,7 +9635,8 @@ class WheelhouseApp(App):
     @session_action
     def wake(self, sid: str, box=None, target=None, text: str | None = None) -> None:
         """Bring the session back with its queue, and text if given, as its first prompt
-        (Hub.wake_and_send): the box cleared only once it has come back."""
+        (Hub.wake_and_send): the box cleared at once (submitted), and its text put back if the
+        wake fails."""
         put_back = self.submitted(box, target) if box is not None else None
 
         def failed() -> None:

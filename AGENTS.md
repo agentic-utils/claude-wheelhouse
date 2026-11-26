@@ -31,7 +31,9 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   `WheelhouseApp.pressing`; a row's change, `RemoteClient.expect`; the box cleared), then
   `WheelhouseApp.send_off` sends it on the command lane, a worker, one at a time in the order
   asked, what it changed fetched there too (`RemoteClient.deferred`, `fetch_now`), and lands it
-  on the UI thread, undoing the acknowledgement and saying why if it failed. In process, or
+  on the UI thread, undoing the acknowledgement and saying why if it failed. Each waits for the
+  one before it however long the daemon takes, and Ctrl+Z and Ctrl+R, sent off the lane, wait
+  behind it (`behind_deletes`). In process, or
   through a synchronous client, it runs at once. A setting kept goes the same way, off the UI
   thread in order (`RemoteClient.aside`). Input stays synchronous: `settle` repaints
   the inbox as a key lands, so the keys behind it act on the same rows (#312). The tick skips
