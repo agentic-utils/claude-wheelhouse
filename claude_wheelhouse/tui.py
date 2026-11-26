@@ -5159,7 +5159,7 @@ class AltKeysDriver(LinuxDriver):
 
 class WheelhouseApp(App):
     SPARES = (NewSession,)   # dialogs of no arguments kept built ahead of their key (spare, #385)
-    STOCK_AFTER = 1.0   # seconds: a spare built this long after the app opens, and after one closes
+    STOCK_AFTER = 0.3   # seconds: a spare built this long after the app opens, and after one closes
     CSS = f"""
     Screen {{ background: #0a0a12; }}
     /* every dialog over the screen it was opened on, which shows through, and centred. After
