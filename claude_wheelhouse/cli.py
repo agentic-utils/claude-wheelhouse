@@ -257,6 +257,7 @@ def parser() -> argparse.ArgumentParser:
     run = sub.add_parser("run", help="inside a launched tab: exec Claude for a session")
     run.add_argument("session_id")
     run.add_argument(steps.STEP_FLAG, dest="step", action="append", default=None, help=argparse.SUPPRESS)
+    run.add_argument(features.NICE_FLAG, dest="nice", default=None, help=argparse.SUPPRESS)
     shell = sub.add_parser("shell", help="inside a quick shell's tab: run the command a Run dialog wrote under key")
     shell.add_argument("--db", required=True, help="the wheelhouse's database, whose state directory holds the run")
     shell.add_argument("key", nargs="?")
@@ -313,6 +314,7 @@ def main() -> None:
         steps.set_flags(hosted.step)
         if hosted.keepalive_hours is not None:
             features.set_keepalive_hours(hosted.keepalive_hours)
+        features.lower_priority()   # below the app (#385), with the Claude Code it starts
         from .host import main as host_main
         host_main(hosted.session_id)
         return
@@ -338,6 +340,8 @@ def main() -> None:
         features.set_autocleanse_minutes(args.autocleanse_minutes)
 
     if args.cmd == "run":
+        if args.nice is not None:
+            features.set_nice(args.nice)
         from .launch import run as run_session
         run_session(args.session_id)
     elif args.cmd == "shell":

@@ -136,7 +136,10 @@ def wt_argv(session, *, python: str, distro: str, user: str, shell: str) -> list
 
 
 def run_line(session, python: str) -> str:
-    return (f"{shlex.join([python, '-m', 'claude_wheelhouse', 'run', session['id'], *steps.flag_args()])}; "
+    # the nice level too: wt.exe and iTerm start the tab with a fresh environment (#385)
+    argv = [python, '-m', 'claude_wheelhouse', 'run', session['id'], *steps.flag_args(),
+            features.NICE_FLAG, str(features.nice_level())]
+    return (f"{shlex.join(argv)}; "
             "rc=$?; if [ $rc -eq 143 -o $rc -eq 137 ]; then exit 0; fi; exit $rc")
 
 
@@ -443,4 +446,5 @@ def run(sid: str) -> None:
     pid = os.getpid()
     if not store.register_if_free(sid, pid, liveness.start_time(pid), liveness.boot_id(), liveness.is_alive):
         sys.exit(f"claude-wheelhouse: session {session['name'] or sid} is already running in another tab")
+    features.lower_priority()   # below the app (#385): exec keeps it, so Claude Code and all it starts
     os.execvpe("claude", argv, env)
