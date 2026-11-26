@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -21,7 +22,7 @@ def test_wt_argv(over, title, cwd, desc):
     assert argv[argv.index("--cd") + 1] == cwd, desc
     # not exec'd: a stop's 143 or 137 exits 0 and closes the tab; any other code is kept
     # each `;` escaped for wt.exe, which unescapes it for the shell
-    assert argv[-4:] == ["--", "/bin/zsh", "-lic", r"/py -m claude_wheelhouse run abc-123\; "
+    assert argv[-4:] == ["--", "/bin/zsh", "-lic", r"/py -m claude_wheelhouse run abc-123 --nice 10\; "
                          r"rc=$?\; if [ $rc -eq 143 -o $rc -eq 137 ]\; then exit 0\; fi\; exit $rc"], desc
     assert not launch.CMD_META & set(argv[-1]), f"{desc}: cmd.exe would act on its own operators"
     assert ";" not in argv[-1].replace(r"\;", ""), f"{desc}: a bare ; would split wt.exe's command line"
@@ -101,6 +102,48 @@ def test_run_registers_its_own_pid_before_exec(store, sid, tmp_path, monkeypatch
     row_ = store.session(sid)
     assert row_["claude_pid"] == launch.os.getpid()
     assert launch.liveness.is_alive(row_["claude_pid"], row_["claude_start"], row_["boot_id"])
+
+
+@pytest.mark.parametrize("line, steps, desc", [
+    ([], [10], "the default: Claude Code runs at 10, below the app (#385)"),
+    (["--nice", "4"], [4], "the level the launcher put on run's line"),
+    (["--nice", "0"], [], "0: left at the app's priority"),
+])
+def test_run_lowers_priority_before_exec(sid, tmp_path, monkeypatch, reniced, line, steps, desc):
+    """The tab's own process lowers itself, so Claude Code, its exec, starts there: wt.exe
+    and wsl.exe start the tab, and nothing the app runs is its parent."""
+    from claude_wheelhouse import cli
+    seen = []
+    monkeypatch.setattr(launch.os, "execvpe", lambda *a: seen.append(list(reniced)))
+    monkeypatch.setattr(launch, "transcript_exists", lambda sid: False)
+    monkeypatch.setattr(launch.sys, "argv", ["claude-wheelhouse", "run", sid, *line])
+    monkeypatch.chdir(tmp_path)
+    cli.main()
+    assert seen == [steps], desc
+
+
+def test_a_tabs_claude_code_runs_niced(store, sid, tmp_path, monkeypatch):
+    """End to end, without a terminal: the tab's command line, as a shell runs it in the tab
+    (wt_argv, iterm_argv), execs a stand-in claude that reports its own nice level."""
+    import os
+    import subprocess
+    import sys
+    bin_dir, said = tmp_path / "bin", tmp_path / "ni"
+    bin_dir.mkdir()
+    (bin_dir / "claude").write_text(f"#!/bin/sh\nps -o ni= -p $$ > {said}\n")
+    (bin_dir / "claude").chmod(0o755)
+    start = os.getpriority(os.PRIO_PROCESS, 0)
+    level = max(7, start)   # never raised: a run already below 7 stays where it is
+    env = {k: v for k, v in os.environ.items() if not k.startswith("WHEELHOUSE_")}
+    # as in a tab: none of the app's WHEELHOUSE_* reaches it, as wt.exe and wsl.exe hand none on
+    env |= {"WHEELHOUSE_DB": str(store.path), "PATH": f"{bin_dir}:{env['PATH']}",
+            "PYTHONPATH": str(Path(launch.__file__).parent.parent)}
+    monkeypatch.setenv("WHEELHOUSE_NICE", "7")   # the app's own setting
+    line = launch.run_line(store.session(sid), sys.executable)
+    assert "--nice 7" in line
+    done = subprocess.run(["/bin/sh", "-c", line], env=env, cwd=tmp_path, capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+    assert int(said.read_text()) == level
 
 
 def test_open_tab_logs_the_launcher_output(store, sid, monkeypatch):

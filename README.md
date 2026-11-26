@@ -1069,6 +1069,14 @@ a key spelt any other way isn't read.
 | `AUTOCLEANSE_MINUTES` | `WHEELHOUSE_AUTOCLEANSE_MINUTES` | `--autocleanse-minutes N` | 5 (0 turns autocleanse off) |
 | `SESSION_DIR` | `WHEELHOUSE_SESSION_DIR` | none | the parent of the wheelhouse's clone |
 | `GITLAB_CA_CERT` | `WHEELHOUSE_GITLAB_CA_CERT` | none | `glab`'s own CA settings |
+| `NICE` | `WHEELHOUSE_NICE` | none | 10 (0 runs sessions at the app's priority) |
+
+`NICE` is the nice level, 0 to 19, that launched sessions run at. Each session's Claude
+Code (in a tab or an SDK host) runs below the app, so the app stays quick to answer your keys
+when the machine is busy. The app and the daemon are never lowered, as the app waits on the
+daemon.
+A tab starts with a fresh environment, so the app passes the level on to it; set `NICE`
+before you start the app, or in a `.env`.
 
 `SESSION_DIR` is the directory the New session dialog (`Alt+N`) starts in. `~` is allowed, and a
 relative path is taken from your home directory (`SESSION_DIR=projects` is `~/projects`).
@@ -1083,7 +1091,7 @@ session is busy, the animation rests, and starts again when you come back or a s
 gets busy. It also gives way to you: it rests for a second after any key, click or pointer
 move, and while the app or the machine is too busy to keep its frames on time (one more than
 20 ms late) it draws one frame a second until they have kept time for two seconds. The daemon reads only the settings it uses: `PORT`, `USAGE_MODE`,
-`KEEPALIVE_HOURS` and `GITLAB_CA_CERT`.
+`KEEPALIVE_HOURS`, `GITLAB_CA_CERT` and `NICE` (for the sessions it launches).
 
 A GitLab merge request on any host counts as a PR: its URL's shape,
 `https://<host>/<group>/<project>/-/merge_requests/<n>`, says it is GitLab's, so there are no hosts

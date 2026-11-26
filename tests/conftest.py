@@ -76,12 +76,22 @@ def isolated_db(tmp_path, monkeypatch):
     monkeypatch.delenv("WHEELHOUSE_TOKEN", raising=False)
     monkeypatch.delenv("WHEELHOUSE_PORT", raising=False)   # a test that wants one sets it (features.port)
     for setting in ("ENABLE_SDK", "USAGE_MODE", "KEEPALIVE_HOURS", "ANIMATION_FPS", "AUTOCLEANSE_MINUTES",
-                    "GITLAB_CA_CERT"):   # features.given's
+                    "GITLAB_CA_CERT", "NICE"):   # features.given's
         monkeypatch.delenv(f"WHEELHOUSE_{setting}", raising=False)
     return path
 
 
 SHIPPED_LOAD = api.load   # every module installed, as the app loads them
+
+
+@pytest.fixture(autouse=True)
+def reniced(monkeypatch):
+    """os.nice faked, so no test lowers the run's own priority for the tests after it
+    (features.lower_priority): each step asked for is kept here, from a level of 0."""
+    steps = []
+    monkeypatch.setattr(os, "nice", lambda step: (step and steps.append(step)) or sum(steps))
+    monkeypatch.setattr(features, "_nice", None)
+    return steps
 
 
 @pytest.fixture(autouse=True)
