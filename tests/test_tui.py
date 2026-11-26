@@ -3421,6 +3421,7 @@ async def test_a_selected_item_moves_only_on_delete(store, sid, live, clock, sta
                     await pilot.press("alt+y")
             elif act.startswith("#"):
                 await pilot.click(act)
+                await app.workers.wait_for_complete()   # its command on the lane landed (send_off, #385)
             else:
                 PIN_ACTS[act](store, sid, ref)
                 app.refresh_data()
@@ -9607,22 +9608,28 @@ async def release_in_turn(app, pilot, gates: list, backwards: bool = False) -> N
     last first), each landed (or another call made) before the next goes: the order a slow
     daemon would answer them in."""
     for _ in range(50):
-        if not app.deleting:
+        if not in_flight(app):
             break
         before = (tuple(map(id, app.calls)), len(gates))
         if waiting := [g for g in gates if not g.is_set()]:
             waiting[-1 if backwards else 0].set()
         for _ in range(500):
-            if not app.deleting or (tuple(map(id, app.calls)), len(gates)) != before:
+            if not in_flight(app) or (tuple(map(id, app.calls)), len(gates)) != before:
                 break
             await pilot.pause(0.01)
     await landed(app, pilot)
 
 
+def in_flight(app) -> bool:
+    """A Delete or Ctrl+Z under way, a command on the lane (send_off), or a write waiting for them."""
+    return bool(app.deleting or app.sending or app.behind)
+
+
 async def landed(app, pilot) -> None:
-    """Every Delete and Ctrl+Z under way landed (delete_off_thread, action_undo)."""
+    """Every Delete and Ctrl+Z under way landed (delete_off_thread, action_undo), and the commands
+    on the lane and the writes behind them (send_off, behind_deletes)."""
     for _ in range(500):
-        if not app.deleting:
+        if not in_flight(app):
             break
         await pilot.pause(0.01)
     assert not app.deleting, "the delete never landed"

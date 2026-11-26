@@ -66,6 +66,18 @@ class LocalClient(Hub):
     def land(self) -> None:
         pass   # in process, every read is the store's own: nothing waits to be shown
 
+    def fetch_now(self) -> None:
+        pass   # ... and nothing to fetch
+
+    def deferred(self):
+        return contextlib.nullcontext()   # a command's write is the store's, read by the next read
+
+    def expect(self, sid: str, ref: str, **fields) -> None:
+        return None   # in process a command runs at once (WheelhouseApp.send_off): nothing to show ahead of it
+
+    def expected(self, token) -> None:
+        pass
+
     def sessions_loaded(self) -> bool:
         return True   # read from the store at every refresh
 
@@ -191,6 +203,9 @@ class LocalClient(Hub):
         return docroots.save(path, text, mtime_ns, self.served.doc_roots(), self.doc_files(), force)
 
 
+ASIDE_WAIT = 3   # seconds disconnect waits for the writes still to send (aside)
+
+
 class Unreachable(RuntimeError):
     """The daemon can't be reached: nothing was sent (UNREACHABLE)."""
 
@@ -276,6 +291,14 @@ class RemoteClient:
         self.seq = 0
         self.forced = True   # the next refresh fetches at once: the first, and after a command
         self.lock = threading.Condition()
+        self.local = threading.local()   # deferred: this thread's commands leave their refetch to it (#385)
+        self.expecting: dict[tuple[str, str], list[dict]] = {}   # each item's changes shown before the daemon has them (expect)
+        # those let go (expected) while the inbox shown predates a fetch_now that failed, the seq it
+        # took: they stay laid over it until an inbox fetched after that is shown (apply)
+        self.letting_go: list[dict] = []
+        self.unfetched = -1
+        self.asides: list[Callable[[], object]] = []   # writes nobody waits on, to send in order (aside)
+        self.aside_thread: threading.Thread | None = None
         self.stopping = False
         self.threads: list[threading.Thread] = []
         self.last_event: str | None = None
@@ -319,7 +342,8 @@ class RemoteClient:
             self.threads.append(thread)
 
     def disconnect(self) -> None:
-        with self.lock:
+        with self.lock:   # the settings kept as the app closes are sent first (aside), for a while
+            self.lock.wait_for(lambda: not self.asides, timeout=ASIDE_WAIT)
             self.stopping = True
             self.lock.notify_all()
         self.http.close()
@@ -382,7 +406,9 @@ class RemoteClient:
             raise hub_error(e) from None
         finally:
             with self.lock:
-                if refetch == "now" or not self.threads:
+                if getattr(self.local, "deferred", False) and self.threads:
+                    pass   # sent on the app's command lane, which fetches what it changed itself (deferred)
+                elif refetch == "now" or not self.threads:
                     self.forced = True
                 elif refetch == "later":
                     self.dirty |= {("sessions",), ("inbox",)}
@@ -457,20 +483,87 @@ class RemoteClient:
 
     def fetch_now(self) -> None:
         """The sessions and the inbox fetched now, on the caller's thread (never the UI's: a
-        worker's), into waiting for land or the next refresh. One that fails is left to the
-        fetching thread."""
+        worker's), into waiting for land or the next refresh. One that fails, however (the
+        daemon lost, bad JSON, the client closed under it by a stream revive), is left to the
+        fetching thread, and an expect let go meanwhile stays shown until it has (expected)."""
         for key in (("sessions",), ("inbox",)):
             seq = self.next_seq()
             try:
                 data = self.fetch(key)
-            except (Unreachable, Refused, self.httpx.TransportError):
+            except Exception:
                 with self.lock:
                     self.dirty.add(key)
+                    if key == ("inbox",):
+                        self.unfetched = max(self.unfetched, seq)
                     self.lock.notify_all()
                 continue
             with self.lock:
                 if key not in self.waiting or self.waiting[key][0] < seq:
                     self.waiting[key] = (seq, data)
+
+    @contextlib.contextmanager
+    def deferred(self):
+        """The commands sent on this thread (the app's command lane, never the UI thread) leave
+        what they changed to be fetched by the caller (fetch_now, then land on the UI thread), not
+        by the next read, which is the UI thread's (#385)."""
+        self.local.deferred = True
+        try:
+            yield
+        finally:
+            self.local.deferred = False
+
+    def expect(self, sid: str, ref: str, **fields) -> object:
+        """A command's change to an item shown now, before the daemon has it (#385): its fields
+        as the command will leave them, laid over whatever a fetch brings meanwhile, until let go
+        (expected). The token to let go of it by. The version isn't moved: the caller draws the
+        change itself, sparing a whole paint of the inbox (#385)."""
+        token = dict(fields)
+        with self.lock:
+            self.expecting.setdefault((sid, ref), []).append(token)
+            self.overlay(moved=False)
+        return token
+
+    def expected(self, token: object) -> None:
+        """An expect let go, as its command lands, done or not: the item as fetched from now, the
+        version moved only if that differs from what was shown (a command that failed). With the
+        inbox shown older than a fetch_now that failed, kept until a fresh one is (apply): else
+        a pin that was done would flicker off until then."""
+        with self.lock:
+            if self.shown_seq.get(("inbox",), -1) < self.unfetched:
+                self.letting_go.append(token)
+                return
+            self.let_go([token])
+
+    def let_go(self, gone: list) -> None:
+        """The expects in gone dropped, the inbox laid out again (under the lock), the version
+        moved only if that changes what was shown."""
+        shown = dict(self.by_key)
+        for key, tokens in list(self.expecting.items()):
+            tokens[:] = [t for t in tokens if not any(t is g for g in gone)]
+            if not tokens:
+                del self.expecting[key]
+        self.overlay(moved=False)
+        if any(self.by_key.get(key) != it for key, it in shown.items()):
+            self.version += 1
+            self.inbox_version += 1
+
+    def overlay(self, moved: bool = True) -> None:
+        """The inbox as fetched, with the changes expected laid over it, as shown (under the lock);
+        moved on (version, unless not moved) so the next paint reads it."""
+        raw = self.stamped.get("inbox")
+        if raw is None:
+            return
+        items = []
+        for it in raw["items"]:
+            for fields in self.expecting.get((it["session_id"], it["ref"]), ()):
+                it = {**it, **fields}
+            items.append(it)
+        self.items = items
+        self.by_key = {(it["session_id"], it["ref"]): it for it in items}
+        self.sets = self.sets._replace(items=items)
+        if moved:
+            self.version += 1
+            self.inbox_version += 1
 
     def land(self) -> None:
         """What fetch_now brought, shown now, on the UI thread: the sessions and the inbox
@@ -545,6 +638,11 @@ class RemoteClient:
                               {(d["session_id"], d["item_ref"]) for d in data["drafts"]},
                               {tuple(k) for k in data["awaiting"]})
             self.tutorial_state = data["tutorial"]
+            if self.letting_go and seq > self.unfetched:   # fresh since a fetch_now failed (expected)
+                gone, self.letting_go = self.letting_go, []
+                self.let_go(gone)
+            elif self.expecting:
+                self.overlay(moved=False)   # moved above, if the fetch brought anything new
             self.sdk = data.get("sdk", False)   # a daemon on older code doesn't say: off
             if features.sdk_enabled() and not self.sdk and not self.elsewhere and not self.sdk_said:
                 self.sdk_said = True   # this app asked for SDK mode, but joined a daemon running without it
@@ -842,7 +940,36 @@ class RemoteClient:
     def set_setting(self, key: str, value: str | None) -> None:
         self.setting(key)
         self.layout[key] = value
-        self.quietly("/settings", {"key": key, "value": value})
+        self.aside(functools.partial(self.quietly, "/settings", {"key": key, "value": value}))
+
+    def aside(self, work: Callable[[], object]) -> None:
+        """A write nobody waits on (a setting kept), sent off the caller's thread, the UI's, on a
+        thread of its own, in the order asked (#385); at once with no threads (synchronous)."""
+        if self.synchronous or not self.threads:
+            work()
+            return
+        with self.lock:
+            self.asides.append(work)
+            if self.aside_thread is None:
+                self.aside_thread = threading.Thread(target=self.sending_aside, name="wheelhouse-aside", daemon=True)
+                self.aside_thread.start()
+            self.lock.notify_all()
+
+    def sending_aside(self) -> None:
+        while True:
+            with self.lock:
+                while not self.asides and not self.stopping:
+                    self.lock.wait()
+                if not self.asides:
+                    self.aside_thread = None
+                    return
+                work = self.asides[0]
+            try:
+                work()
+            finally:
+                with self.lock:
+                    self.asides.pop(0)
+                    self.lock.notify_all()
 
     def steps_table(self) -> dict:
         return self.get("/settings/steps")
