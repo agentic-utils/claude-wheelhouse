@@ -26,7 +26,16 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   thread, and widgets are touched only there. Work that isn't a widget touch goes to a
   worker (`run_worker(thread=True)`) and comes back by `call_from_thread`: a conversation's
   fetch (`WheelhouseApp.conversation`) and its blocks' render (`show_detail`, numbered by
-  `detail_gen` so an overtaken result is dropped). Input stays synchronous: `settle` repaints
+  `detail_gen` so an overtaken result is dropped). A daemon command is acknowledged before it is
+  sent (#385): the handler paints what the press does (a busy button, `press`, through
+  `WheelhouseApp.pressing`; a row's change, `RemoteClient.expect`; the box cleared), then
+  `WheelhouseApp.send_off` sends it on the command lane, a worker, one at a time in the order
+  asked, what it changed fetched there too (`RemoteClient.deferred`, `fetch_now`), and lands it
+  on the UI thread, undoing the acknowledgement and saying why if it failed. Each waits for the
+  one before it however long the daemon takes, and Ctrl+Z and Ctrl+R, sent off the lane, wait
+  behind it (`behind_deletes`). In process, or
+  through a synchronous client, it runs at once. A setting kept goes the same way, off the UI
+  thread in order (`RemoteClient.aside`). Input stays synchronous: `settle` repaints
   the inbox as a key lands, so the keys behind it act on the same rows (#312). The tick skips
   `paint_items` while `RemoteClient.version` (the sessions and inbox applied) and the app's
   state are as last painted.
@@ -51,7 +60,9 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   long a quiet session is kept warm, `keepalive_hours()` (`KEEPALIVE_HOURS`; 8 by default,
   0 for off), and the app's animation rate, `animation_fps()` (`ANIMATION_FPS`; 10 by
   default, 0 for off; `WheelhouseApp.pace` rests it while unfocused with nothing busy; the title
-  and eyes draw at most `tui.EYES_FPS`, the overlay `tui.DOCK_FPS`), and the gap
+  and eyes draw at most `tui.EYES_FPS`, the overlay `tui.DOCK_FPS`; both timers go through
+  `frame_due`, which yields to input and late frames, `tui.REST` and `tui.LATE`; `repaint.py`
+  replaces Textual's partial update so a few cells cost a few cells), and the gap
   after which the app says what happened meanwhile, `away_hours()` (`AWAY_HOURS`; 2 by default, 0 for off), and how long a
   completed inbox item stays in sight, `autocleanse_minutes()` (`AUTOCLEANSE_MINUTES`; 5 by default, 0 for off; tests run with
   it off, conftest, and set `app.autocleanse`). The README's Settings table lists them.

@@ -30,11 +30,15 @@ async def press(app, pilot, button, *keys):
         await pilot.pause()
     await pilot.click(button)
     await pilot.pause()
+    await app.workers.wait_for_complete()   # its command sent on the lane (send_off, #385), landed
+    await pilot.pause()
     prompts = []
     for key in keys:
         prompts.append(getattr(app.screen, "prompt", ""))
         await pilot.press(key)
         await pilot.pause()
+    await app.workers.wait_for_complete()
+    await pilot.pause()
     return prompts
 
 

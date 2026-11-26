@@ -264,7 +264,7 @@ class Clock:
     timers of the dwell and a text box's quiet spell (WheelhouseApp.after), and the refresh
     tick and animation, which run only when a test calls tick or animate. Time moves only by
     advance. A key's land keeps to real time: it bounds a wait on the app's own queues."""
-    HELD = {"tick", "animate"}   # the app's own intervals, which run only when a test calls them
+    HELD = {"tick", "frame_due"}   # the app's own intervals, which run only when a test calls them (frame_due: animate, as it yields)
 
     def __init__(self):
         self.t, self.timers, self.app, self.held = 0.0, [], None, set()
