@@ -159,6 +159,158 @@ async def test_the_pin_column_toggles(store, sid, tmp_path, how, desc):
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("via", ["threaded"], indirect=True)
+@pytest.mark.parametrize("answer, kept, said, desc", [
+    ("ok", True, "pinned", "the daemon pins it: the pin stays, and is said"),
+    ("refused", False, "no such item", "the daemon refuses: the pin goes again, and why is said"),
+])
+async def test_a_pin_shows_before_the_daemon_answers(store, sid, tmp_path, via, answer, kept, said, desc):
+    """Acknowledge, then work (#385): Alt+P draws the pin at once, the command on the lane."""
+    import asyncio
+    import threading
+    t = post(store, sid, tmp_path, "task", "t")
+    app = WheelhouseApp(store)
+    go, sent = threading.Event(), threading.Event()
+    real = app.client.set_pinned
+
+    def held(s, ref, on):
+        sent.set()
+        go.wait(10)
+        if answer == "refused":
+            raise KeyError("no such item")
+        return real(s, ref, on)
+    app.client.set_pinned = held
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        table = app.items_table
+        table.move_cursor(row=table.get_row_index(f"{sid}|{t}"))
+        table.focus()
+        await pilot.press("alt+p")
+        await asyncio.get_running_loop().run_in_executor(None, sent.wait, 10)
+        assert str(table.get_row(f"{sid}|{t}")[0]) == PIN, f"{desc}: drawn before the daemon answers"
+        assert not store.item(sid, t)["pinned"], f"{desc}: the daemon hasn't it yet"
+        go.set()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert bool(store.item(sid, t)["pinned"]) == kept, desc
+        assert str(table.get_row(f"{sid}|{t}")[0]) == (PIN if kept else UNPINNED), desc
+        assert any(said in n for n in notices(app)), f"{desc}: {notices(app)}"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("via", ["threaded"], indirect=True)
+@pytest.mark.parametrize("case, desc", [
+    ("pin ctrl+z", "Ctrl+Z typed while T2's pin is on the lane waits for it: T2's pin undone, T1's kept"),
+    ("pin ctrl+z pin", "Alt+P on T1, Ctrl+Z, Alt+P on T1, the first held: the last reads the undo, T1 pinned"),
+    ("allow ctrl+r", "Ctrl+R typed while an Allow is on the lane reaches the daemon after it, as typed"),
+    ("fetch_now raises", "fetch_now raising after the pin is sent: the pin still lands, the lane free"),
+    ("inbox unfetched", "the lane's inbox fetch failing: the pin stays drawn until a fresh inbox shows it"),
+])
+async def test_the_lane_keeps_order_and_always_lands(store, sid, tmp_path, via, case, desc):
+    """#385 review: a command on the lane always lands, whatever goes wrong after it is sent, and
+    Ctrl+Z and Ctrl+R wait behind it, as they would behind a Delete (behind_deletes)."""
+    import asyncio
+    import threading
+    t1, t2 = post(store, sid, tmp_path, "task", "one"), post(store, sid, tmp_path, "task", "two")
+    q = post(store, sid, tmp_path, "question", "which db?", status="closed")
+    p = store.post_item(sid, "permission", "Bash: make")
+    app = WheelhouseApp(store)
+    go, sent = threading.Event(), threading.Event()
+    lane = []
+
+    def held(real):
+        def call(*args):
+            lane.append(threading.get_ident())
+            sent.set()
+            go.wait(10)
+            return real(*args)
+        return call
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        table = app.items_table
+        table.focus()
+
+        async def on(ref):
+            table.move_cursor(row=table.get_row_index(f"{sid}|{ref}"))
+            await pilot.pause()
+
+        async def landed():
+            go.set()
+            for _ in range(50):   # each write behind another starts as that one lands
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                if not (app.sending or app.calls or app.behind):
+                    break
+        if case == "pin ctrl+z":
+            await on(t1)
+            await pilot.press("alt+p")   # T1's pin landed first
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            app.client.set_pinned = held(app.client.set_pinned)
+            await on(t2)
+            await pilot.press("alt+p")
+        elif case == "pin ctrl+z pin":
+            app.client.set_pinned = held(app.client.set_pinned)
+            await on(t1)
+            await pilot.press("alt+p")
+        elif case == "allow ctrl+r":
+            await pilot.press("alt+v")   # the closed question in sight
+            app.client.answer_permission = held(app.client.answer_permission)
+            await on(p)
+            await pilot.press("alt+y")
+        else:
+            real_fetch = app.client.fetch
+
+            def fetch(key):   # the lane's own fetch fails; the background's still reads
+                if case == "fetch_now raises":
+                    raise RuntimeError("closed by the stream's revive")
+                if key == ("inbox",) and threading.get_ident() in lane:
+                    raise ValueError("bad JSON")
+                return real_fetch(key)
+            if case == "fetch_now raises":
+                app.client.fetch_now = lambda: fetch(None)
+            else:
+                app.client.fetch = fetch
+            app.client.set_pinned = held(app.client.set_pinned)
+            await on(t1)
+            await pilot.press("alt+p")
+        await asyncio.get_running_loop().run_in_executor(None, sent.wait, 10)
+        if case.startswith("pin ctrl+z"):
+            await pilot.press("ctrl+z")
+            if case == "pin ctrl+z pin":
+                await pilot.press("alt+p")
+        elif case == "allow ctrl+r":
+            await on(q)
+            await pilot.press("ctrl+r")
+            assert store.item(sid, q)["status"] == "closed", f"{desc}: not sent ahead of the Allow"
+        lane_workers = [w for w in app.workers if w.group == "lane" and not w.is_finished]
+        assert len(lane_workers) <= 1, f"{desc}: one thread of the pool however many queue (on_lane)"
+        await landed()
+        assert not (app.sending or app.holding), f"{desc}: the lane is free"
+        if case == "pin ctrl+z":
+            assert (store.item(sid, t1)["pinned"], store.item(sid, t2)["pinned"]) == (1, 0), f"{desc}: {notices(app)}"
+            assert "undone: pinned T2" in notices(app), f"{desc}: {notices(app)}"
+        elif case == "pin ctrl+z pin":
+            assert store.item(sid, t1)["pinned"], f"{desc}: {notices(app)}"
+            assert notices(app)[-3:] == [f"pinned {t1}", f"undone: pinned {t1}", f"pinned {t1}"], desc
+        elif case == "allow ctrl+r":
+            assert store.item(sid, p)["status"] == "allowed", desc
+            assert store.item(sid, q)["status"] == "answered", f"{desc}: {notices(app)}"
+        else:
+            assert store.item(sid, t1)["pinned"], desc
+            assert f"pinned {t1}" in notices(app), f"{desc}: {notices(app)}"
+            assert str(table.get_row(f"{sid}|{t1}")[0]) == PIN, f"{desc}: drawn as pinned meanwhile"
+        if case == "inbox unfetched":
+            app.client.fetch = real_fetch
+            for _ in range(200):   # the background fetches it again (dirty)
+                if not app.client.letting_go:
+                    break
+                await pilot.pause(0.02)
+            assert not app.client.letting_go and not app.client.expecting, f"{desc}: let go once fresh"
+            assert str(table.get_row(f"{sid}|{t1}")[0]) == PIN, f"{desc}: as fetched"
+
+
+@pytest.mark.anyio
 async def test_ctrl_a_never_marks_a_pinned_row(store, sid, tmp_path):
     done = post(store, sid, tmp_path, "task", "done", status="done")
     kept = post(store, sid, tmp_path, "task", "kept", status="done", pinned=True)

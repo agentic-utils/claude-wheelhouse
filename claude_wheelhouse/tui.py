@@ -136,7 +136,9 @@ TOUR_OFFER_KEPT = 10   # seconds tour_offer's answer is kept while nothing it re
 DETAIL_SETTLE = 0.06   # seconds a selection rests before a conversation not yet rendered renders (show_detail)
 DETAIL_INLINE = 8   # ... and the most blocks not rendered yet that render on the loop at once
 OLDER_SETTLE = 0.3   # seconds a conversation rests at its top before a page more of it is read (reached_top, #347)
-CALLS_WAIT = 10   # seconds the app's close waits for a Delete's calls under way (delete_off_thread)
+LANE_TURN = 0.5   # seconds between a waiting call's looks at whether the app is closing (wait_turn)
+LANE_POLL = 0.005   # seconds between looks at the command lane, while a key waits for it to land (land)
+CALLS_WAIT = 10   # seconds the app's close waits, in all, for the calls under way: a Delete's, a Ctrl+Z's, the lane's (send_off)
 RENDERING = ("note", "_rendering…_")
 CONVERSATION_RETRY = 2   # seconds before a conversation fetch that brought nothing (unreachable, busy) is tried again
 READING = "_reading…_"   # a conversation while it's fetched off the loop (WheelhouseApp.conversation)
@@ -5434,6 +5436,14 @@ class WheelhouseApp(App):
         # counted, as two Deletes under way may both hold a row (a family and a marked child)
         self.going: collections.Counter[str] = collections.Counter()
         self.calls: list[threading.Event] = []   # each Delete's calls, set once made: the app's close waits for them
+        # each command sent on the lane (send_off), set once made: those after it wait for it, and so
+        # does a Delete asked after it, and the app's close
+        self.sending: list[threading.Event] = []
+        self.holding: set[threading.Event] = set()   # those of them a key waits for (send_off's shown)
+        self.lane_jobs: list[Callable[[], None]] = []   # the commands waiting their turn on the lane (on_lane)
+        self.lane_lock = threading.Lock()
+        self.lane_running = False   # a worker is running them (drain_lane)
+        self.lane_closed = threading.Event()   # set as the app closes: a call still waiting its turn isn't made (wait_turn)
         self.undoing = False   # a Ctrl+Z's calls under way (action_undo): Delete and Ctrl+Delete refused meanwhile
         self.deleting = 0   # those Deletes and Ctrl+Zs, counted: Ctrl+Z, Ctrl+R and a pin wait for them (behind_deletes)
         self.behind: list[tuple[set, int, Callable[[], None]]] = []   # what waits, in the order asked: the calls it waits for, its number
@@ -5646,8 +5656,10 @@ class WheelhouseApp(App):
         helper's claude, if one runs, stopped. The last input kept, for the next start's card."""
         if self.last_input is not None and self.last_input != self.input_kept:
             self.client.note_input(away.stamp(self.last_input))
-        for made in self.calls:   # a Delete's calls under way finish first: the rows went from sight
-            made.wait(CALLS_WAIT)
+        deadline = time.monotonic() + CALLS_WAIT   # in all, however many are queued on a daemon that hangs
+        for made in [*self.calls, *self.sending]:   # a Delete's calls and the commands under way finish first
+            made.wait(max(0.0, deadline - time.monotonic()))
+        self.lane_closed.set()
         self.client.disconnect()
         if self.helper is not None:
             self.helper.stop()
@@ -5798,7 +5810,8 @@ class WheelhouseApp(App):
         Textual's own way sent each key to a widget as it arrived but acted on its binding
         only once it came back up, so a later key could move the focus or a cursor first."""
         self.app_focus = True
-        await self.land()
+        # a character typed into a text box reads nothing a command changes: it never waits for one
+        await self.land(commands=not (event.is_printable and isinstance(self.focused, (TextArea, Input))))
         if self._exit or not self.screen_stack:   # quitting (Ctrl+Q), or quit as it landed: nothing to act on
             return
         if self.focused is not None:
@@ -7185,10 +7198,7 @@ class WheelhouseApp(App):
     def module_send(self, sid: str, ref: str | None, text: str) -> None:
         """A module's text sent to a session (api.Context.send), as an answer goes: queued or
         at once by its mode, and said as the send bar says it."""
-        try:
-            self.told(self.client.submit((sid, ref), text))
-        except (SessionGone, ValueError) as e:
-            self.notify(str(e), severity="warning")
+        self.send_off(lambda: self.client.submit((sid, ref), text))
 
     def doc_sends_now(self, sid: str) -> bool:
         """Whether a doc item of this session's saves on Ctrl+Enter in its editor: its
@@ -8592,9 +8602,7 @@ class WheelhouseApp(App):
 
     @session_action
     def relaunch(self, sid: str) -> None:
-        if self.told(self.client.relaunch(sid)).ok:
-            self.press(sid, "relaunch")
-            self.refresh_data()
+        self.pressing(sid, "relaunch", lambda: self.client.relaunch(sid))
 
     @on(Button.Pressed, "#relaunch")
     @session_action
@@ -8637,9 +8645,7 @@ class WheelhouseApp(App):
         starts it again once it has gone (hub.Hub.stop_host). Compacting first, the hub
         stops it once the session is compacted (hub.Hub.compact_then_relaunch)."""
         stop = self.client.compact_then_relaunch if compact else self.client.stop_host
-        if self.told(stop(sid, host)).ok:
-            self.press(sid, "relaunch")
-            self.refresh_data()
+        self.pressing(sid, "relaunch", lambda: stop(sid, host))
 
     async def action_quit(self) -> None:
         """Ctrl+Q, or the palette's Quit: always asked first, on No, so a mistaken Ctrl+Q (meant
@@ -8895,6 +8901,136 @@ class WheelhouseApp(App):
             self.notify(f"{verb} {item['ref']}" + deleted_hint(self.show_finished, bool(done)))
         self.delete_off_thread([(item, [])], landed)
 
+    def send_off(self, call: Callable[[], object], landed: Callable[[object], None] | None = None,
+                 failed: Callable[[], None] | None = None, settled: Callable[[], None] | None = None,
+                 shown: bool = False) -> None:
+        """Acknowledge, then work (#385). The caller has painted what the press does already (a
+        busy button, the row's change, the box cleared); call, the daemon command, goes on the
+        command lane: a worker thread, one command at a time in the order asked (each waits for
+        those sent before it, and a Delete asked after it waits for it), what it changed fetched
+        there too (deferred, fetch_now). Then on the UI thread, as typed (as_typed): the fetch shown
+        (land), settled(), and what came of it: landed(result) if it was done, else failed() to
+        undo the acknowledgement, and what went wrong said; then the refresh. A key typed
+        behind it waits for it to land (land), unless shown: what it changes is shown already
+        (RemoteClient.expect), so the keys behind read that. In process, or
+        through a client with no threads of its own (a test's), the call is made at once, its
+        write the store's own."""
+        at = next(self.act_numbers) if self.acting is None else self.acting
+        if not self.client.remote or getattr(self.client, "synchronous", True):
+            try:
+                result = call()
+            except Exception as e:   # said as sent_landed says it
+                result = e
+            self.as_typed(at, lambda: self.sent_landed(result, landed, failed, settled))
+            return
+        waits = list(self.calls)   # a Delete's or Ctrl+Z's; the commands before it run first on the lane (on_lane)
+        made = threading.Event()
+        self.sending.append(made)
+        if not shown:
+            self.holding.add(made)
+
+        def work() -> None:
+            result: object = None
+
+            def land() -> None:
+                self.sending.remove(made)
+                self.holding.discard(made)
+                if self.is_running and self.screen_stack:   # not as the app closes
+                    self.client.land()
+                    self.as_typed(at, lambda: self.sent_landed(result, landed, failed, settled))
+                    self.let_behind()
+            try:
+                if not self.wait_turn(waits):
+                    return   # the app closed first: never sent
+                try:
+                    with self.client.deferred():
+                        result = call()
+                except Exception as e:   # the daemon lost, the session gone, the item answered meanwhile
+                    result = e
+                self.client.fetch_now()   # one that fails is left to the refresh (RemoteClient.fetch_now)
+            finally:   # whatever went wrong, the lane moves on and the key behind isn't held
+                made.set()
+                if not self.post(land):
+                    self.sending.remove(made)
+                    self.holding.discard(made)
+        self.on_lane(work)
+
+    def on_lane(self, job: Callable[[], None]) -> None:
+        """job run on the command lane, after those asked before it: one worker runs them all in
+        turn (drain_lane), so however many queue on a daemon that hangs, they hold one thread of
+        the pool, never the rest (a conversation's read, a spawn)."""
+        with self.lane_lock:
+            self.lane_jobs.append(job)
+            if self.lane_running:
+                return
+            self.lane_running = True
+        self.run_worker(self.drain_lane, thread=True, group="lane", exit_on_error=False)
+
+    def drain_lane(self) -> None:
+        """on_lane's jobs, in the order asked, until none is left. One that raises is logged and
+        the next still runs: its own finally has landed it (send_off)."""
+        while True:
+            with self.lane_lock:
+                if not self.lane_jobs:
+                    self.lane_running = False
+                    return
+                job = self.lane_jobs.pop(0)
+            try:
+                job()
+            except Exception as e:
+                self.log.error(f"command lane: {e!r}")
+
+    def wait_turn(self, waits: list[threading.Event]) -> bool:
+        """On a worker: each call asked before this one made, however long the daemon takes, so
+        they reach it in the order asked. False if the app closes first (lane_closed)."""
+        if self.lane_closed.is_set():
+            return False
+        for before in waits:
+            while not before.wait(LANE_TURN):
+                if self.lane_closed.is_set():
+                    return False
+        return True
+
+    def sent_landed(self, result, landed, failed, settled) -> None:
+        """send_off's command answered, on the UI thread: as its handler said it when it ran inline."""
+        try:
+            if settled is not None:
+                settled()
+            if isinstance(result, Exception):
+                if isinstance(result, (SessionGone, sqlite3.IntegrityError)):
+                    said, severity = "session no longer exists", "warning"
+                elif isinstance(result, (KeyError, ValueError)):
+                    said, severity = str(result.args[0] if result.args else result), "warning"
+                elif isinstance(result, Unreachable):   # the daemon: nothing was sent, or the answer lost
+                    said, severity = str(result), "error"
+                else:
+                    said, severity = f"not done: {result}", "error"
+                self.notify(said, severity=severity)
+                if failed is not None:
+                    failed()
+            elif isinstance(result, Done) and not self.told(result).ok:
+                if failed is not None:
+                    failed()
+            elif landed is not None:
+                landed(result)
+        finally:
+            if self.is_running and self.screen_stack:
+                self.refresh_data()
+
+    def pressing(self, sid: str, button: str, call: Callable[[], object], ref: str | None = None,
+                 landed: Callable[[object], None] | None = None, failed: Callable[[], None] | None = None) -> None:
+        """A busy button's command (#107): the button off from the press, shown at once, and the
+        command sent (send_off); the button on again if it fails (and failed, the rest undone)."""
+        self.press(sid, button, ref)
+        self.paint_session_info()
+        self.paint_sendbar()
+
+        def undo() -> None:
+            self.pressed.pop((sid, button), None)
+            if failed is not None:
+                failed()
+        self.send_off(call, landed, undo)
+
     def delete_off_thread(self, acts: list, landed: Callable[[list], None]) -> None:
         """Delete's rows off the inbox at once, and the hub's calls on a worker thread, one after
         another (#234): a call is a daemon round trip, queued behind the hub's tick, so twenty
@@ -8934,9 +9070,13 @@ class WheelhouseApp(App):
                 self.client.set_pinned(sid, ref, True)
             return done
 
+        waits = list(self.sending)   # the commands asked before it reach the daemon first (send_off)
+
         def work() -> None:
             results = []
             try:
+                if not self.wait_turn(waits):
+                    return   # the app closed first: never sent
                 for item, family in acts:
                     try:
                         results.append(call(item, family))
@@ -8981,12 +9121,22 @@ class WheelhouseApp(App):
         self.deleting -= 1
         self.calls.remove(made)
         self.refresh_data()
-        while self.behind and not self.behind[0][0] & set(self.calls):
-            under_way = set(self.calls)
+        self.let_behind()
+
+    def let_behind(self) -> None:
+        """The writes that waited (behind_deletes) whose calls have all landed, done in the order
+        asked. One that sends calls of its own (a Delete's, or a command on the lane, send_off):
+        what was asked after it waits for those too, so Ctrl+Z behind a pin undoes the pin."""
+        while self.behind and not self.behind[0][0] & self.calls_under_way():
+            under_way = self.calls_under_way()
             _, at, act = self.behind.pop(0)
             self.as_typed(at, act)
-            if started := set(self.calls) - under_way:   # its own calls: what was asked after it waits for them
+            if started := self.calls_under_way() - under_way:
                 self.behind = [(waits | started, n, later) for waits, n, later in self.behind]
+
+    def calls_under_way(self) -> set[threading.Event]:
+        """The calls under way: a Delete's or Ctrl+Z's, and the commands on the lane."""
+        return {*self.calls, *self.sending}
 
     def as_typed(self, at: int, act: Callable[[], None]) -> None:
         """act done now as the act numbered `at` (self.act_numbers): what it makes undoable replaces
@@ -8997,15 +9147,18 @@ class WheelhouseApp(App):
         finally:
             self.acting = acting
 
-    def behind_deletes(self, act: Callable[[], None]) -> bool:
+    def behind_deletes(self, act: Callable[[], None], lane: bool = False) -> bool:
         """A write to the inbox asked while a Delete is landing (delete_off_thread): True, and act
         done once the calls under way when it was asked have landed, in the order asked, so it
         never reaches the hub before the delete it follows (Ctrl+R straight after Delete would
         otherwise reopen, then be closed). act carries what the key acts on, taken as it was
-        pressed (#312): a later Delete isn't waited for, nor a move of the cursor followed."""
-        if not self.calls:
+        pressed (#312): a later Delete isn't waited for, nor a move of the cursor followed. With
+        lane, the commands on the lane too (send_off): Ctrl+Z's and Ctrl+R's calls are made off it,
+        so would otherwise reach the hub before a pin or an Allow typed before them."""
+        waits = self.calls_under_way() if lane else set(self.calls)
+        if not waits and not self.behind:   # behind another waiting write, it waits its turn too
             return False
-        self.behind.append((set(self.calls), next(self.act_numbers), act))
+        self.behind.append((waits, next(self.act_numbers), act))
         return True
 
     def close_pinned(self, item, family: list) -> None:
@@ -9028,19 +9181,26 @@ class WheelhouseApp(App):
             self.toggle_now(key)
 
     def toggle_now(self, key: str) -> None:
-        """toggle_pinned's pin, at once or once the deletes before it have landed."""
+        """toggle_pinned's pin, at once or once the deletes before it have landed: the row shows it
+        now (expect), the daemon told on the lane (send_off), and the row as it was if that fails."""
         sid, _, ref = key.partition("|")
         item = ref and self.client.item(sid, ref)
         if not item:   # the conversation row, or gone meanwhile
             return
-        try:
-            self.told(self.client.set_pinned(sid, ref, not pinned(item)))
-        except (SessionGone, KeyError) as e:
-            self.notify(str(e), severity="warning")
-            return
-        self.undoable(f"{'unpinned' if pinned(item) else 'pinned'} {ref}", [item])
-        self.notify(f"{'unpinned' if pinned(item) else 'pinned'} {ref}")
-        self.refresh_data()
+        on = not pinned(item)
+        said = f"{'pinned' if on else 'unpinned'} {ref}"
+        token = self.client.expect(sid, ref, pinned=on)
+        # its cell drawn now: a whole paint sorts every row, a third of a second at 4,000 under load
+        # (#385), left to the refresh, which sorts on a worker (prepare_items)
+        if key in (table := self.items_table).rows:
+            table.update_cell(key, "pin", Text(PIN) if on else Text(UNPINNED, style="dim"))
+            getattr(table, "filled", {}).pop(key, None)   # drawn here, not by fill: the next fill compares it afresh
+
+        def landed(_) -> None:
+            self.undoable(said, [item])
+            self.notify(said)
+        self.send_off(lambda: self.client.set_pinned(sid, ref, on), landed,
+                      settled=lambda: self.client.expected(token), shown=self.client.remote)
 
     def action_toggle_pinned(self) -> None:
         self.settle()
@@ -9129,9 +9289,10 @@ class WheelhouseApp(App):
         self.settle()
         if isinstance(self.focused, (TextArea, Input)) or self.screen is not self.screen_stack[0]:
             return
-        if self.behind_deletes(self.undo_now):   # its act isn't the last until it lands
+        if self.behind_deletes(self.undo_now, lane=True):   # its act isn't the last until it lands
             self.undo_waits.add(self.behind[-1][1])
-            self.notify("Ctrl+Z: once the undo under way lands" if self.undoing else "Ctrl+Z: once the delete under way lands")
+            if self.calls:   # a command on the lane alone lands in a moment: nothing to say
+                self.notify("Ctrl+Z: once the undo under way lands" if self.undoing else "Ctrl+Z: once the delete under way lands")
             return
         self.undo_now()
 
@@ -9189,9 +9350,22 @@ class WheelhouseApp(App):
 
     def answer_permission(self, sid: str, ref: str, decision: str, message: str = "") -> None:
         """The person's Allow, Always or Deny: an explicit act, as Delete is, so selected, the
-        item moves at once (ranked)."""
-        self.told(self.client.answer_permission(sid, ref, decision, message))
+        item moves at once (ranked). Answered from the press (#385): the item shown allowed or
+        denied (expect), so its buttons go at once, and come back if the daemon refuses it. One
+        that isn't an open permission (answered meanwhile, or the cursor moved off it) is never
+        shown answered: the daemon says why, and the keys behind wait for it."""
         self.repin.add(f"{sid}|{ref}")
+        item = self.client.item(sid, ref)
+        asking = bool(item) and item["kind"] == "permission" and item["status"] == "open"
+        token = asking and self.client.expect(sid, ref, status="denied" if decision == "deny" else "allowed")
+        self.paint_sendbar()
+
+        def settled() -> None:
+            if asking:
+                self.client.expected(token)
+            self.repin.add(f"{sid}|{ref}")
+        self.send_off(lambda: self.client.answer_permission(sid, ref, decision, message),
+                      settled=settled, shown=asking and self.client.remote)
 
     def close_marked(self, closed: bool = True, marks: set | None = None) -> None:
         """Delete on a multi-selection closes its questions and decisions and dismisses its
@@ -9447,22 +9621,35 @@ class WheelhouseApp(App):
         if now and self.dead(target[0]) and not self.asking(target):   # it comes back to take it (#221)
             self.offer_wake(target[0], lambda: self.wake(target[0], box, target, quoted(quote, text)))
             return
-        done = self.told(self.client.submit(target, quoted(quote, text), now))   # an open permission is denied, never queued (#53)
-        if not done.ok:   # a permission answered meanwhile
-            return
-        if done.denied:   # an explicit act, as Delete is: selected, the item moves at once (ranked)
-            self.repin.add(f"{target[0]}|{target[1]}")
-        self.submitted(box, target)
+        failed = self.submitted(box, target)   # gone from the box at once, back if the daemon refuses it
 
-    def submitted(self, box, target) -> None:
-        """What was typed has gone: the box cleared, its quote said, the thread at its end."""
-        quote = self.doc_quotes.get(target)
+        def landed(done) -> None:
+            if done.denied:   # an explicit act, as Delete is: selected, the item moves at once (ranked)
+                self.repin.add(f"{target[0]}|{target[1]}")
+            self.to_answer(box)
+        # an open permission is denied, never queued (#53); one answered meanwhile isn't ok
+        self.send_off(lambda: self.client.submit(target, quoted(quote, text), now), landed, failed)
+
+    def submitted(self, box, target) -> Callable[[], None]:
+        """What was typed has gone, shown as it's sent (send_off): the box cleared and its quote
+        said. What puts them back, for a send that fails: unless something else was typed since."""
+        quote, typed = self.doc_quotes.get(target), box.text
         box.text = ""
         if quote:   # said: the next comment is general, unless another block is clicked
             self.doc_quotes.pop(target, None)
             self.paint_quote()
-        self.refresh_data()
-        if isinstance(self.screen, ThreadView) and box is self.screen.box:   # to the end, where the answer just given shows
+
+        def put_back() -> None:
+            if box.is_mounted and not box.text:
+                box.text = typed
+                if quote and target not in self.doc_quotes:
+                    self.doc_quotes[target] = quote
+                    self.paint_quote()
+        return put_back
+
+    def to_answer(self, box) -> None:
+        """A full-screen item's thread at its end, where the answer just sent shows."""
+        if isinstance(self.screen, ThreadView) and box is self.screen.box:
             self.call_after_refresh(self.screen.query_one("#thread-scroll").scroll_end, animate=False)   # as paint
 
     @session_action
@@ -9478,7 +9665,7 @@ class WheelhouseApp(App):
         drafts = [m for m in self.client.drafts(target[0]) if m["item_ref"] == target[1]]
         if not drafts and self.focused is self.items_table:
             marks = set(self.items_table.marked)   # the row and marks as typed on (#312)
-            if self.behind_deletes(lambda: self.reopen_later(target, marks)):   # reopening what a Delete still landing takes
+            if self.behind_deletes(lambda: self.reopen_later(target, marks), lane=True):   # reopening what a Delete or a command still landing takes
                 return
             if self.reopen(target, marks):
                 return
@@ -9588,24 +9775,23 @@ class WheelhouseApp(App):
     @session_action
     def wake(self, sid: str, box=None, target=None, text: str | None = None) -> None:
         """Bring the session back with its queue, and text if given, as its first prompt
-        (Hub.wake_and_send): the box cleared only once it has come back."""
-        done = self.told(self.client.wake_and_send(sid, target and target[1], text))
-        if done.ok:
-            self.press(sid, "relaunch")
-            if box is not None:
-                self.submitted(box, target)
-                return
-        self.refresh_data()
+        (Hub.wake_and_send): the box cleared at once (submitted), and its text put back if the
+        wake fails."""
+        put_back = self.submitted(box, target) if box is not None else None
+
+        def failed() -> None:
+            if put_back is not None:
+                put_back()
+        self.pressing(sid, "relaunch", lambda: self.client.wake_and_send(sid, target and target[1], text),
+                      landed=lambda _: box is not None and self.to_answer(box), failed=failed)
 
     @session_action
     def send_session(self, sid: str) -> None:
-        self.told(self.client.send_queue(sid))   # a dead one's, as its hidden Send button: its drafts stay drafts (#62)
-        self.refresh_data()
+        self.send_off(lambda: self.client.send_queue(sid))   # a dead one's, as its hidden Send button: its drafts stay drafts (#62)
 
     @session_action
     def send_all(self) -> None:
-        self.told(self.client.send_all())
-        self.refresh_data()
+        self.send_off(self.client.send_all)
 
     def action_toggle_mode(self) -> None:
         self.settle()
@@ -9614,8 +9800,7 @@ class WheelhouseApp(App):
 
     @session_action
     def toggle_mode(self, sid: str) -> None:
-        self.told(self.client.toggle_mode(sid))
-        self.refresh_data()
+        self.send_off(lambda: self.client.toggle_mode(sid))
 
     @on(Button.Pressed, "#mode")
     def mode_pressed(self, event: Button.Pressed) -> None:
@@ -9663,11 +9848,7 @@ class WheelhouseApp(App):
             self.paint_sendbar()
 
     def deny_or_allow(self, target: tuple[str, str], decision: str, message: str = "") -> None:
-        try:
-            self.answer_permission(*target, decision, message)
-        except (KeyError, SessionGone) as e:   # answered meanwhile, or the session went
-            self.notify(str(e.args[0] if e.args else e), severity="warning")
-        self.refresh_data()
+        self.answer_permission(*target, decision, message)   # answered meanwhile, or the session went: said as it lands
 
     @on(Button.Pressed, "#interrupt, #compact")
     def host_pressed(self, event: Button.Pressed) -> None:
@@ -9728,15 +9909,14 @@ class WheelhouseApp(App):
         if self.client.replaced:
             self.notify(f"{target[1]} wasn't run: {self.client.replaced}", severity="error")
             return
-        try:
+        def run() -> Done:
             done = self.client.run_command(*target, answer["text"], answer["send"], answer["now"])
             if not done.ok:
                 done.notices = [dataclasses.replace(n, text=f"{target[1]} {'may not have run' if n.text == LOST else 'was not run'}: "
                                                     f"{n.text}") if n.severity == "error" else n for n in done.notices]
-            self.told(done)
-        except ValueError as e:   # in process: the hub's own check (the dialog's ran first)
-            self.notify(str(e), severity="warning")
-        self.refresh_data()
+            return done
+        # in process, the hub's own check (the dialog's ran first) raises ValueError: said as it lands
+        self.send_off(run)
 
     @on(Button.Pressed, "#shell")
     def shell_pressed(self, event: Button.Pressed) -> None:
@@ -9755,9 +9935,7 @@ class WheelhouseApp(App):
 
     def host_command(self, sid: str, what: str, notes: str | None = None, then: str | None = None,
                      press_as: str | None = None) -> None:
-        if self.told(self.client.host_command(sid, what, notes, then)).ok:
-            self.press(sid, press_as or what)
-            self.refresh_data()
+        self.pressing(sid, press_as or what, lambda: self.client.host_command(sid, what, notes, then))
 
     @on(Button.Pressed, "#compact-now, #leave-it")
     def compact_question_pressed(self, event: Button.Pressed) -> None:
@@ -9768,8 +9946,7 @@ class WheelhouseApp(App):
         if not target or not self.nudged(target):
             return
         if event.button.id == "leave-it":
-            self.told(self.client.close(*target, True))
-            self.refresh_data()
+            self.send_off(lambda: self.client.close(*target, True))
         elif self.first_press(event.button):
             return
         else:
@@ -9781,8 +9958,8 @@ class WheelhouseApp(App):
         self.settle()
         target = self.bar_item(event.button.screen)
         if target and self.notes_waiting(target):
-            self.told(self.client.notes_wait(*target, event.button.id == "abort-compaction"))
-            self.refresh_data()
+            abort = event.button.id == "abort-compaction"
+            self.send_off(lambda: self.client.notes_wait(*target, abort))
 
     def notes_waiting(self, target) -> bool:
         """Whether the item in context is the host's open question whether to wait for a
@@ -9804,11 +9981,17 @@ class WheelhouseApp(App):
         notes = emoji.convert(box.text.strip()) if box is not None and aimed_at == target else ""
         rows = self.bar_widgets(self.screen)[3]
         then = rows[0].then if rows else DEFAULT_THEN
-        if self.told(self.client.host_command(target[0], "compact", notes or None, then)).ok:
-            self.press(target[0], "compact-now", target[1])   # off until the question closes (follow_presses)
-            if notes:
-                box.text = ""
-        self.refresh_data()
+        if notes:   # taken as the instructions, put back if the command fails
+            box.text = ""
+
+        def failed() -> None:
+            self.pressed.pop((target[0], "compact-now"), None)
+            if notes and not box.text:
+                box.text = notes
+        # off until the question closes (follow_presses)
+        self.press(target[0], "compact-now", target[1])
+        self.paint_sendbar()
+        self.send_off(lambda: self.client.host_command(target[0], "compact", notes or None, then), failed=failed)
 
     @on(Button.Pressed, "#model")
     @session_action
@@ -9823,9 +10006,8 @@ class WheelhouseApp(App):
 
     @session_action
     def change_model(self, sid: str, model: str | None) -> None:
-        if model and self.told(self.client.set_model(sid, model)).ok:   # not if cancelled, or unchanged
-            self.press(sid, "model")
-            self.refresh_data()
+        if model:   # not if cancelled
+            self.pressing(sid, "model", lambda: self.client.set_model(sid, model))
 
     @on(Splitter.Resized)
     def keep_layout(self, event: Splitter.Resized) -> None:
@@ -9858,8 +10040,10 @@ class WheelhouseApp(App):
     def launch_new(self, form) -> None:
         """New session's launch: selected in the session list as its row appears (#116;
         paint_sessions), as the tour's demo is (Doug, #101 5), so its buttons and inbox are at hand."""
-        if form and (done := self.told(self.client.new_session(**form))).ok and done.sid:
-            self.select_on_show(done.sid, self.selected)
+        if form:
+            was = self.selected
+            self.send_off(lambda: self.client.new_session(**form),
+                          lambda done: done.sid and self.select_on_show(done.sid, was))
 
     def select_on_show(self, sid: str, was: tuple | None) -> None:
         """Select sid once its row shows (paint_sessions), unless the selection has moved from was."""
@@ -9872,8 +10056,8 @@ class WheelhouseApp(App):
         self.push_screen(AdoptSession(self.client.adoptable()), self.launch_adopted)
 
     def launch_adopted(self, form) -> None:
-        if form and self.told(self.client.adopt(form["candidate"], form["name"])).ok:
-            self.refresh_data()
+        if form:
+            self.send_off(lambda: self.client.adopt(form["candidate"], form["name"]))
 
     async def action_press(self, button_id: str) -> None:
         """A key standing in for a button: as a click on it, on the
@@ -9918,7 +10102,7 @@ class WheelhouseApp(App):
             button._start_active_affect()
             await self._dispatch_message(Button.Pressed(button))
 
-    async def land(self) -> None:
+    async def land(self, commands: bool = True) -> None:
         """What the keys before this one set in motion, landed before it acts (take_key), as if
         they had been typed slowly: a screen one opened has mounted and taken its focus; what
         was sent to the focus has been handled, and so has each message that bubbles from there
@@ -9929,7 +10113,9 @@ class WheelhouseApp(App):
         presses a button or selects a row acts as it arrives (action_press, select_now), a
         click's selection runs here, as the app's next callback (SessionList), and last, the
         lists' cursors the keys moved are settled (settle), their highlights being such
-        messages. It waits only when something is waiting, and the refresh tick waits for it
+        messages. A command a key sent (send_off) lands too, unless this key only types into a
+        text box (commands False): its acknowledgement painted at once, the key behind it
+        acts on what it did (#385). It waits only when something is waiting, and the refresh tick waits for it
         (tick), so a burst ends the same wherever a tick falls. Bounded: a widget kept busy, or
         a screen slow to mount, never holds the app up for long, though long enough for the
         inbox to restyle as the screen over it closes (a fifth of a second, under load)."""
@@ -9939,6 +10125,11 @@ class WheelhouseApp(App):
             while time.monotonic() < deadline:
                 if self._next_callbacks:
                     await self._flush_next_callbacks()
+                    continue
+                # the commands sent on the lane (send_off), and the writes waiting for them or a Delete
+                # (behind_deletes), landed as if typed slowly: a key after a waiting Ctrl+Z reads what it undid
+                if commands and (self.holding or self.behind):
+                    await asyncio.sleep(LANE_POLL)
                     continue
                 if not self.screen_stack:   # shutting down: nothing to act on
                     return
@@ -10084,7 +10275,7 @@ class WheelhouseApp(App):
             "so each loads its whole context again; a mid-turn one waits for its turn to end" if running else "")
             if part)
         self.push_screen(Confirm(f"Relaunch {len(sids)} session(s)? {what}."),
-                         lambda yes: yes and self.told(self.client.relaunch_all(sids)))
+                         lambda yes: yes and self.send_off(lambda: self.client.relaunch_all(sids)))
 
     @on(Button.Pressed, "#park")
     @session_action
@@ -10099,9 +10290,8 @@ class WheelhouseApp(App):
         if self.state(s) == "parked":
             self.relaunch_pressed()
         elif s["parked"]:   # parked under the old rules and still running: only the flag goes
-            self.told(self.client.unpark(sid))
             self.follow(sid)
-            self.refresh_data()
+            self.send_off(lambda: self.client.unpark(sid))
         elif self.client.sdk and runner(s) == "sdk" and not s["shell"] and self.running(sid) and self.pending(sid) is None:
             # a host's session in SDK mode: it may be compacted once parked, offered while its cache is warm
             self.push_screen(ParkSession(self.label(sid), self.client.warm(sid)),
@@ -10119,8 +10309,8 @@ class WheelhouseApp(App):
 
     @session_action
     def rename(self, sid: str, name: str | None) -> None:
-        if self.told(self.client.rename(sid, name)).ok:   # not if cancelled, or unchanged
-            self.refresh_data()
+        if name is not None:   # not if cancelled
+            self.send_off(lambda: self.client.rename(sid, name))
 
     def show_session_info(self, sid: str) -> None:
         """A session's status info (SessionInfo), as the stats pane's (i) asks (#242)."""
@@ -10150,12 +10340,18 @@ class WheelhouseApp(App):
 
     @session_action
     def fork(self, sid: str, form: dict) -> None:
-        done = self.told(self.client.fork(sid, form["refs"], form["branch"]))
-        if done.ok:
-            self.press(sid, "fork")   # until the hub's word of it, made or failed (heard)
-            self.forking.setdefault(sid, []).append(Press.now())
-            self.fork_from[sid] = self.selected
-            self.refresh_data()
+        at, was = Press.now(), self.fork_from.get(sid)
+        self.forking.setdefault(sid, []).append(at)   # until the hub's word of it, made or failed (heard)
+        self.fork_from[sid] = self.selected
+
+        def failed() -> None:
+            if at in (times := self.forking.get(sid, [])):
+                times.remove(at)
+            if was is None:
+                self.fork_from.pop(sid, None)
+            else:
+                self.fork_from[sid] = was
+        self.pressing(sid, "fork", lambda: self.client.fork(sid, form["refs"], form["branch"]), failed=failed)
 
     @on(Button.Pressed, "#end")
     @session_action
@@ -10220,29 +10416,24 @@ class WheelhouseApp(App):
 
     @session_action
     def ask(self, sid: str, what: str, compact: bool = False) -> None:
-        if self.told(self.client.ask(sid, what, compact)).ok:
-            self.press(sid, what)   # Park or Forget, off while asked: pressed again past BUSY_FOR, Cancel
+        # Park or Forget, off while asked: pressed again past BUSY_FOR, Cancel
         self.keep_current(sid, what)
-        self.refresh_data()
+        self.pressing(sid, what, lambda: self.client.ask(sid, what, compact))
 
     @session_action
     def act_on_dead(self, sid: str, what: str) -> None:
         """The confirm may have sat open while the session came back: the hub checks again."""
-        if self.told(self.client.act_on_dead(sid, what)).ok:
-            self.keep_current(sid, what)
-        self.refresh_data()
+        self.send_off(lambda: self.client.act_on_dead(sid, what), lambda _: self.keep_current(sid, what))
 
     @session_action
     def resolve_request(self, sid: str, what: str, choice: str) -> None:
         if choice == "cancel":
-            self.told(self.client.cancel_request(sid, what))
-            self.refresh_data()
+            self.send_off(lambda: self.client.cancel_request(sid, what))
 
     @session_action
     def force(self, sid: str, what: str) -> None:
-        self.told(self.client.force(sid, what))
         self.keep_current(sid, what)
-        self.refresh_data()
+        self.send_off(lambda: self.client.force(sid, what))
 
     def keep_current(self, sid: str, what: str) -> None:
         """Parking takes a session's items off the unfiltered inbox: following it keeps it
