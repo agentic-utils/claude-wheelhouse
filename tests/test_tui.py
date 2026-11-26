@@ -10893,10 +10893,15 @@ async def test_a_change_beneath_a_dialog_shades_only_its_lines_again(store, sid,
         beneath = tui.Dialog.lines_beneath
         monkeypatch.setattr(tui.Dialog, "lines_beneath", lambda self, rows: (drawn.append(len(rows)), beneath(self, rows))[1])
         for i in range(3):
-            store.post_item(sid, "question", f"zebra {i}")
+            store.post_item(sid, "question", f"zebra{i}")
             app.refresh_data()
             await pilot.pause(0.05)
         assert drawn and max(drawn) < dialog.size.height, f"only the lines changed: {drawn}"
+        assert app.screen is dialog and "zebra2" in app.export_screenshot(), "and what changed shows beneath it"
+
+
+def strip_text(strip: Strip) -> str:
+    return "".join(seg.text for seg in strip)
 
 
 @pytest.mark.anyio
@@ -10921,7 +10926,74 @@ async def test_a_dialog_shows_its_box_before_the_screen_beneath(store, sid, monk
             assert app.screen.shading, f"{prompt}: shading from then on"
             await pilot.press("escape")
             await pilot.pause()
-        assert len(tui.Dialog.kept) == 30, "each line beneath kept for the next open"
+        kept, now = tui.Dialog.kept[app.screen], [strip_text(line) for line in app.screen._compositor.render_strips()]
+        assert len(kept) > 25 and all(strip_text(line) == now[y] for y, line in kept.items()), \
+            "each line beneath kept for the next open, but those changed since (the title's animation)"
+
+
+@pytest.mark.anyio
+async def test_a_dialog_never_first_shows_lines_not_of_the_screen_beneath_now(store, sid, monkeypatch):
+    """#385: what a dialog's first frame shows beneath it (Dialog.kept) is of that screen
+    and as it is now: a dialog over thread B never shows thread A's lines, kept by one over A,
+    nor a row that changed since the last dialog over it closed."""
+    from textual.screen import Screen
+    from textual.widgets import Static
+
+    class Board(tui.Beneath, Screen):
+        def __init__(self, text: str) -> None:
+            super().__init__()
+            self.text = text
+
+        def compose(self) -> ComposeResult:
+            yield Static("\n".join(f"{self.text} {y}" for y in range(30)))
+
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        first: list[str] = []
+        render = tui.Dialog.render_lines
+
+        def frame(self, crop):
+            lines = render(self, crop)
+            if not self.shading:
+                first.extend(strip_text(line) for line in lines)
+            return lines
+        monkeypatch.setattr(tui.Dialog, "render_lines", frame)
+        main = app.screen
+        app.push_screen(tui.Confirm("Go?"))
+        await pilot.pause(0.1)
+        await pilot.press("escape")
+        await pilot.pause()
+        for text in ("alpha", "bravo"):
+            app.push_screen(Board(text))
+            await pilot.pause()
+            first.clear()
+            app.push_screen(tui.Confirm("Go?"))
+            await pilot.pause(0.1)
+            assert not any("alpha" in line for line in first) or text == "alpha", f"{text}: no other screen's lines"
+            await pilot.press("escape")
+            await pilot.pause()
+            app.pop_screen()
+            await pilot.pause()
+        assert app.screen is main and tui.Dialog.kept.get(main), "the main screen's lines kept by the dialogs over it"
+        store.post_item(sid, "question", "zebra")
+        app.refresh_data()
+        await pilot.pause()
+        now = [strip_text(line) for line in main._compositor.render_strips()]
+        stale = {y: strip_text(line) for y, line in tui.Dialog.kept[main].items() if strip_text(line) != now[y]}
+        assert not stale, f"a row changed since is no longer kept: {stale}"
+
+
+async def pause_until(pilot, check, desc: str, seconds: float = 10.0) -> None:
+    """Paused until check holds, not for a guess at how long it takes under load."""
+    deadline = time.monotonic() + seconds
+    while not check():
+        assert time.monotonic() < deadline, f"timed out: {desc}"
+        await pilot.pause(0.02)
+
+
+def spare_ready(app):
+    return (spare := app.spares.get(tui.NewSession)) is not None and spare.is_mounted and spare.made is not None
 
 
 @pytest.mark.anyio
@@ -10932,20 +11004,71 @@ async def test_new_session_opens_a_spare_built_before_the_key(store, sid, monkey
     monkeypatch.setattr(WheelhouseApp, "STOCK_AFTER", 0.01)
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
-        await pilot.pause(0.2)
-        spare = app.spares.get(tui.NewSession)
-        assert spare is not None and spare.is_mounted and spare not in app.screen_stack, "built ahead, not shown"
+        await pause_until(pilot, lambda: spare_ready(app), "a spare built")
+        spare = app.spares[tui.NewSession]
+        assert spare not in app.screen_stack, "built ahead, not shown"
         await pilot.press("alt+n")
         await pilot.pause()
         assert app.screen is spare, "Alt+N opens the spare"
         spare.query_one("#name", Input).value = "typed"
         await pilot.press("escape")
-        await pilot.pause(0.2)
-        fresh = app.spares.get(tui.NewSession)
-        assert fresh is not None and fresh is not spare, "another built once it closed"
+        await pause_until(pilot, lambda: spare_ready(app), "another built once it closed")
+        fresh = app.spares[tui.NewSession]
+        assert fresh is not spare
         await pilot.press("alt+n")
         await pilot.pause()
         assert app.screen is fresh and fresh.query_one("#name", Input).value == "", "nothing left from the last"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("built, now, desc", [
+    (False, True, "SDK mode learned after it was built (the daemon's first inbox, or a restart)"),
+    (True, False, "SDK mode gone since it was built"),
+])
+async def test_a_spare_made_of_values_since_changed_is_never_opened(store, sid, monkeypatch, tmp_path, built, now, desc):
+    """#385: a spare built before the daemon's first inbox said SDK mode was on had no runner
+    box, and Launch failed finding it. A spare made of values that have changed since
+    (Dialog.made_of) is dropped and New session built afresh."""
+    monkeypatch.setattr(WheelhouseApp, "STOCK_AFTER", 0.01)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        app.client.sdk = built
+        if (early := app.spares.pop(tui.NewSession, None)) is not None:
+            early.remove()
+        app.stock(tui.NewSession)
+        await pause_until(pilot, lambda: spare_ready(app), f"{desc}: a spare built")
+        stale = app.spares[tui.NewSession]
+        app.client.sdk = now
+        await pilot.press("alt+n")
+        await pilot.pause()
+        assert isinstance(app.screen, tui.NewSession) and app.screen is not stale, f"{desc}: built afresh"
+        assert bool(app.screen.query("#tab")) == now, f"{desc}: the runner box as SDK mode is now"
+        await pause_until(pilot, lambda: not stale.is_running, f"{desc}: the stale one removed")
+        answers = []
+        monkeypatch.setattr(app.screen, "action_answer", answers.append)
+        app.screen.query_one("#cwd", Input).value = str(tmp_path)
+        app.screen.launch()
+        assert answers and answers[0]["runner"] in ("tab", "sdk"), f"{desc}: Launch answers"
+
+
+@pytest.mark.anyio
+async def test_a_spare_waits_for_a_pause_in_input(store, sid, monkeypatch):
+    """#385: building a spare takes the event loop ~100 ms, so it waits until no key, click or
+    scroll has come for STOCK_AFTER seconds, and each one that comes restarts the wait."""
+    monkeypatch.setattr(WheelhouseApp, "STOCK_AFTER", 60)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        assert app.stocking and not app.spares, "waiting: the app opened moments ago"
+        before = app.input_seen
+        await pilot.press("down")
+        assert app.input_seen > before, "a key restarts the wait"
+        app.stocked_wait()   # the wait over, with a key since
+        assert app.stocking and not app.spares, "waits again"
+        app.input_seen -= 60
+        app.stocked_wait()   # the wait over, quiet since
+        await pause_until(pilot, lambda: spare_ready(app), "built once quiet")
+        assert not app.stocking
 
 
 def overlay_rows(app) -> list[str]:
