@@ -30,9 +30,12 @@ TEXTUAL = Compositor.render_partial_update, ChopsUpdate.render_segments   # Text
 def _touched(compositor: Compositor, regions: Iterable[Region]) -> Iterable[tuple[Region, Region, list[Strip]]]:
     """As `Compositor._get_renders`, front to back, but only the widgets a region touches, each
     rendered across its visible width on the rows from the first to the last region touching it.
-    A region inside the front widget at its corner is that widget's alone: the widgets behind
-    it (its containers, the screen) would draw nothing that shows there, so they are not asked."""
+    A region inside the front widget at its corner, with no widget in front of that one (a
+    child, an overlay) reaching into it, is that widget's alone: the widgets behind it (its
+    containers, the screen) would draw nothing that shows there, so they are not asked."""
     visible_widgets = compositor.visible_widgets
+    order = {widget: i for i, widget in enumerate(visible_widgets)}   # front to back
+    shown_at = [region.intersection(clip) for region, clip in visible_widgets.values()]
     owned: dict = {}   # each front widget's regions
     shared = []   # the rest, which every widget they touch draws
     for r in regions:
@@ -41,8 +44,9 @@ def _touched(compositor: Compositor, regions: Iterable[Region]) -> Iterable[tupl
         except NoWidget:
             shared.append(r)
             continue
-        region, clip = visible_widgets.get(widget, (None, None))
-        if region is not None and region.intersection(clip).contains_region(r):
+        front = order.get(widget)
+        if front is not None and shown_at[front].contains_region(r) and not any(
+                shown.overlaps(r) for shown in shown_at[:front]):
             owned.setdefault(widget, []).append(r)
         else:
             shared.append(r)
