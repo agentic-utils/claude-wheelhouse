@@ -9192,10 +9192,17 @@ class WheelhouseApp(App):
 
     def answer_permission(self, sid: str, ref: str, decision: str, message: str = "") -> None:
         """The person's Allow, Always or Deny: an explicit act, as Delete is, so selected, the
-        item moves at once (ranked)."""
+        item moves at once (ranked). Answered from the press (#385): the item shown allowed or
+        denied (expect), so its buttons go at once, and come back if the daemon refuses it."""
         self.repin.add(f"{sid}|{ref}")
+        token = self.client.expect(sid, ref, status="denied" if decision == "deny" else "allowed")
+        self.paint_sendbar()
+
+        def settled() -> None:
+            self.client.expected(token)
+            self.repin.add(f"{sid}|{ref}")
         self.send_off(lambda: self.client.answer_permission(sid, ref, decision, message),
-                      settled=lambda: self.repin.add(f"{sid}|{ref}"))
+                      settled=settled, shown=self.client.remote)
 
     def close_marked(self, closed: bool = True, marks: set | None = None) -> None:
         """Delete on a multi-selection closes its questions and decisions and dismisses its
