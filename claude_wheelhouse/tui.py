@@ -2534,7 +2534,57 @@ class SteadyFooter(Footer):
         super().bindings_changed(screen)
 
 
-class ThreadView(Screen):
+class Beneath:
+    """A screen that a dialog can cover. Textual, passing a change on a screen beneath to the
+    screen over it, then marks the one beneath for a repaint of its own (Screen._compositor_refresh),
+    which it passes up as a change to all of it at the next: so after any change beneath, a dialog
+    shaded every line again on every frame of the animation, not the lines that changed (#385).
+    That mark is undone here: a screen repaints whole anyway as it comes back on top
+    (_on_screen_resume). Textual internals: see the pin in pyproject.toml.
+
+    The lines a change touches are dropped from those a dialog kept of it (Dialog.kept),
+    so a dialog's first frame never shows what has changed since: each region marked changed,
+    but for a repaint of the whole screen (as it comes back on top, say), which changes
+    nothing by itself, the widgets changed since the last frame."""
+    updated: set | None = None   # the widgets changed since the last frame (_on_update)
+
+    def _on_update(self, message) -> None:   # before Screen's own (Textual calls each class's in turn)
+        if self.updated is None:
+            self.updated = set()
+        self.updated.add(message.widget)
+        self.hidden_change()
+
+    def _on_layout(self, message) -> None:   # before Screen's own, as _on_update
+        self.hidden_change()
+
+    def hidden_change(self) -> None:
+        """A change while out of sight (under a screen that hides it all, ThreadView say):
+        no dialog sees it to keep, and its repaint on top again says nothing of where it was,
+        so none of its kept lines are kept (Dialog.kept)."""
+        if self is not self.app.screen and self not in self.app._background_screens:
+            Dialog.kept.pop(self, None)
+
+    def _compositor_refresh(self) -> None:
+        under, marked = self is not self.app.screen, self._repaint_required
+        updated, self.updated = self.updated or (), None
+        if kept := Dialog.kept.get(self):   # beneath too: a dialog over it keeps them again as it draws them
+            regions = set(self._compositor._dirty_regions)
+            if self in self._dirty_widgets:   # a repaint of it all
+                regions.discard(self.size.region)
+                regions |= {widget.region for widget in updated if widget is not self and widget.is_attached}
+            for region in regions:
+                for y in region.line_range:
+                    kept.pop(y, None)
+        super()._compositor_refresh()
+        if under and not marked:
+            self._repaint_required = False
+
+
+class MainScreen(Beneath, Screen):
+    """The app's own screen, under every other (WheelhouseApp.get_default_screen)."""
+
+
+class ThreadView(Beneath, Screen):
     """One item full screen: its detail, the whole conversation and a compose box. The app's
     refresh tick repaints it, so a reply shows up while it's open; typed text is untouched."""
     BINDINGS = [Binding("escape", "leave", "Back", key_display="Esc")]
@@ -2756,7 +2806,7 @@ class DocPanes:
         return True
 
 
-class DocView(Screen):
+class DocView(Beneath, Screen):
     """One doc full screen, rendered: a doc item's, laid out as in Detail (DocPanes: split or
     tabbed, its thread and answer box, Ctrl+L), with its send bar; or a module's file (`file`,
     (path, title), as show_doc gives it: api.Context.open_doc), with no thread or box. The
@@ -3386,7 +3436,7 @@ class WrapCheckbox(Checkbox):
                                   for i, line in enumerate(self.lines(self.content_size.width)))
 
 
-class Dialog(ModalScreen):
+class Dialog(Beneath, ModalScreen):
     """A dialog. Every answer, by key, button or Enter in a box, is action_answer. A key acts
     once the one before it has landed (take_key), so a key typed behind the one that answers
     goes to the screen that answer uncovers, in order. Answered once: a second click finds it
@@ -3406,6 +3456,10 @@ class Dialog(ModalScreen):
     now = staticmethod(time.monotonic)
     shaded: dict[tuple, Strip] = {}   # each line beneath as tinted (shade), shared by every dialog
     beneath: dict[int, Strip] | None = None   # the rows beneath being drawn (render_lines)
+    # each row of a screen as the last dialog just over it drew it, by screen and y, less the rows
+    # changed on it since (Beneath): what a dialog's first frame shows beneath (render_lines)
+    kept: "weakref.WeakKeyDictionary[Screen, dict[int, Strip]]" = weakref.WeakKeyDictionary()
+    shading = False   # beneath drawn as it is now: not on the frame that first shows the box
     opened = 0.0
     # priority: tried before the focus's own Enter, which check_action lets through
     BINDINGS = [Binding("escape", "cancel", show=False), Binding("enter", "enter", show=False, priority=True)]
@@ -3431,21 +3485,64 @@ class Dialog(ModalScreen):
     def on_mount(self) -> None:
         self.opened = self.now()
 
+    def on_screen_resume(self) -> None:
+        self.shading = False   # on top again: the box first, as on opening
+        self.opened = self.now()   # a spare (WheelhouseApp.spare) was mounted long before it opened
+
+    def on_unmount(self) -> None:
+        if type(self) in WheelhouseApp.SPARES:   # closed: the next one built, once the app is idle
+            self.app.stock_when_idle()
+
+    made: tuple | None = None   # what compose read of the app (made_of), as it read it
+
+    def made_of(self) -> tuple:
+        """What this dialog's compose reads of the app that can change while it runs: a spare
+        (WheelhouseApp.spare) made of other values is stale. A dialog in SPARES whose compose
+        reads any sets made from this as it reads them."""
+        return ()
+
     def render_lines(self, crop: Region) -> list[Strip]:
         """The screen beneath, shaded, as Textual shades it (BackgroundScreen), but only the
         lines a change beneath touched drawn again, and each line's tint made once for what it
         shows (shade) (#268). Textual's drew and tinted the whole screen beneath again for any
-        change there, each frame of the animation: ~100 ms with a big inbox."""
+        change there, each frame of the animation: ~100 ms with a big inbox.
+
+        The frame that first shows the box shows beneath it the lines the last dialog over
+        this same screen drew (kept), unchanged since, or a plain shade, and the screen beneath is drawn again on the next frame
+        (shade_now): the box shows without waiting for the whole screen beneath to be drawn,
+        40-50 ms of the ~200 an open took (#385)."""
         cache = self._styles_cache   # the lines it draws again: those marked dirty, or not kept
         fresh = cache._width != self.size.width
-        self.beneath = self.lines_beneath([y for y in crop.line_range
-                                           if fresh or y in cache._dirty_lines or y not in cache._cache])
+        rows = [y for y in crop.line_range if fresh or y in cache._dirty_lines or y not in cache._cache]
+        under, width = self.under(), self.size.width
+        if self.shading or under is None:
+            self.beneath = self.lines_beneath(rows)
+            if self.beneath is not None and under is not None:
+                Dialog.kept.setdefault(under, {}).update(self.beneath)
+        else:
+            kept = Dialog.kept.get(under, {})
+            self.beneath = {y: line for y in rows if (line := kept.get(y)) is not None and line.cell_length == width}
+            self.call_after_refresh(self.shade_now)
         if self.beneath is not None:
             self._dirty_regions.clear()   # Widget.render_line's whole render, never used while this draws
         try:
             return super().render_lines(crop)
         finally:
             self.beneath = None
+
+    def under(self) -> Screen | None:
+        """The screen just beneath this one, whose lines it keeps (kept); None when nothing
+        shows through it."""
+        stack = self.app.screen_stack
+        if self not in stack or (at := stack.index(self)) == 0 or self.styles.background.a >= 1:
+            return None
+        return stack[at - 1]
+
+    def shade_now(self) -> None:
+        """The box shown: the screen beneath drawn as it is now, all of it."""
+        if not self.shading and self.is_attached:
+            self.shading = True
+            self.refresh()
 
     def lines_beneath(self, rows: list[int]) -> dict[int, Strip] | None:
         """The rows of the screen just beneath this one, by y, as its compositor draws them,
@@ -3511,17 +3608,24 @@ class NewSession(Dialog):
         super().__init__()
         self.tour, self.line = tour, line
 
+    def made_of(self) -> tuple:   # cheap, on Alt+N's path: the settings' sources, not the settings read
+        client = self.app.client
+        return (client.sdk, client.elsewhere, os.environ.get(f"WHEELHOUSE_{features.SESSION_DIR_KEY}"),
+                os.environ.get("WHEELHOUSE_RUNNER"), features.env_stamp())
+
     def compose(self) -> ComposeResult:
         # on another machine's daemon (--connect): its directories aren't this machine's, to
         # check or browse here (the daemon checks), and a tab would open on its screen
-        elsewhere = self.app.client.elsewhere
+        self.made = self.made_of()
+        sdk, elsewhere = self.made[:2]
+        start, runner = str(features.session_dir()), sdk and default_runner(True)
         tour = self.tour or {}
         with Vertical(id="dialog"):
             yield Label("NEW SESSION", classes="dialog-title")
             if self.line:
                 yield Label(Text(self.line), id="tour-line")   # plain: [Launch] is the button's name, not markup
             with Horizontal(id="cwd-row"):
-                cwd = tour.get("cwd", "" if elsewhere else str(features.session_dir()))
+                cwd = tour.get("cwd", "" if elsewhere else start)
                 yield Input(value=cwd, placeholder="working directory", id="cwd", disabled=bool(tour))
                 if not elsewhere and not tour:
                     yield Button("Browse…", id="browse")
@@ -3533,9 +3637,9 @@ class NewSession(Dialog):
                 yield Select([(m.name, m.id) for m in models.MODELS], value=model, allow_blank=False, id="model")
                 yield Select([(e, e) for e in models.EFFORTS], value=tour.get("effort", models.default_effort(model)),
                              allow_blank=False, id="effort")
-            if self.app.client.sdk:   # the runner choice: SDK mode only (features.py, EXPERIMENTAL)
+            if sdk:   # the runner choice: SDK mode only (features.py, EXPERIMENTAL)
                 yield Checkbox("Open in a terminal tab instead of the wheelhouse",
-                               default_runner(True) == "tab" and not elsewhere, id="tab", disabled=elsewhere)
+                               runner == "tab" and not elsewhere, id="tab", disabled=elsewhere)
             with Horizontal(classes="buttons"):
                 yield Button("Launch", variant="success", id="launch")
                 yield Button("Cancel", id="cancel")
@@ -3549,8 +3653,9 @@ class NewSession(Dialog):
         self.action_answer({"cwd": cwd, "name": self.query_one("#name", Input).value.strip(),
                             "ticket": self.query_one("#ticket", Input).value.strip(),
                             "brief": self.query_one("#brief", TextArea).text.strip(),
-                            "runner": "tab" if not self.app.client.sdk or self.query_one("#tab", Checkbox).value
-                            else "sdk",
+                            # the box there only if SDK mode was on as it opened (made), and is now
+                            "runner": "sdk" if self.app.client.sdk and self.made[0]
+                            and not self.query_one("#tab", Checkbox).value else "tab",
                             "model": self.query_one("#model", Select).value,
                             "effort": self.query_one("#effort", Select).value})
 
@@ -5174,6 +5279,8 @@ class AltKeysDriver(LinuxDriver):
 
 
 class WheelhouseApp(App):
+    SPARES = (NewSession,)   # dialogs of no arguments kept built ahead of their key (spare, #385)
+    STOCK_AFTER = 0.3   # seconds without input before a spare is built (stock_when_idle)
     CSS = f"""
     Screen {{ background: #0a0a12; }}
     /* every dialog over the screen it was opened on, which shows through, and centred. After
@@ -5520,6 +5627,51 @@ class WheelhouseApp(App):
         self.tour_showing: tuple | None = None   # what show_tour last painted: (dialog id, text)
         self.tour_unanswered: tuple | None = None   # the demo's questions unanswered, as next_question last saw
         self.inbox_scroll: float | None = None   # the inbox's scroll before a tour step first moved it (callout.bring)
+        self.spares: dict[type, Dialog] = {}   # a dialog of each kind in SPARES, built and not yet shown (spare)
+        self.input_seen = time.monotonic()   # the last key, click or scroll: spares wait for a pause (stock_when_idle)
+        self.stocking = False   # stock_when_idle waiting
+
+    def get_default_screen(self) -> Screen:
+        return MainScreen(id="_default")
+
+    def spare(self, kind: type["Dialog"]) -> "Dialog":
+        """A dialog of kind to open now: the one built while the app was idle (stock), its
+        widgets composed, styled and mounted, so opening it is a layout and a frame; or a new
+        one, if none is ready or the one ready was made of values that have changed since
+        (Dialog.made_of: SDK mode, say, as the daemon's first inbox or a restart tells it).
+        Building a dialog is most of what opening one cost (~100 ms of the ~200 New session
+        took), so it is done before the key (#385)."""
+        ready = self.spares.pop(kind, None)
+        if ready is not None and ready.is_running and ready.made is not None and ready.made == ready.made_of():
+            return ready
+        if ready is not None:
+            ready.remove()   # stale: its next built once the app is idle again (Dialog.on_unmount)
+        return kind()
+
+    def stock(self, kind: type["Dialog"]) -> None:
+        """A dialog of kind built and mounted, not shown, for the next open (spare). Through
+        Textual's internals (_get_screen starts a screen without pushing it): see the pin in
+        pyproject.toml."""
+        if kind not in self.spares and self.is_running:
+            self._get_screen(dialog := kind())
+            self.spares[kind] = dialog
+
+    def stock_when_idle(self) -> None:
+        """Each spare missing built (stock) once no key, click or scroll has come for
+        STOCK_AFTER seconds, waiting again after each that comes: building one takes the
+        event loop ~100 ms, which a key arriving then would wait behind. One wait at a time."""
+        if self.stocking or not self.is_running or all(kind in self.spares for kind in self.SPARES):
+            return
+        if (wait := self.input_seen + self.STOCK_AFTER - time.monotonic()) > 0:
+            self.stocking = True
+            self.set_timer(wait, lambda: self.stocked_wait())
+            return
+        for kind in self.SPARES:
+            self.stock(kind)
+
+    def stocked_wait(self) -> None:
+        self.stocking = False
+        self.stock_when_idle()
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="title-row"):
@@ -5629,6 +5781,7 @@ class WheelhouseApp(App):
         self.session_sort = self.kept_sort("sessions")
         self.paint_session_header()
         self.client.start(self.post)   # the daemon's stream, now there's an app to tell
+        self.stock_when_idle()
         self.started = self.now()
         if fps := features.animation_fps():   # 0: no animation, the title and eyes drawn still
             self.frame_period = 1 / min(fps, EYES_FPS)
@@ -5780,6 +5933,7 @@ class WheelhouseApp(App):
         if isinstance(event, (events.Key, events.MouseDown, events.MouseScrollDown, events.MouseScrollUp)) \
                 and not event.is_forwarded:
             shown = self.away_window
+            self.input_seen = time.monotonic()
             self.touched()
             woke = isinstance(event, events.Key) and event.key == "escape" and self.away_window not in (None, shown)
         if isinstance(event, events.MouseDown) and not event.is_forwarded:
@@ -8387,7 +8541,7 @@ class WheelhouseApp(App):
         self.tour.next()
         self.show_tour()
         if answer == "new":   # whatever has focus behind it: N on the notes said so
-            self.push_screen(NewSession(), self.launch_new)
+            self.push_screen(self.spare(NewSession), self.launch_new)
 
     def reshow_tour(self) -> None:
         """The tour's dialog painted again, as it stands: a centred one dismissed by an Esc
@@ -10034,8 +10188,8 @@ class WheelhouseApp(App):
         """New session opened: for the tour's demo, filled in (Alt+N, or the tour's button)."""
         stop = self.tour.stop if self.tour is not None and self.tour.kind == TOUR else None
         demo = stop is not None and stop.id == "create"   # the tour's demo: filled in (Q119)
-        self.push_screen(NewSession(tutorial.form(self.client.tutorial_dir), whatsnew.LAUNCH) if demo else NewSession(),
-                         self.launch_new)
+        self.push_screen(NewSession(tutorial.form(self.client.tutorial_dir), whatsnew.LAUNCH) if demo
+                         else self.spare(NewSession), self.launch_new)
 
     def launch_new(self, form) -> None:
         """New session's launch: selected in the session list as its row appears (#116;

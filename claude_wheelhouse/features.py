@@ -111,6 +111,17 @@ def env_files() -> list[Path]:
     return [INSTALL_DIR / ".env", Path.home() / ".config/claude-wheelhouse/.env"]
 
 
+def env_stamp() -> tuple:
+    """When each .env file read (env_files) last changed, None for one missing: a setting
+    read from them may differ only when this does. A stat each, nothing read or said."""
+    def changed(path: Path) -> int | None:
+        try:
+            return path.stat().st_mtime_ns
+        except OSError:
+            return None
+    return tuple(changed(path) for path in env_files())
+
+
 def given(flag_value: str | None, flag: str, key: str) -> tuple[str, str] | None:
     """A setting as the person gave it, unchecked, and where: the flag, else the environment
     variable WHEELHOUSE_<key>, else key= in the install directory's .env, else the user's;
