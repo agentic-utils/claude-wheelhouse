@@ -546,3 +546,55 @@ def test_session_dir(tmp_path, monkeypatch, capsys, env, cwd_env, config_env, ex
     assert [features.session_dir(), features.session_dir()] == [want, want], desc
     err = capsys.readouterr().err
     assert err.count("not a directory") == (1 if warns else 0), f"{desc}: said once at most: {err!r}"
+
+
+@pytest.mark.parametrize("flag, env, dotenv, level, warns, desc", [
+    (None, None, None, 10, False, "nothing given: 10"),
+    (None, "5", None, 5, False, "WHEELHOUSE_NICE"),
+    (None, None, "NICE=3", 3, False, "NICE= in a .env"),
+    (None, "5", "NICE=3", 5, False, "the environment before the .env"),
+    ("7", "5", None, 7, False, "run's --nice wins: the launcher's level"),
+    (None, "0", None, 0, False, "0: not lowered"),
+    (None, "19", None, 19, False, "the lowest priority"),
+    (None, "20", None, 10, True, "past 19: said once, and 10"),
+    (None, "-5", None, 10, True, "negative: said once, and 10"),
+    (None, "low", None, 10, True, "not a number: said once, and 10"),
+])
+def test_nice_level(tmp_path, monkeypatch, capsys, flag, env, dotenv, level, warns, desc):
+    path = tmp_path / "cwd.env"
+    monkeypatch.setattr(features, "env_files", lambda: [path])
+    if dotenv:
+        path.write_text(dotenv + "\n")
+    if env:
+        monkeypatch.setenv("WHEELHOUSE_NICE", env)
+    if flag:
+        features.set_nice(flag)
+    assert [features.nice_level(), features.nice_level()] == [level, level], desc
+    err = capsys.readouterr().err
+    assert err.count("not a nice level") == (1 if warns else 0), f"{desc}: said once at most: {err!r}"
+
+
+@pytest.mark.parametrize("level, start, steps, desc", [
+    ("10", 0, [10], "from the app's 0 to 10"),
+    ("10", 4, [4, 6], "from 4, lowered by the rest"),
+    ("10", 10, [10], "already there: left"),
+    ("10", 15, [15], "already lower: never raised"),
+    ("0", 0, [], "0: left at the app's"),
+])
+def test_lower_priority(monkeypatch, reniced, level, start, steps, desc):
+    monkeypatch.setenv("WHEELHOUSE_NICE", level)
+    if start:
+        reniced.append(start)
+    features.lower_priority()
+    assert reniced == steps, desc
+
+
+@pytest.mark.parametrize("argv, target, desc", [
+    (["daemon"], "claude_wheelhouse.daemon.main", "the daemon"),
+    (["host", "abc"], "claude_wheelhouse.host.main", "an SDK host, with the Claude Code it starts"),
+])
+def test_the_daemon_and_hosts_run_below_the_app(monkeypatch, reniced, argv, target, desc):
+    monkeypatch.setattr(sys, "argv", ["claude-wheelhouse", *argv])
+    monkeypatch.setattr(target, lambda *a: None)
+    cli.main()
+    assert reniced == [features.NICE], desc

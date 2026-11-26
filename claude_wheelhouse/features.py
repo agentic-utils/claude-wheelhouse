@@ -60,7 +60,13 @@ doesn't exist is said once and the default taken.
 A GitLab merge request, on any host, is found, posted and polled through glab as a pull
 request is through gh (prs.py, the PRs module). gitlab_ca_cert() is the PEM file of the CA
 that signed a GitLab host's certificate, if glab's own per-host ca_cert isn't set
-(WHEELHOUSE_GITLAB_CA_CERT, else GITLAB_CA_CERT=): given to the glab process alone."""
+(WHEELHOUSE_GITLAB_CA_CERT, else GITLAB_CA_CERT=): given to the glab process alone.
+
+Launched sessions (a tab's Claude Code, an SDK host and its Claude Code) and the daemon run
+at nice_level(), below the app, so the app stays responsive on a loaded machine (#385,
+D299): WHEELHOUSE_NICE, else NICE= in either .env, else 10. 0 leaves them at the app's
+priority, and anything but a whole number up to 19 is said once and taken as 10. A tab
+starts with a fresh environment, so the launcher passes the level on run's line (--nice)."""
 
 import os
 import sys
@@ -97,6 +103,11 @@ AUTOCLEANSE_MINUTES = 5.0
 _autocleanse_minutes: str | None = None   # set by the command line (set_autocleanse_minutes)
 SESSION_DIR_KEY = "SESSION_DIR"
 GITLAB_CA_KEY = "GITLAB_CA_CERT"
+NICE_FLAG = "--nice"   # run's alone: a tab starts with a fresh environment (nice_level)
+NICE_KEY = "NICE"
+NICE = 10
+MAX_NICE = 19
+_nice: str | None = None   # set by the command line (set_nice)
 # each flag's .env key (its environment variable is WHEELHOUSE_<key>), for cli.args_text
 SETTINGS = {FLAG: KEY, USAGE_FLAG: USAGE_KEY, PORT_FLAG: PORT_KEY, KEEPALIVE_FLAG: KEEPALIVE_KEY,
             ANIMATION_FLAG: ANIMATION_KEY, AWAY_FLAG: AWAY_KEY, AUTOCLEANSE_FLAG: AUTOCLEANSE_KEY}
@@ -355,6 +366,33 @@ def session_dir() -> Path:
         return path
     _say(f"claude-wheelhouse: {where} is {value!r}, not a directory: new sessions start in {default}")
     return default
+
+
+def set_nice(level: str) -> None:
+    """run's --nice: the level the launcher resolved, as a tab's environment is fresh."""
+    global _nice
+    _nice = level
+
+
+def nice_level() -> int:
+    """The nice level launched sessions and the daemon run at, below the app (#385): run's
+    --nice, else WHEELHOUSE_NICE, else NICE= in the install directory's .env, else the
+    user's, else 10. A whole number from 0 (not lowered) to 19; anything else is said once,
+    on stderr, and taken as 10."""
+    if (setting := given(_nice, NICE_FLAG, NICE_KEY)) is None:
+        return NICE
+    value, where = setting
+    if value.strip().isdigit() and int(value) <= MAX_NICE:
+        return int(value)
+    _say(f"claude-wheelhouse: {where} is {value!r}, not a nice level from 0 to {MAX_NICE}: sessions run at {NICE}")
+    return NICE
+
+
+def lower_priority() -> None:
+    """Run this process, and all it starts, at nice_level(): never raised, as only root may.
+    The daemon and each SDK host call it as they start, and run before it execs Claude Code."""
+    if (step := nice_level() - os.nice(0)) > 0:
+        os.nice(step)
 
 
 def gitlab_ca_cert() -> str | None:
