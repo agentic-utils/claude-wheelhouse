@@ -65,9 +65,10 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   replaces Textual's partial update so a few cells cost a few cells), and the gap
   after which the app says what happened meanwhile, `away_hours()` (`AWAY_HOURS`; 2 by default, 0 for off), and how long a
   completed inbox item stays in sight, `autocleanse_minutes()` (`AUTOCLEANSE_MINUTES`; 5 by default, 0 for off; tests run with
-  it off, conftest, and set `app.autocleanse`), and the nice level launched sessions and the
-  daemon run at, `nice_level()` (`NICE`; 10 by default, 0 for off; `lower_priority()` runs in
-  the daemon's and each host's start, and in `launch.run` before it execs Claude Code; a tab
+  it off, conftest, and set `app.autocleanse`), and the nice level launched sessions run at,
+  `nice_level()` (`NICE`; 10 by default, 0 for off; `lower_priority()` runs in each host's
+  start, and in `launch.run` before it execs Claude Code; never in the daemon, which the app
+  waits on; a tab
   gets it on run's line as `--nice`, as wt.exe starts it with a fresh environment; conftest's
   `reniced` fakes `os.nice`). The README's Settings table lists them.
 - `launch.py`: Windows Terminal tabs (`wt.exe` through `cmd.exe`, in the user's own

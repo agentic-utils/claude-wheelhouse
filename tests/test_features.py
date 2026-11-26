@@ -559,6 +559,7 @@ def test_session_dir(tmp_path, monkeypatch, capsys, env, cwd_env, config_env, ex
     (None, "20", None, 10, True, "past 19: said once, and 10"),
     (None, "-5", None, 10, True, "negative: said once, and 10"),
     (None, "low", None, 10, True, "not a number: said once, and 10"),
+    (None, "\u00b2", None, 10, True, "a superscript digit: said once, and 10"),
 ])
 def test_nice_level(tmp_path, monkeypatch, capsys, flag, env, dotenv, level, warns, desc):
     path = tmp_path / "cwd.env"
@@ -589,12 +590,12 @@ def test_lower_priority(monkeypatch, reniced, level, start, steps, desc):
     assert reniced == steps, desc
 
 
-@pytest.mark.parametrize("argv, target, desc", [
-    (["daemon"], "claude_wheelhouse.daemon.main", "the daemon"),
-    (["host", "abc"], "claude_wheelhouse.host.main", "an SDK host, with the Claude Code it starts"),
+@pytest.mark.parametrize("argv, target, steps, desc", [
+    (["daemon"], "claude_wheelhouse.daemon.main", [], "the daemon stays at the app's: the app waits on it"),
+    (["host", "abc"], "claude_wheelhouse.host.main", [features.NICE], "an SDK host, with the Claude Code it starts"),
 ])
-def test_the_daemon_and_hosts_run_below_the_app(monkeypatch, reniced, argv, target, desc):
+def test_hosts_run_below_the_app_and_the_daemon_does_not(monkeypatch, reniced, argv, target, steps, desc):
     monkeypatch.setattr(sys, "argv", ["claude-wheelhouse", *argv])
     monkeypatch.setattr(target, lambda *a: None)
     cli.main()
-    assert reniced == [features.NICE], desc
+    assert reniced == steps, desc

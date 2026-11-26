@@ -366,7 +366,6 @@ def main() -> None:
     elif args.cmd == "daemon":
         from .auth import TokenError
         from .daemon import ADDRESS, AlreadyRunning, PortTaken, main as daemon_main
-        features.lower_priority()   # below the app (#385), with all it starts
         try:
             daemon_main(args.address or ADDRESS, features.port(), args.name, args.start_pipe)
         except (AlreadyRunning, PortTaken, TokenError, ValueError) as e:
