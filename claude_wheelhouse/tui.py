@@ -2467,7 +2467,7 @@ class Beneath:
     That mark is undone here: a screen repaints whole anyway as it comes back on top
     (_on_screen_resume). Textual internals: see the pin in pyproject.toml.
 
-    On top, the lines a change touches are dropped from those a dialog kept of it (Dialog.kept),
+    The lines a change touches are dropped from those a dialog kept of it (Dialog.kept),
     so a dialog's first frame never shows what has changed since: each region marked changed,
     but for a repaint of the whole screen (as it comes back on top, say), which changes
     nothing by itself, the widgets changed since the last frame."""
@@ -2477,11 +2477,22 @@ class Beneath:
         if self.updated is None:
             self.updated = set()
         self.updated.add(message.widget)
+        self.hidden_change()
+
+    def _on_layout(self, message) -> None:   # before Screen's own, as _on_update
+        self.hidden_change()
+
+    def hidden_change(self) -> None:
+        """A change while out of sight (under a screen that hides it all, ThreadView say):
+        no dialog sees it to keep, and its repaint on top again says nothing of where it was,
+        so none of its kept lines are kept (Dialog.kept)."""
+        if self is not self.app.screen and self not in self.app._background_screens:
+            Dialog.kept.pop(self, None)
 
     def _compositor_refresh(self) -> None:
         under, marked = self is not self.app.screen, self._repaint_required
         updated, self.updated = self.updated or (), None
-        if not under and (kept := Dialog.kept.get(self)):
+        if kept := Dialog.kept.get(self):   # beneath too: a dialog over it keeps them again as it draws them
             regions = set(self._compositor._dirty_regions)
             if self in self._dirty_widgets:   # a repaint of it all
                 regions.discard(self.size.region)
@@ -3522,14 +3533,17 @@ class NewSession(Dialog):
         super().__init__()
         self.tour, self.line = tour, line
 
-    def made_of(self) -> tuple:
+    def made_of(self) -> tuple:   # cheap, on Alt+N's path: the settings' sources, not the settings read
         client = self.app.client
-        return client.sdk, client.elsewhere, str(features.session_dir()), client.sdk and default_runner(True)
+        return (client.sdk, client.elsewhere, os.environ.get(f"WHEELHOUSE_{features.SESSION_DIR_KEY}"),
+                os.environ.get("WHEELHOUSE_RUNNER"), features.env_stamp())
 
     def compose(self) -> ComposeResult:
         # on another machine's daemon (--connect): its directories aren't this machine's, to
         # check or browse here (the daemon checks), and a tab would open on its screen
-        sdk, elsewhere, start, runner = self.made = self.made_of()
+        self.made = self.made_of()
+        sdk, elsewhere = self.made[:2]
+        start, runner = str(features.session_dir()), sdk and default_runner(True)
         tour = self.tour or {}
         with Vertical(id="dialog"):
             yield Label("NEW SESSION", classes="dialog-title")

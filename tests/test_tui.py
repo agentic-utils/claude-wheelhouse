@@ -10888,7 +10888,8 @@ async def test_a_change_beneath_a_dialog_shades_only_its_lines_again(store, sid,
         await pilot.pause()
         dialog = tui.Confirm("Delete it?")
         app.push_screen(dialog)
-        await pilot.pause(0.1)
+        await pause_until(pilot, lambda: dialog.shading, "the screen beneath drawn whole once (shade_now)")
+        await pilot.pause()
         drawn: list[int] = []
         beneath = tui.Dialog.lines_beneath
         monkeypatch.setattr(tui.Dialog, "lines_beneath", lambda self, rows: (drawn.append(len(rows)), beneath(self, rows))[1])
@@ -10960,10 +10961,6 @@ async def test_a_dialog_never_first_shows_lines_not_of_the_screen_beneath_now(st
             return lines
         monkeypatch.setattr(tui.Dialog, "render_lines", frame)
         main = app.screen
-        app.push_screen(tui.Confirm("Go?"))
-        await pilot.pause(0.1)
-        await pilot.press("escape")
-        await pilot.pause()
         for text in ("alpha", "bravo"):
             app.push_screen(Board(text))
             await pilot.pause()
@@ -10975,6 +10972,10 @@ async def test_a_dialog_never_first_shows_lines_not_of_the_screen_beneath_now(st
             await pilot.pause()
             app.pop_screen()
             await pilot.pause()
+        app.push_screen(tui.Confirm("Go?"))
+        await pilot.pause(0.1)
+        await pilot.press("escape")
+        await pilot.pause()
         assert app.screen is main and tui.Dialog.kept.get(main), "the main screen's lines kept by the dialogs over it"
         store.post_item(sid, "question", "zebra")
         app.refresh_data()
@@ -10982,6 +10983,33 @@ async def test_a_dialog_never_first_shows_lines_not_of_the_screen_beneath_now(st
         now = [strip_text(line) for line in main._compositor.render_strips()]
         stale = {y: strip_text(line) for y, line in tui.Dialog.kept[main].items() if strip_text(line) != now[y]}
         assert not stale, f"a row changed since is no longer kept: {stale}"
+
+
+@pytest.mark.anyio
+async def test_a_change_out_of_sight_drops_the_lines_kept(store, sid):
+    """#385: a change on the main screen while a thread hides it all is seen by no dialog, and
+    the repaint as it comes back says nothing of where it was: no line kept of it is kept."""
+    ref = store.post_item(sid, "question", "first one")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        main = app.screen
+        app.push_screen(tui.Confirm("Go?"))
+        await pilot.pause(0.1)
+        await pilot.press("escape")
+        await pilot.pause()
+        assert tui.Dialog.kept.get(main), "kept by the dialog over it"
+        app.push_screen(tui.ThreadView(sid, ref))
+        await pilot.pause()
+        store.post_item(sid, "question", "zebra")
+        app.refresh_data()
+        await pilot.pause()
+        app.pop_screen()
+        await pilot.pause()
+        now = [strip_text(line) for line in main._compositor.render_strips()]
+        kept = tui.Dialog.kept.get(main, {})
+        stale = {y: strip_text(line) for y, line in kept.items() if strip_text(line) != now[y]}
+        assert not stale, f"no row kept from before the change: {stale}"
 
 
 async def pause_until(pilot, check, desc: str, seconds: float = 10.0) -> None:
