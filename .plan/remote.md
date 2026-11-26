@@ -214,7 +214,14 @@ was before 2c, its hub in process: the way back, at once.
 - **The TUI's rules, with its data coming over SSE.** The client keeps what the daemon
   last served: the sessions (`GET /sessions`), the inbox (`GET /inbox`: every item but
   their bodies, with what's processing, queued and awaiting, the drafts, and the
-  tutorial's steps), and the conversation, thread or subagent's conversation shown. A
+  tutorial's steps), and the conversation, thread or subagent's conversation shown. The
+  inbox comes by deltas (#385): each answer is stamped with the daemon's epoch and the
+  items' version, the client asks `GET /inbox?since=<epoch>:<version>`, and gets only the
+  items changed since, the keys of those gone, and the small sets whole. A command on the
+  TUI's command lane sends `X-Inbox-Since` and its answer carries the same delta. A delta
+  the daemon can't answer (another epoch, a version unknown or older than its tombstones)
+  comes back in full; one the client can't lay over what it holds is fetched again. A
+  daemon on older code stamps nothing, so its every answer is taken as full. A
   thread of its own reads the stream and fetches what an event says moved, into a copy
   waiting beside the one shown; the TUI swaps it in only where the hub in process used to
   read the store: at the refresh tick, which a key's land holds off, and right after the

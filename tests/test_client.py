@@ -610,3 +610,104 @@ def test_a_refused_token_put_right_is_no_longer_replaced(store, served):
         assert c.replaced is None, "the token put right"
     finally:
         c.disconnect()
+
+
+def whole(c) -> dict:
+    """The inbox as a full fetch has it, items and all, its stamp left out: what the deltas must add up to."""
+    full = c.request("GET", "/inbox")
+    return {k: v for k, v in full.items() if k not in ("epoch", "version")}
+
+
+def held(c) -> dict:
+    """The inbox as the client holds it, in the shape whole gives."""
+    with c.lock:
+        return c.stamped["inbox"]
+
+
+def test_a_run_of_deltas_adds_up_to_a_full_fetch(store, sid, served, tmp_path):
+    """#385: whatever changes, the inbox held through deltas is the one a full fetch brings, in
+    the same order: rows changed, new, closed, deleted, a session renamed, parked and gone."""
+    import random
+    d = served(store.path)
+    c = d.client(synchronous=True)
+    answers = []
+    real = c.get
+
+    def get(path, params=None):
+        answer = real(path, params)
+        if path == "/inbox":
+            answers.append(answer.get("delta", False))
+        return answer
+    c.get = get
+    rng = random.Random(385)
+    other = store.create_session(str(tmp_path), name="other")
+    refs = {s: [store.post_item(s, "task", f"t{i}") for i in range(4)] for s in (sid, other)}
+    try:
+        c.refresh()
+        assert held(c) == whole(c), "the first, in full"
+        for step in range(60):
+            s = rng.choice([sid, other])
+            what = rng.choice(["post", "pin", "status", "delete", "drop", "rename", "park", "question"])
+            live = [r for r in refs[s] if store.item(s, r) is not None]
+            if what == "post" or not live:
+                refs[s].append(store.post_item(s, "task", f"new {step}"))
+            elif what == "pin":
+                store.set_pinned(s, rng.choice(live), rng.random() < 0.5)
+            elif what == "status":
+                ref = rng.choice(live)
+                store.update_item(s, ref, status=rng.choice(["closed", "answered"] if ref.startswith("Q")
+                                                            else ["done", "blocked", "running"]))
+            elif what == "delete":
+                store.delete_children(s, rng.choice(live))
+            elif what == "drop":   # the last task, so the next post makes its ref again: gone, then back
+                last = max((r for r in live if r.startswith("T")), key=lambda r: int(r[1:]))
+                with store.tx() as db:
+                    db.execute("DELETE FROM items WHERE session_id = ? AND ref = ?", (s, last))
+            elif what == "rename":
+                store.rename(s, f"name {step}")
+            elif what == "park":
+                with store.tx() as db:
+                    db.execute("UPDATE sessions SET parked = 1 - parked WHERE id = ?", (s,))
+            else:
+                refs[s].append(store.post_item(s, "question", f"which {step}?"))
+            c.refresh()
+            assert held(c) == whole(c), f"step {step}, {what}: as a full fetch"
+            assert c.items == whole(c)["items"] and c.by_key.keys() == {(i["session_id"], i["ref"]) for i in c.items}
+        assert answers[0] is False and answers.count(True) >= 55, f"deltas, after the first: {answers}"
+    finally:
+        c.disconnect()
+
+
+@pytest.mark.parametrize("case, desc", [
+    ("older", "an answer older than the one shown (two fetches answered out of turn): not shown, fetched again"),
+    ("skipped", "a delta since a version not yet held (the one before it lost): not shown, fetched again"),
+    ("restarted", "a delta from another daemon (restarted): not shown, fetched again in full"),
+])
+def test_a_delta_that_cant_be_laid_over_whats_held_is_fetched_again(store, sid, served, case, desc):
+    """#385: a stale or skipped delta never leaves rows shown wrong: the inbox shown is kept and
+    fetched again, and the next refresh adds up to a full fetch."""
+    d = served(store.path)
+    c = d.client(synchronous=True)
+    t1 = store.post_item(sid, "task", "one")
+    try:
+        c.refresh()
+        base = c.since()
+        store.set_pinned(sid, t1, True)
+        first = c.request("GET", f"/inbox?since={base}")   # since what's held: one on
+        store.post_item(sid, "task", "two")
+        if case == "older":
+            c.refresh()   # two on, shown
+            stale = first
+        elif case == "skipped":
+            stale = c.request("GET", f"/inbox?since={first['epoch']}:{first['version']}")   # since one on, never shown
+        else:
+            stale = {**c.request("GET", f"/inbox?since={base}"), "epoch": "another"}
+        shown = held(c)
+        with c.lock:
+            c.forced = False
+            c.apply(("inbox",), stale, c.next_seq())
+            assert held(c) is shown and c.forced, f"{desc}: kept, and fetched again"
+        c.refresh()
+        assert held(c) == whole(c), desc
+    finally:
+        c.disconnect()

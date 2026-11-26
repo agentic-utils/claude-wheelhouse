@@ -240,6 +240,53 @@ class Feed:
         self.moved.set()
 
 
+class InboxLog:
+    """The inbox's item rows as last served, each stamped with the version it last changed at,
+    so a client holding the inbox as of a version is sent what changed since, not every item
+    (#385). The version moves only when a row does; the epoch is this daemon's own, so a
+    version from an earlier daemon is never taken for one of this one's. A row gone keeps a
+    tombstone, up to TOMBSTONES of them: a version from before the oldest let go (floor) is
+    answered in full, as is one unknown."""
+    TOMBSTONES = 4096
+
+    def __init__(self):
+        self.epoch = os.urandom(6).hex()
+        self.version = 0
+        self.floor = 0   # the oldest version a delta can be answered from
+        self.rows: dict[tuple, dict] = {}
+        self.changed: dict[tuple, int] = {}   # each row's version when it last changed
+        self.removed: dict[tuple, int] = {}   # each row gone, the version it went at, oldest first
+        self.mark = None   # what the rows were read from (Daemon.inbox_answer): unmoved, they aren't read again
+        self.lock = threading.Lock()   # held over the read and the diff: one snapshot at a time
+
+    def update(self, rows: list[dict]) -> None:
+        """The rows as read now, compared with the last: one version on, if anything moved."""
+        new = {(r["session_id"], r["ref"]): r for r in rows}
+        moved = [key for key, row in new.items() if self.rows.get(key) != row]
+        gone = self.rows.keys() - new.keys()
+        if moved or gone:
+            self.version += 1
+            for key in moved:
+                self.changed[key] = self.version
+                self.removed.pop(key, None)
+            for key in gone:
+                self.changed.pop(key, None)
+                self.removed[key] = self.version
+            while len(self.removed) > self.TOMBSTONES:
+                self.floor = max(self.floor, self.removed.pop(next(iter(self.removed))))
+        self.rows = new
+
+    def since(self, given: str | None) -> tuple[list[dict], list[tuple]] | None:
+        """The rows changed and the keys gone since the version given ("epoch:version"), or None
+        when it can't be answered from here: none given, another daemon's, too old or unknown."""
+        epoch, _, version = (given or "").partition(":")
+        if epoch != self.epoch or not version.isdigit() or not self.floor <= int(version) <= self.version:
+            return None
+        v = int(version)
+        return ([self.rows[key] for key, at in self.changed.items() if at > v],
+                [key for key, at in self.removed.items() if at > v])
+
+
 def stamp_of(follower) -> tuple | None:
     """A followed transcript's (size, mtime), or None if it isn't there (yet). The path is
     read once: a conversation read on another thread may let go of it meanwhile
@@ -408,6 +455,7 @@ class Daemon:
         # with every commit made by any connection, the hosts', the MCP servers' and the hub's
         self.watch = sqlite3.connect(store.path, isolation_level=None, check_same_thread=False)
         self.marked: dict = {}                      # the marks as last published
+        self.inbox_log = InboxLog()   # the inbox's rows as last served, versioned, for deltas (#385)
         self.shown: dict[str, str] = {}   # each session's status as last published
         self.grown: dict[str, tuple | None] = {}   # each followed transcript's (size, mtime) at the last tick
         self.stopping = False   # a /shutdown has been taken: the next is told so
@@ -722,12 +770,26 @@ class Daemon:
                 raw = await request.body()
                 if not hub:   # a module's: on its own thread, so a slow one never holds up the hub
                     return await self.module_carry_out(handler, request, key, raw)
-                return await self.on_hub(self.carry_out, handler, request, key, raw)
+                response = await self.on_hub(self.carry_out, handler, request, key, raw)
+                since = request.headers.get("x-inbox-since")
+                if since is None or response.status_code != 200:
+                    return response
+                return await run_in_threadpool(self.with_inbox, response, since)
             except ClientDisconnect:   # gone before it sent the body: nothing done, nobody to tell
                 return Response(status_code=499)
             except Exception as e:
                 return refusal(e)
         return endpoint
+
+    def with_inbox(self, response: Response, since: str) -> Response:
+        """A command's answer with the inbox as it left it, since the version the client holds
+        (X-Inbox-Since), so the client shows what the command changed without fetching it (#385).
+        Read after the command, not kept with its answer: a retry's is read afresh."""
+        answer = json.loads(response.body)
+        if not isinstance(answer, dict):
+            return response
+        return JSONResponse({**answer, "inbox": self.inbox_answer(since)}, headers={
+            k: v for k, v in response.headers.items() if k.lower() == "idempotent-replayed"})
 
     def carry_out(self, handler, request: Request, key: str, raw: bytes, hub: bool = True) -> Response:
         """A command, on the hub's thread: one at a time, so the same key sent twice at once
@@ -882,13 +944,36 @@ class Daemon:
         whether it's parked, so a client filters it as the store would (store.items); what's
         processing, awaiting and drafted, by session and ref (a draft's ref None for a
         general message); what the tour waits on (tutorial.facts) and what it offers (tutorial.state); and whether SDK mode is on (features.py), which
-        the TUI's SDK-only controls follow. The ranking is the client's own."""
-        rows = self.store._all("SELECT i.*, s.name AS session_name, s.parked AS session_parked FROM items i "
-                               "JOIN sessions s ON s.id = i.session_id")
-        return {"items": [{**{k: v for k, v in dict(r).items() if k not in UNLISTED or (k == "body" and r["kind"] == "pr")},
-                            "compact_question": r["answer"] == COMPACT_QUESTION,
-                            "notes_wait": r["answer"] == NOTES_WAIT} for r in rows],
-                "processing": sorted(self.store.processing()), "awaiting": sorted(self.store.awaiting()),
+        the TUI's SDK-only controls follow. The ranking is the client's own.
+
+        Stamped with the items' version (InboxLog: epoch and version). Given since, the version
+        a client holds, only the items changed since and the keys of those gone are sent
+        (delta), unless the log can't answer from there: then every item, as with none (#385)."""
+        return self.inbox_answer(request.query_params.get("since"))
+
+    def inbox_answer(self, since: str | None) -> dict:
+        log = self.inbox_log
+        with log.lock:
+            # what the rows are read from, read first: the items' mark (store.MARKED), moved by any
+            # write, and each session's name and parked. Unmoved, the rows are as last read
+            mark = (self.store._one("SELECT n FROM marks WHERE kind = 'items'")[0],
+                    [tuple(r) for r in self.store._all("SELECT id, name, parked FROM sessions ORDER BY id")])
+            if mark != log.mark:
+                rows = self.store._all("SELECT i.*, s.name AS session_name, s.parked AS session_parked FROM items i "
+                                       "JOIN sessions s ON s.id = i.session_id ORDER BY i.id")
+                log.update([{**{k: v for k, v in dict(r).items()
+                                if k not in UNLISTED or (k == "body" and r["kind"] == "pr")},
+                             "compact_question": r["answer"] == COMPACT_QUESTION,
+                             "notes_wait": r["answer"] == NOTES_WAIT} for r in rows])
+                log.mark = mark
+            delta = log.since(since)
+            stamp = {"epoch": log.epoch, "version": log.version}
+            if delta is None:
+                stamp["items"] = list(log.rows.values())
+            else:
+                stamp.update(delta=True, since=int(since.partition(":")[2]), items=delta[0],
+                             removed=[list(key) for key in delta[1]])
+        return {**stamp, "processing": sorted(self.store.processing()), "awaiting": sorted(self.store.awaiting()),
                 "drafts": [{"id": m["id"], "session_id": m["session_id"], "item_ref": m["item_ref"]}
                            for m in self.store.drafts()],
                 "tutorial": {"facts": tutorial.facts(self.store), "dir": str(tutorial.tutorial_dir(self.store)),

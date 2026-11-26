@@ -204,7 +204,9 @@ async def test_a_pin_shows_before_the_daemon_answers(store, sid, tmp_path, via, 
     ("pin ctrl+z pin", "Alt+P on T1, Ctrl+Z, Alt+P on T1, the first held: the last reads the undo, T1 pinned"),
     ("allow ctrl+r", "Ctrl+R typed while an Allow is on the lane reaches the daemon after it, as typed"),
     ("fetch_now raises", "fetch_now raising after the pin is sent: the pin still lands, the lane free"),
-    ("inbox unfetched", "the lane's inbox fetch failing: the pin stays drawn until a fresh inbox shows it"),
+    ("inbox unfetched", "the pin's answer bringing no inbox (an older daemon's) and the lane's inbox fetch "
+                        "failing: the pin stays drawn until a fresh inbox shows it"),
+    ("inbox brought", "the pin's answer brings the inbox as the pin left it: the lane fetches no inbox"),
 ])
 async def test_the_lane_keeps_order_and_always_lands(store, sid, tmp_path, via, case, desc):
     """#385 review: a command on the lane always lands, whatever goes wrong after it is sent, and
@@ -259,14 +261,24 @@ async def test_the_lane_keeps_order_and_always_lands(store, sid, tmp_path, via, 
             await on(p)
             await pilot.press("alt+y")
         else:
-            real_fetch = app.client.fetch
+            real_fetch, real_request = app.client.fetch, app.client.request
+            lane_fetched = []
 
             def fetch(key):   # the lane's own fetch fails; the background's still reads
                 if case == "fetch_now raises":
                     raise RuntimeError("closed by the stream's revive")
                 if key == ("inbox",) and threading.get_ident() in lane:
-                    raise ValueError("bad JSON")
+                    lane_fetched.append(key)
+                    if case == "inbox unfetched":
+                        raise ValueError("bad JSON")
                 return real_fetch(key)
+
+            def request(*args, **kwargs):   # as a daemon on older code answers: no inbox
+                answer = real_request(*args, **kwargs)
+                if isinstance(answer, dict) and case == "inbox unfetched":
+                    answer.pop("inbox", None)
+                return answer
+            app.client.request = request
             if case == "fetch_now raises":
                 app.client.fetch_now = lambda: fetch(None)
             else:
@@ -300,7 +312,10 @@ async def test_the_lane_keeps_order_and_always_lands(store, sid, tmp_path, via, 
             assert store.item(sid, t1)["pinned"], desc
             assert f"pinned {t1}" in notices(app), f"{desc}: {notices(app)}"
             assert str(table.get_row(f"{sid}|{t1}")[0]) == PIN, f"{desc}: drawn as pinned meanwhile"
+        if case == "inbox brought":
+            assert not lane_fetched and not app.client.expecting, f"{desc}: shown as brought"
         if case == "inbox unfetched":
+            assert lane_fetched, f"{desc}: the lane fetched the inbox, and failed"
             app.client.fetch = real_fetch
             for _ in range(200):   # the background fetches it again (dirty)
                 if not app.client.letting_go:
