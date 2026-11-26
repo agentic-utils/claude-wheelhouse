@@ -17,6 +17,7 @@ the same widget, front to back. Textual is pinned (pyproject), so these track it
 from typing import Callable, Iterable
 
 from textual._compositor import ChopsUpdate, Compositor
+from textual.errors import NoWidget
 from textual.geometry import Region
 from textual.strip import Strip
 
@@ -29,22 +30,33 @@ TEXTUAL = Compositor.render_partial_update, ChopsUpdate.render_segments   # Text
 def _touched(compositor: Compositor, regions: Iterable[Region]) -> Iterable[tuple[Region, Region, list[Strip]]]:
     """As `Compositor._get_renders`, front to back, but only the widgets a region touches, each
     rendered across its visible width on the rows from the first to the last region touching it.
-    A region inside one widget is that widget's alone: the widgets behind it (its containers,
-    the screen) would draw nothing that shows there, so they are not asked for it."""
-    left = list(regions)
-    for widget, (region, clip) in compositor.visible_widgets.items():
-        if not left:
-            return
-        visible = region.intersection(clip)
-        if not visible:
+    A region inside the front widget at its corner is that widget's alone: the widgets behind
+    it (its containers, the screen) would draw nothing that shows there, so they are not asked."""
+    visible_widgets = compositor.visible_widgets
+    owned: dict = {}   # each front widget's regions
+    shared = []   # the rest, which every widget they touch draws
+    for r in regions:
+        try:
+            widget, _ = compositor.get_widget_at(r.x, r.y)
+        except NoWidget:
+            shared.append(r)
             continue
-        rows = [part for r in left if (part := visible.intersection(r))]
+        region, clip = visible_widgets.get(widget, (None, None))
+        if region is not None and region.intersection(clip).contains_region(r):
+            owned.setdefault(widget, []).append(r)
+        else:
+            shared.append(r)
+    for widget, (region, clip) in visible_widgets.items():
+        mine = owned.get(widget, [])
+        if not mine and not shared:
+            continue
+        visible = region.intersection(clip)
+        rows = mine + [part for r in shared if (part := visible.intersection(r))]
         if not rows:
             continue
         top, bottom = min(p.y for p in rows), max(p.bottom for p in rows)
         shown = Region(visible.x, top, visible.width, bottom - top)
         yield region, shown, widget.render_lines(shown.translate(-region.offset))
-        left = [r for r in left if not visible.contains_region(r)]
 
 
 def _render_chops(compositor: Compositor, regions: Iterable[Region], is_rendered_line: Callable[[int], bool]) -> list[dict]:

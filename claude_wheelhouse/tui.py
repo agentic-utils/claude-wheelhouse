@@ -1129,6 +1129,22 @@ class SinkList(RowTips, KeepColours, DataTable):
     DROP_UNDER, DROP_OVER = Style(underline=True), Style(overline=True)
     CREEP = 0.05   # seconds between rows, while a drag holds the pointer at an edge
 
+    pass_style: Style | None = None   # the table's style for the lines being drawn (render_lines)
+
+    def render_lines(self, crop: Region) -> list[Strip]:
+        """As DataTable draws them, its style worked out once for the lines, not once a line:
+        DOMNode.rich_style walks every ancestor's styles uncached, and an eye frame draws
+        a line for each busy row (#385)."""
+        self.pass_style = DataTable.rich_style.fget(self)
+        try:
+            return super().render_lines(crop)
+        finally:
+            self.pass_style = None
+
+    @property
+    def rich_style(self) -> Style:
+        return DataTable.rich_style.fget(self) if self.pass_style is None else self.pass_style
+
     def __init__(self, **kwargs):
         self.blank_lines: LRUCache[tuple, Strip] = LRUCache(1000)   # _render_line
         super().__init__(**kwargs)
