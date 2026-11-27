@@ -189,17 +189,18 @@ async def test_the_tour_keeps_its_place_off_the_ui_thread(store, sid, via, answe
         assert app.client.tour_state().get("at") == kept and not app.client.tour_kept, desc
 
 
-@pytest.mark.parametrize("typed, kept, desc", [
-    ("# saved\n", None, "nothing typed since the save: no edits kept"),
-    ("# saved\nmore\n", "# saved\nmore\n", "typed since: kept over the new base, never lost"),
+@pytest.mark.parametrize("since, kept, desc", [
+    (False, None, "nothing stashed since the save was asked: the edits go, saved"),
+    (True, "# saved\nmore\n", "stashed since (typed, then the editor closed): kept over the new base, never lost"),
 ])
-def test_a_save_landing_keeps_what_was_typed_since(tmp_path, typed, kept, desc):
-    """#391: a doc save lands after the editor has moved on; edits kept with no editor open
+def test_a_save_landing_keeps_what_was_typed_since(tmp_path, since, kept, desc):
+    """#391: a doc save lands after the editor has moved on; edits stashed since it was asked
     (doc_edits) stay, their base the text saved."""
     path = str(tmp_path / "plan.md")
-    app = types.SimpleNamespace(doc_edits={path: DocEdit("# plan\n", typed, typed, (0, 0))}, screen_stack=[],
-                                each_pane=lambda *a: None)   # no editor open on it
-    WheelhouseApp.doc_written(app, path, "# saved\n", 7, keep=True)
+    asked = DocEdit("# plan\n", "# saved\n", "# saved\n", (0, 0))
+    now = DocEdit("# plan\n", "# saved\nmore\n", "# saved\nmore\n", (0, 0)) if since else asked
+    app = types.SimpleNamespace(doc_edits={path: now}, screen_stack=[], each_pane=lambda *a: None)
+    WheelhouseApp.doc_written(app, path, "# saved\n", 7, since=(None, asked))
     edit = app.doc_edits.get(path)
     assert (edit and edit.text) == kept, desc
     if edit:

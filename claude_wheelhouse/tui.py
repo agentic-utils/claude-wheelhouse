@@ -3232,7 +3232,7 @@ class DocEditor(FollowsCursor):
         if self.key is None:
             return
         self.stash()
-        self.app.save_doc(self.path, self.text, self.mtime, then)
+        self.app.save_doc(self.path, self.text, self.mtime, then, editor=self)
 
     def action_close_editor(self) -> None:
         """Esc: closed, asking first with unsaved edits: Save (the default), and closed once
@@ -7432,7 +7432,8 @@ class WheelhouseApp(App):
         self.repaint_doc()
 
     def save_doc(self, path: str, text: str, mtime: int | None, then: Callable[[], None] | None = None,
-                 force: bool = False, failed: Callable[[], None] | None = None) -> None:
+                 force: bool = False, failed: Callable[[], None] | None = None,
+                 editor: "DocEditor | None" = None) -> None:
         """A doc's buffer saved through the daemon (client.write_doc, POST /docs/write) against
         mtime, the file's when its text was read. Saved: every editor on it and every view of it
         shows the new text at once, the panes are told (doc_written), and `then` runs. The file
@@ -7441,19 +7442,22 @@ class WheelhouseApp(App):
         may be written, or the filesystem refusing it): said in a prompt, path and reason.
         `failed` runs when it ends unsaved with the edits kept (Cancel, or refused). Written on
         the command lane (send_off, #391), the editor open meanwhile: what's typed while it saves
-        stays in the buffer (doc_written's keep), and a save that fails keeps it all and says so."""
+        stays in the buffer (doc_written's since: editor, the one saving, and the edits kept as
+        the save was asked), and a save that fails keeps it all and says so."""
+        since = (editor, self.doc_edits.get(path))
+
         def write() -> dict:
             try:
                 return self.client.write_doc(path, text, mtime, force)
             except Exception as e:   # anything at all: said in the prompt, the edits kept
                 return {"refused": str(e) or type(e).__name__}
-        self.send_off(write, lambda answer: self.doc_saved(answer, path, text, mtime, then, failed))
+        self.send_off(write, lambda answer: self.doc_saved(answer, path, text, mtime, then, failed, since))
 
     def doc_saved(self, answer: dict, path: str, text: str, mtime: int | None,
-                  then: Callable[[], None] | None, failed: Callable[[], None] | None) -> None:
+                  then: Callable[[], None] | None, failed: Callable[[], None] | None, since: tuple) -> None:
         """save_doc's answer, on the UI thread."""
         name = os.path.basename(path)
-        again = functools.partial(self.save_doc, path, text, mtime, then, True, failed)
+        again = functools.partial(self.save_doc, path, text, mtime, then, True, failed, since[0])
         if answer.get("conflict"):
             def chose(choice: str | None) -> None:
                 if choice == "overwrite":
@@ -7472,23 +7476,26 @@ class WheelhouseApp(App):
             self.push_screen(SaveFailed(f"{name} wasn't saved: {answer['refused']} (your edits are kept)"),
                              lambda _: failed and failed())
         else:
-            self.doc_written(path, text, answer.get("mtime_ns"), keep=True)
+            self.doc_written(path, text, answer.get("mtime_ns"), since=since)
             self.notify(f"Saved {name}")
             if then is not None:
                 then()
 
     def doc_written(self, path: str, text: str, mtime: int | None, reloaded: bool = False,
-                    keep: bool = False) -> None:
+                    since: tuple | None = None) -> None:
         """A doc's file now `text` (saved, or reloaded over the edits): its kept edits dropped,
         every editor on it taking that as its base, every view of it painted again at once, and
         the panes told (a pane's doc_written: the Decisions pane asks again for the statuses).
-        With keep (a save landing, #391), an editor typed in since the save was asked keeps
-        its buffer, unsaved, over the new base, and so do edits kept with no editor open on it."""
+        With since (a save landing, #391: the editor that saved, and the edits kept as it was
+        asked), that editor, typed in since, keeps its buffer, unsaved, over the new base; and
+        edits kept since (stashed anew, the editor closed meanwhile) stay too. Every other
+        editor on it takes the text saved, as ever."""
         edit = self.doc_edits.pop(path, None)
-        if keep and not reloaded and edit is not None and edit.text != text:
+        saver, stashed = since or (None, None)
+        if since is not None and not reloaded and edit is not None and edit is not stashed and edit.text != text:
             self.doc_edits[path] = dataclasses.replace(edit, base=text, mtime=mtime, changed=False, gone="")
         for editor in [e for screen in self.screen_stack for e in screen.query(DocEditor)]:
-            editor.saved(path, text, mtime, reloaded, keep)
+            editor.saved(path, text, mtime, reloaded, keep=since is not None and editor is saver)
             editor.repaint()
         self.each_pane("doc_written", path)
 
