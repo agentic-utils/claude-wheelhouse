@@ -2001,6 +2001,7 @@ async def burst_outcome(store, tmp_path, monkeypatch, focus, at, burst, desc, sl
             raw_keys(app, *burst)
         for _ in range(10):
             await pilot.pause()
+        await landed(app, pilot)   # the commands sent on the lane, a slider's included (#391)
         s = store.session(alpha)
         current = app.current_session()
         out = {"stack": tuple(type(screen).__name__ for screen in app.screen_stack), "focus": focused_id(app),
@@ -3923,6 +3924,7 @@ async def test_ctrl_r_takes_a_queued_answer_back_before_it_reopens(store, sid, q
             assert isinstance(app.screen, ThreadView), desc
         await pilot.press("ctrl+r")
         await pilot.pause()
+        await landed(app, pilot)   # taken back on the lane (send_off, #391)
         assert (app.screen.box if where == "thread" else app.answer).text == box, desc
     assert store.item(sid, q)["status"] == status, desc
     assert bool(store.drafts(sid)) == (queued and not box), f"{desc}: the queue"
@@ -8660,6 +8662,7 @@ async def drag_row(pilot, table, row: int, to: int, release: bool = True) -> Non
     if release:
         await pilot.mouse_up(table, offset=(2, header + to))
         await pilot.pause()
+        await landed(pilot.app, pilot)   # its order written on the lane (send_off, #391)
 
 
 @pytest.mark.anyio
