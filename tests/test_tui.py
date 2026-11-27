@@ -2001,6 +2001,7 @@ async def burst_outcome(store, tmp_path, monkeypatch, focus, at, burst, desc, sl
             raw_keys(app, *burst)
         for _ in range(10):
             await pilot.pause()
+        await landed(app, pilot)   # the commands sent on the lane, a slider's included (#391)
         s = store.session(alpha)
         current = app.current_session()
         out = {"stack": tuple(type(screen).__name__ for screen in app.screen_stack), "focus": focused_id(app),
@@ -3923,6 +3924,7 @@ async def test_ctrl_r_takes_a_queued_answer_back_before_it_reopens(store, sid, q
             assert isinstance(app.screen, ThreadView), desc
         await pilot.press("ctrl+r")
         await pilot.pause()
+        await landed(app, pilot)   # taken back on the lane (send_off, #391)
         assert (app.screen.box if where == "thread" else app.answer).text == box, desc
     assert store.item(sid, q)["status"] == status, desc
     assert bool(store.drafts(sid)) == (queued and not box), f"{desc}: the queue"
@@ -4020,7 +4022,8 @@ async def test_the_word_after_acting_on_marks_names_each_act(store, sid, kinds, 
             # closing stamps Q1 and dismissing leaves T1's stamp: T1, the older, is first among
             # the finished, and in the notice
             for k, r in zip(kinds, refs):
-                app.close(store.item(sid, r), True)
+                app.closed_shown(store.item(sid, r), True)
+                app.closing(store.item(sid, r), True)()
             await pilot.press("alt+v")
         await pilot.pause()
         items.set_marks({f"{sid}|{r}" for r in refs})
@@ -8814,6 +8817,7 @@ async def drag_row(pilot, table, row: int, to: int, release: bool = True) -> Non
     if release:
         await pilot.mouse_up(table, offset=(2, header + to))
         await pilot.pause()
+        await landed(pilot.app, pilot)   # its order written on the lane (send_off, #391)
 
 
 @pytest.mark.anyio
@@ -9050,7 +9054,7 @@ async def test_a_drag_not_written_changes_nothing(store, sid):
         await pilot.pause()
         n = first_item(app)   # the conversation row above the items (#236)
         app.client.reorder_items = lambda group, keys: Done(False).say("too old", "error")
-        app.told = lambda done: said.extend(n.text for n in done.notices)
+        app.told = lambda done: (said.extend(n.text for n in done.notices), done)[1]
         await drag_row(pilot, app.items_table, 1 + n, 0 + n)
         assert said == ["too old"]
         assert "status *" in [str(c.label) for c in app.items_table.ordered_columns]
@@ -10350,6 +10354,7 @@ async def test_session_steps_keeps_what_changed(store, sid):
     app = WheelhouseApp(store)
     async with app.run_test(size=(160, 40)) as pilot:
         app.action_session_steps()
+        await app.workers.wait_for_complete()   # its table read off the UI thread (open_after_read, #391)
         await pilot.pause()
         assert isinstance(app.screen, tui.SessionSteps)
         assert not app.screen.query("#step-before_compact-announce"), "no compaction rows outside SDK mode"
@@ -10359,6 +10364,7 @@ async def test_session_steps_keeps_what_changed(store, sid):
         box.value = False
         await pilot.click("#session-steps-ok")
         await pilot.pause()
+        await app.workers.wait_for_complete()   # kept on the lane (send_off)
     assert store.setting(steps.setting_key("pr_merged", "cleanup")) == "off"
     assert store.setting(steps.CHOSEN), "answered here: the first-press dialog isn't shown"
     assert store.setting(steps.setting_key("before_forget", "items")) == "on", "before any choice, all kept as shown"

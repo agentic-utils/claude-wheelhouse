@@ -35,7 +35,12 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   one before it however long the daemon takes, and Ctrl+Z and Ctrl+R, sent off the lane, wait
   behind it (`behind_deletes`). In process, or
   through a synchronous client, it runs at once. A setting kept goes the same way, off the UI
-  thread in order (`RemoteClient.aside`). Input stays synchronous: `settle` repaints
+  thread in order (`RemoteClient.aside`), as do the tour's place and features seen
+  (`RemoteClient.tour_change`, laid over each inbox fetched before they're made). A read the UI
+  needs goes on the lane too (`WheelhouseApp.read_off`, #391); a dialog that needs one opens
+  as `Reading` at once and is swapped for the dialog when it lands (`open_after_read`). The
+  effort slider shows the level asked for until it lands (`WheelhouseApp.efforts`), and a doc
+  save that lands after more typing keeps that typing (`doc_written`'s keep). Input stays synchronous: `settle` repaints
   the inbox as a key lands, so the keys behind it act on the same rows (#312). The tick skips
   `paint_items` while `RemoteClient.version` (the sessions and inbox applied) and the app's
   state are as last painted.
