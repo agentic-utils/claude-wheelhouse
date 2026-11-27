@@ -62,7 +62,10 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   default, 0 for off; `WheelhouseApp.pace` rests it while unfocused with nothing busy; the title
   and eyes draw at most `tui.EYES_FPS`, the overlay `tui.DOCK_FPS`; both timers go through
   `frame_due`, which yields to input and late frames, `tui.REST` and `tui.LATE`; `repaint.py`
-  replaces Textual's partial update so a few cells cost a few cells), and the gap
+  replaces Textual's partial update so a few cells cost a few cells; the session list's eyes
+  and dots are drawn by small windows over its cells, `tui.RowCells`, which copy what the list
+  draws beneath them, so a frame never draws the list's rows, and which the pointer passes
+  through, `repaint.get_widget_at`), and the gap
   after which the app says what happened meanwhile, `away_hours()` (`AWAY_HOURS`; 2 by default, 0 for off), and how long a
   completed inbox item stays in sight, `autocleanse_minutes()` (`AUTOCLEANSE_MINUTES`; 5 by default, 0 for off; tests run with
   it off, conftest, and set `app.autocleanse`), and the nice level launched sessions run at,

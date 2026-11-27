@@ -4918,6 +4918,116 @@ def drawn_cells(table, regions) -> list[tuple[int, int]]:
                  if table._get_cell_region(Coordinate(row, col)).contains_region(region)) for region in regions]
 
 
+def screen_cells(app) -> list[list[tuple]]:
+    """The whole screen as the terminal is given it, cell by cell with its style."""
+    return [cells(strip) for strip in app.screen._compositor.render_strips()]
+
+
+def eye_on_screen(app, sid) -> str:
+    """The characters on screen where the busy row's eye is, by the list's own columns."""
+    t = app.session_list
+    *before, _ = t.ordered_columns
+    x = t.region.x + sum(c.get_render_width(t) for c in before) + t.cell_padding - round(t.scroll_x)
+    y = t.region.y + t.header_height + t.get_row_index(sid) - round(t.scroll_y)
+    return "".join(ch for ch, _ in screen_cells(app)[y][x:x + SessionList.EYE])
+
+
+async def busy_list_in(app, pilot, situation: str, sid: str, above: list[str], store):
+    """The session list put in a situation the eyes' windows (RowCells) must follow."""
+    t = app.session_list
+    if situation == "cursor":
+        t.focus()
+        await pick(app, pilot, sid)
+    elif situation == "hover":
+        await pilot.hover(t, offset=(3, t.header_height + t.get_row_index(sid)))
+    elif situation == "scrolled":
+        t.scroll_to(y=3, animate=False)
+    elif situation == "reorder":
+        before = t.get_row_index(sid)
+        for other in above[:3]:
+            store.set_parked(other, True)   # to the foot of the list: the busy row moves up
+        app.refresh_data()
+        for _ in range(30):   # the Sink's move lands
+            await pilot.pause(0.05)
+        assert t.get_row_index(sid) != before, "the busy row moved"
+        t.scroll_to(y=0, animate=False)   # the parked rows' move scrolls the list: back to the busy row
+    elif situation == "wider":
+        store.rename(above[0], "a much longer session name")   # the name column widens: the eyes move right
+        app.refresh_data()
+    for _ in range(3):
+        await pilot.pause()   # the windows moved after the list is drawn (SessionList.place_cells)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("situation, desc", [
+    ("rest", "nothing touched"),
+    ("cursor", "the cursor on the busy row"),
+    ("hover", "the pointer on the busy row"),
+    ("scrolled", "the list scrolled down"),
+    ("reorder", "rows above parked, the busy row moved up"),
+    ("wider", "a longer name widened its column"),
+])
+async def test_the_eyes_windows_stay_on_their_rows(store, sid, tmp_path, monkeypatch, situation, desc):
+    """#385: the busy rows' eyes and dots are drawn by windows over the list (RowCells). Each
+    frame the eye shows on its own row, and the screen is cell for cell what the list draws
+    without them."""
+    features.set_animation_fps("0")   # no frames but the test's
+    for n in range(24):
+        store.create_session(str(tmp_path), name=f"s{n}")
+    busy = [None]
+    monkeypatch.setattr(WheelhouseApp, "busy", lambda self, s: s == busy[0])
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(120, 40)) as pilot:   # more rows than the list has room for: it scrolls
+        await pilot.pause()
+        keys = [r.key.value for r in app.session_list.ordered_rows]
+        sid = busy[0] = keys[7]   # a row in the middle, with rows above it to park and scroll past
+        app.refresh_data()
+        await pilot.pause()
+        await busy_list_in(app, pilot, situation, sid, keys[:7], store)
+        t = app.session_list
+        assert all(w.display for w in t.cells), f"{desc}: the windows show"
+        assert 0 <= t.get_row_index(sid) - round(t.scroll_y) < t.size.height - t.header_height, f"{desc}: the busy row in sight"
+        for frame in (0, 3, 9, 14):
+            t.sweep(frame)
+            await pilot.pause()
+            assert eye_on_screen(app, sid) == cylon(frame).plain, f"{desc}, frame {frame}: the eye on its row"
+            with_windows = screen_cells(app)
+            for w in t.cells:
+                w.display = False
+            t.refresh()
+            await pilot.pause()
+            assert screen_cells(app) == with_windows, f"{desc}, frame {frame}: the windows draw what the list does"
+            for w in t.cells:
+                w.display = True
+            await pilot.pause()
+
+
+@pytest.mark.anyio
+async def test_an_eye_frame_draws_the_windows_not_the_list(store, sid, tmp_path, monkeypatch):
+    """#385: an animation frame reaches the screen through the eyes' and dots' windows alone,
+    a few cells each: DataTable draws no line of the list."""
+    features.set_animation_fps("0")
+    for n in range(5):
+        store.create_session(str(tmp_path), name=f"s{n}")
+    monkeypatch.setattr(WheelhouseApp, "busy", lambda self, s: True)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        await pilot.pause()
+        t = app.session_list
+        t.sweep(0)
+        await pilot.pause()
+        table, windows = [], []
+        real_table, real_window = DataTable.render_lines, tui.RowCells.render_line
+        monkeypatch.setattr(DataTable, "render_lines", lambda self, crop: (table.append(self), real_table(self, crop))[1])
+        monkeypatch.setattr(tui.RowCells, "render_line", lambda self, y: (windows.append(self.column), real_window(self, y))[1])
+        t.sweep(tui.BLINK_FRAMES + 4)   # the eye moves and the dots dim
+        await pilot.pause()
+        assert t not in table, "no line of the list drawn again"
+        assert {"eye", "dot"} <= set(windows), "the eyes' and the dots' windows drew the frame"
+        assert len(windows) <= 2 * len(store.sessions()), "a line per busy row and window, no more"
+
+
 def shown_buttons(app) -> set[str]:
     return {b.id for b in app.screen.query("SendBar Button, PermissionButtons Button, #conversation-buttons Button")
             if b.display and b.parent.display}

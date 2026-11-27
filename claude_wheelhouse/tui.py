@@ -4,6 +4,7 @@ daemon's hub, over HTTP and SSE, or with --local a hub of its own, in process.""
 import asyncio
 import bisect
 import collections
+import contextlib
 import dataclasses
 import difflib
 import functools
@@ -1137,9 +1138,18 @@ class SinkList(RowTips, KeepColours, DataTable):
         """As DataTable draws them, its style worked out once for the lines, not once a line:
         DOMNode.rich_style walks every ancestor's styles uncached, and an eye frame draws
         a line for each busy row (#385)."""
+        with self.styled():
+            return super().render_lines(crop)
+
+    @contextlib.contextmanager
+    def styled(self):
+        """The table's style worked out once for the lines drawn within (render_lines, RowCells)."""
+        if self.pass_style is not None:
+            yield
+            return
         self.pass_style = DataTable.rich_style.fget(self)
         try:
-            return super().render_lines(crop)
+            yield
         finally:
             self.pass_style = None
 
@@ -1440,6 +1450,39 @@ async def select_now(table: DataTable) -> None:
         await table.app._dispatch_message(DataTable.RowSelected(table, row, table.coordinate_to_cell_key((row, 0)).row_key))
 
 
+class RowCells(Widget):
+    """A window over a few of the session list's cells, one column of them on every row: the
+    busy rows' eyes, or their dots (#385). It draws exactly what the list draws beneath it,
+    each line the list's own (DataTable.render_line) cut to the window's cells, so it can never
+    show the list wrongly, wherever it sits: the cursor's and the pointer's colours, a drag's
+    drop line, a dimmed row, all come from the list. An animation frame refreshes the window
+    alone (SessionList.sweep), a few short lines, where refreshing the list drew its rows
+    again, whole, through DataTable. The pointer passes through it to the list (repaint.py)."""
+
+    DEFAULT_CSS = "RowCells { layer: cells; position: absolute; width: 1; height: 1; display: none; }"
+    pass_through = True   # the pointer's widget is the list beneath (repaint.get_widget_at)
+
+    def __init__(self, column: str, **kwargs):
+        super().__init__(**kwargs)
+        self.column = column   # "eye" or "dot" (SessionList.cell_spans)
+        self.table: "SessionList | None" = None
+
+    def render_lines(self, crop: Region) -> list[Strip]:
+        if self.table is None:
+            return super().render_lines(crop)
+        with self.table.styled():   # the list's style worked out once for these lines, not per line
+            return super().render_lines(crop)
+
+    def render_line(self, y: int) -> Strip:
+        table, width = self.table, self.size.width
+        if table is None:
+            return Strip.blank(width)
+        dx, dy = self.region.offset - table.region.offset
+        if not 0 <= y + dy < table.size.height:
+            return Strip.blank(width)
+        return table.render_line(y + dy).crop(dx, dx + width)
+
+
 class SessionList(SinkList):
     """The inbox's sessions. One click selects a row: a plain table selects only on a second
     click, the first just moving the cursor there. A single click on the selected row, or on
@@ -1469,6 +1512,69 @@ class SessionList(SinkList):
         self.swept: tuple | None = None   # the busy rows and the eye's place as last drawn again (sweep)
         self.blinked = False   # whether the busy rows' dots were last drawn dimmed (sweep)
         self.eyed: dict[tuple, tuple[Strip, Strip]] = {}   # busy rows' lines as drawn, eye and all (_render_line)
+        self.placed: dict | None = None   # each window's place as last put there (place_cells)
+        self.placing = False   # a place_cells asked for and not yet run
+
+    cells: tuple = ()   # the windows over the eyes and the dots (RowCells), once mounted (watch)
+
+    def watch(self, *cells: RowCells) -> None:
+        """The windows that draw the animated cells over the list (RowCells)."""
+        for window in cells:
+            window.table = self
+        self.cells = cells
+        self.place_cells()
+
+    def cell_spans(self) -> dict[str, Region | None]:
+        """Where each window goes, in the list's own lines and columns as in sight: the eyes' cells
+        and the dots', on every row below the header, cut to what is in sight. None with no
+        busy row (nothing animates, and the list draws its cells itself) or nothing in sight."""
+        spans: dict[str, Region | None] = {"eye": None, "dot": None}
+        if not self.eyes or len(self.columns) < 2 or not self.region.area:
+            return spans
+        view = self.scrollable_content_region.translate(-self.region.offset)   # in sight, scrollbars aside
+        top = view.y + (self.header_height if self.show_header else 0)
+        *before, _ = self.ordered_columns
+        x = self.cell_padding - round(self.scroll_x)
+        for name, left, width in (("dot", x, 1), ("eye", x + sum(c.get_render_width(self) for c in before), self.EYE)):
+            span = Region(view.x + left, top, width, view.bottom - top).intersection(view)
+            spans[name] = span if span.area else None
+        return spans
+
+    def place_cells(self) -> None:
+        """Each window put over its cells (cell_spans), or hidden. Only when that changes: a
+        move or a resize lays the screen out again. Where a window is hidden, or yet to land, the
+        list draws its cells itself (sweep), so a window late to its place is never wrong."""
+        self.placing = False
+        if not self.cells or self.parent is None:
+            return
+        spans = self.cell_spans()
+        if spans == self.placed:
+            return
+        self.placed = spans
+        origin = self.region.offset - self.parent.content_region.offset
+        for window in self.cells:
+            span = spans.get(window.column)
+            window.display = span is not None
+            if span is not None:
+                window.styles.offset = (origin.x + span.x, origin.y + span.y)
+                window.styles.width, window.styles.height = span.width, span.height
+
+    def render_lines(self, crop: Region) -> list[Strip]:
+        """As SinkList draws them, and the windows moved after the draw when the list has moved
+        under them: a scroll sideways, a column widened, a resize, all draw the list again."""
+        if self.cells and not self.placing and self.cell_spans() != self.placed:
+            self.placing = True
+            self.call_later(self.place_cells)
+        return super().render_lines(crop)
+
+    def refresh(self, *regions: Region, repaint: bool = True, layout: bool = False, recompose: bool = False) -> Self:
+        """The list drawn again, and the windows over it with it, as they show what it draws
+        (RowCells): a few short lines each. Not their place, which render_lines keeps."""
+        super().refresh(*regions, repaint=repaint, layout=layout, recompose=recompose)
+        for window in self.cells:
+            if window.display:
+                window.refresh()
+        return self
 
     def name_room(self, rows: list[tuple]) -> int:
         """The cells a name may have, ⟳ and all: the pane's width less every other column's as
@@ -1502,18 +1608,32 @@ class SessionList(SinkList):
                 row = self.get_row_index(sid)
                 if moved:
                     cell = self._get_cell_region(Coordinate(row, eye))
-                    drawn.append(cell if cells is None else
-                                 Region(cell.x + self.cell_padding + cells[0], cell.y, cells[1] - cells[0], 1))
+                    first, last = cells or (0, self.EYE)
+                    drawn.append(Region(cell.x + self.cell_padding + first, cell.y, last - first, 1))
                 if flashed:
-                    drawn.append(self._get_cell_region(Coordinate(row, 0)))
+                    cell = self._get_cell_region(Coordinate(row, 0))
+                    drawn.append(Region(cell.x + self.cell_padding, cell.y, 1, 1))   # the dot's one cell
         self.draw_again(drawn)
 
     def draw_again(self, regions: list[Region]) -> None:
         """The table's `regions` (cells, as DataTable._refresh_region takes them) drawn again,
-        those in sight, in one refresh: each refresh empties the widget's caches (#385)."""
+        those in sight: by the window over them (RowCells), which draws a few cells, else by
+        the list, whose rows DataTable draws again whole. One refresh each: each refresh
+        empties the widget's caches (#385)."""
         window, offset = self.window_region, self.scroll_offset
-        if shown := [r.translate(-offset) for r in regions if window.overlaps(r)]:
-            self.refresh(*shown)
+        shown = [r.translate(-offset) for r in regions if window.overlaps(r)]
+        over = [(w, Region(*(w.region.offset - self.region.offset), *w.size)) for w in self.cells if w.display and w.size.area]
+        mine, theirs = [], {}
+        for r in shown:
+            w, at = next(((w, at) for w, at in over if at.contains_region(r)), (None, None))
+            if w is None:
+                mine.append(r)
+            else:
+                theirs.setdefault(w, []).append(r.translate(-at.offset))
+        for w, rs in theirs.items():
+            w.refresh(*rs)
+        if mine:
+            self.refresh(*mine)
 
     def _render_line(self, y: int, x1: int, x2: int, base_style: Style) -> Strip:
         """The line as DataTable draws it, with a busy row's eye over its blank cell, and its
@@ -5352,6 +5472,7 @@ class WheelhouseApp(App):
     Compose > .text-area--cursor {{ background: #ff2a6d; color: #000000; text-style: bold; }}
     .answer-hint {{ color: #777777; width: 100%; height: auto; }}   /* wraps in a narrow column: every key stays on show */
     #thread-scroll {{ height: 1fr; }}
+    #sessions-pane {{ layers: default cells; }}   /* the eyes' windows over the list (RowCells) */
     #session-list {{ height: 1fr; min-height: 5; }}   /* on a short terminal the description gives way first */
     #session-info {{ height: 1fr; min-height: 1; background: #000000; padding: 0 1; }}
     #session-info-text {{ color: #e8e8e8; }}
@@ -5683,6 +5804,8 @@ class WheelhouseApp(App):
                     with Vertical(id="sessions-pane", classes="panel") as pane:
                         pane.border_title = "Sessions"
                         yield SessionList(id="session-list", cursor_type="row", show_cursor=False)   # none selected (D20)
+                        yield RowCells("dot", id="session-dots")   # the busy rows' dots and eyes, drawn over the list (#385)
+                        yield RowCells("eye", id="session-eyes")
                 yield SlotSplitter("left-middle", "col-left")
                 yield slot("left.middle")   # the stats module's
                 yield SlotSplitter("left-bottom", "col-left")
@@ -5759,6 +5882,7 @@ class WheelhouseApp(App):
         self.doc_layout = TABBED if self.client.setting(DOC_LAYOUT) == TABBED else SPLIT
         self.answer = self.query_one("#answer", Compose)
         self.session_list = self.query_one("#session-list", SessionList)
+        self.session_list.watch(*self.query(RowCells))
         self.session_list.sink, self.items_table.sink = self.session_sink, self.item_sink
         self.session_info = self.query_one("#session-info-text", Static)
         self.session_activity = self.query_one("#session-activity", Static)

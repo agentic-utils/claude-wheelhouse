@@ -13,7 +13,12 @@ A refresh of a few cells reaches the terminal through `Compositor.render_partial
 `install` swaps in versions that render only the front widgets a refreshed region touches, on
 the lines it touches, and write from the first refreshed cell. What reaches the screen is the
 same: a line nobody refreshed is never written, and of a line that is, the same cells come from
-the same widget, front to back. Textual is pinned (pyproject), so these track its internals."""
+the same widget, front to back. Textual is pinned (pyproject), so these track its internals.
+
+It also lets a widget be drawn without being pointed at: one with `pass_through` set is passed
+over when the pointer's widget is looked up (mouse events, hover, tooltips, a click's cell), so
+the widget beneath gets them, as if it weren't there. The session list's eyes are drawn by such
+windows over its cells (tui.RowCells)."""
 from typing import Callable, Iterable
 
 from textual._compositor import ChopsUpdate, Compositor
@@ -25,6 +30,7 @@ from rich.console import Console
 from rich.control import Control
 
 TEXTUAL = Compositor.render_partial_update, ChopsUpdate.render_segments   # Textual's own, which these stand in for
+WIDGET_AT, WIDGETS_AT = Compositor.get_widget_at, Compositor.get_widgets_at   # Textual's own, which these stand in for
 
 
 def _touched(compositor: Compositor, regions: Iterable[Region]) -> Iterable[tuple[Region, Region, list[Strip]]]:
@@ -40,7 +46,7 @@ def _touched(compositor: Compositor, regions: Iterable[Region]) -> Iterable[tupl
     shared = []   # the rest, which every widget they touch draws
     for r in regions:
         try:
-            widget, _ = compositor.get_widget_at(r.x, r.y)
+            widget, _ = WIDGET_AT(compositor, r.x, r.y)   # what is drawn there, pass_through or not
         except NoWidget:
             shared.append(r)
             continue
@@ -119,7 +125,22 @@ def render_segments(self: ChopsUpdate, console: Console) -> str:
     return "".join(sequences)
 
 
+def get_widgets_at(self: Compositor, x: int, y: int) -> Iterable:
+    """`Compositor.get_widgets_at`, front to back, less the widgets drawn to be passed over (pass_through)."""
+    return ((widget, region) for widget, region in WIDGETS_AT(self, x, int(y)) if not getattr(widget, "pass_through", False))
+
+
+def get_widget_at(self: Compositor, x: int, y: int):
+    """`Compositor.get_widget_at`: the front widget at the cell the pointer can reach, past any
+    drawn to be passed over (pass_through)."""
+    for found in get_widgets_at(self, x, y):
+        return found
+    raise NoWidget(f"No widget under screen coordinate ({x}, {y})")
+
+
 def install() -> None:
-    """Swap in the partial update above (idempotent)."""
+    """Swap in the partial update and the pointer's lookup above (idempotent)."""
     Compositor.render_partial_update = render_partial_update
     ChopsUpdate.render_segments = render_segments
+    Compositor.get_widget_at = get_widget_at
+    Compositor.get_widgets_at = get_widgets_at
