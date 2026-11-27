@@ -98,7 +98,13 @@ client in 2c, and Shell's tmux window comes in 2d. As built:
   creates on open, so every writer bumps them (hosts, MCP servers, the TUI, the daemon,
   and older code once any newer has opened the database), and any change a client could
   see moves a mark (two edits in the same second, a draft taken back and queued again
-  under its id). Reading them costs the same whatever the history; then it refreshes the
+  under its id). The items triggers also stamp each row inserted or updated with the mark
+  just bumped (`items.changed`, #391), so the inbox reads only the rows stamped since its
+  last read, every row of a session renamed or parked, and the keys left only when the
+  rows no longer number those it holds (a delete has no stamp). The tutorial's facts are
+  kept on the items and messages marks and the tutorial's session; its state, read from
+  settings no mark covers, is read each time, which costs little once it no longer goes
+  through `store.sessions()`. Reading the marks costs the same whatever the history; then it refreshes the
   hub as the TUI's tick does. The sessions' mark is the rows that refresh read but for `heartbeat_at`,
   so the heartbeat every host writes each second publishes nothing. Each kind whose mark
   moved is published for all: the sessions' rows `sessions` (and `items` if a name or
