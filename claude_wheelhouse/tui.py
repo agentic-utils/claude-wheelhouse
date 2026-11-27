@@ -1476,6 +1476,7 @@ class RowCells(Widget):
         table = self.table
         if table is None:
             return super().render_lines(crop)
+        self._dirty_regions.clear()   # Widget.render_line's whole render, never used while this draws
         if table.drawn != self.kept_for:
             self.kept.clear()
             self.kept_for = table.drawn

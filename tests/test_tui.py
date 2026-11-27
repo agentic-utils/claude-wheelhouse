@@ -26,7 +26,7 @@ from textual.strip import Strip
 from textual.visual import Visual, visualize
 from textual.widgets import Button, Checkbox, DataTable, Footer, Input, Label, Select, TextArea
 
-from claude_wheelhouse import client as client_mod, compactor, emoji, features, launch, models, ordering, transcript, transcript_usage, tui, tutorial
+from claude_wheelhouse import client as client_mod, compactor, emoji, features, launch, models, ordering, repaint, transcript, transcript_usage, tui, tutorial
 from claude_wheelhouse.scenes import SCENES
 from claude_wheelhouse.hub import Done, Hub
 from claude_wheelhouse.store import PROTOCOL_VERSION
@@ -5026,6 +5026,51 @@ async def test_an_eye_frame_draws_the_windows_not_the_list(store, sid, tmp_path,
         assert t not in table, "no line of the list drawn again"
         assert {"eye", "dot"} <= set(windows), "the eyes' and the dots' windows drew the frame"
         assert len(windows) <= 2 * len(store.sessions()), "a line per busy row and window, no more"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("column, action, desc", [
+    ("eye", "click", "a click on the eye selects its row"),
+    ("dot", "click", "a click on the dot selects its row"),
+    ("eye", "right", "a right-click on the eye opens its session's menu"),
+    ("dot", "right", "a right-click on the dot opens its session's menu"),
+    ("eye", "drag", "a press on the eye and a move off its row drags the row"),
+    ("dot", "drag", "a press on the dot and a move off its row drags the row"),
+])
+async def test_the_pointer_passes_through_the_eyes_windows(store, sid, tmp_path, monkeypatch, column, action, desc):
+    """#385: the eyes' and dots' windows (RowCells) lie over the list's cells, and every press
+    there reaches the list as if they weren't (repaint.get_widget_at)."""
+    features.set_animation_fps("0")
+    for n in range(4):
+        store.create_session(str(tmp_path), name=f"s{n}")
+    monkeypatch.setattr(WheelhouseApp, "busy", lambda self, s: s == sid)
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        for _ in range(3):
+            await pilot.pause()
+        t = app.session_list
+        *before, _ = t.ordered_columns
+        x = t.cell_padding + (sum(c.get_render_width(t) for c in before) + 2 if column == "eye" else 0)
+        y = t.header_height + t.get_row_index(sid)
+        at = t.region.offset + (x, y)
+        window = next(w for w in t.cells if w.column == column)
+        assert repaint.WIDGET_AT(app.screen._compositor, *at)[0] is window, f"{desc}: the window is what is drawn there"
+        if action == "click":
+            assert await pilot.click(t, offset=(x, y)), f"{desc}: the list is the widget clicked"
+            await pilot.pause()
+            assert app.filter_sid == sid, desc
+        elif action == "right":
+            await right_click_at(app, "#session-list", (x, y))
+            await pilot.pause()
+            assert isinstance(app.screen, tui.SessionMenu) and app.current_session() == sid, desc
+        else:
+            await pilot.mouse_down(t, offset=(x, y))
+            sx, sy = at.x, at.y + 1
+            app.post_message(events.MouseMove(None, sx, sy, 0, 1, button=1, shift=False, meta=False,
+                                              ctrl=False, screen_x=sx, screen_y=sy))
+            await pilot.pause()
+            assert t.dragging == sid, desc
+            await pilot.mouse_up(t, offset=(x, y + 1))
 
 
 def shown_buttons(app) -> set[str]:
