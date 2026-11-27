@@ -299,6 +299,7 @@ class RemoteClient:
         self.unfetched = -1
         self.asides: list[Callable[[], object]] = []   # writes nobody waits on, to send in order (aside)
         self.aside_thread: threading.Thread | None = None
+        self.tour_kept: list[list] = []   # the tour's changes shown before a fetch has them (tour_change)
         self.stopping = False
         self.threads: list[threading.Thread] = []
         self.last_event: str | None = None
@@ -714,6 +715,9 @@ class RemoteClient:
                               {(d["session_id"], d["item_ref"]) for d in data["drafts"]},
                               {tuple(k) for k in data["awaiting"]})
             self.tutorial_state = data["tutorial"]
+            self.tour_kept = [c for c in self.tour_kept if c[1] is None or seq < c[1]]   # fetched after: has it
+            for lay, _ in self.tour_kept:
+                lay(self.tour_state())
             if self.letting_go and seq > self.unfetched:   # fresh since a fetch_now failed (expected)
                 gone, self.letting_go = self.letting_go, []
                 self.let_go(gone)
@@ -1067,22 +1071,41 @@ class RemoteClient:
         return bool(self.tutorial_state.get("offer"))
 
     def see_features(self, ids: list[str], notes: str | None = None) -> None:
-        # fetched at the next read: an inbox fetch already waiting would show it unseen again (#268)
-        self.quietly("/tour/seen", {"ids": ids, "notes": notes}, refetch="now")
-        tour = self.tour_state()   # as the daemon now has it, until the next fetch says so itself
-        if "seen" in tour:   # not known, it stays so: nothing offered
-            tour["seen"] = sorted({*tour["seen"], *ids})
-        if notes:
-            tour["notes_seen"] = notes
+        def lay(tour: dict) -> None:
+            if "seen" in tour:   # not known, it stays so: nothing offered
+                tour["seen"] = sorted({*tour["seen"], *ids})
+            if notes:
+                tour["notes_seen"] = notes
+        self.tour_change(lay, "/tour/seen", {"ids": ids, "notes": notes})
 
     def tour_state(self) -> dict:
         return self.tutorial_state.setdefault("tour", {})
 
     def tour_at(self, at: str | None) -> bool:
-        ok = self.quietly("/tour/at", {"at": at}, refetch="now")   # as see_features
-        if ok:   # as the daemon now has it, until the next fetch says so itself
-            self.tour_state()["at"] = at
-        return ok
+        self.tour_change(lambda tour: tour.__setitem__("at", at), "/tour/at", {"at": at})
+        return True
+
+    def tour_change(self, lay: Callable[[dict], None], path: str, body: dict) -> None:
+        """A change the tour made to its state (where it is, a feature seen), shown at once and
+        sent off the UI thread, in order (aside, #391). Laid over each inbox fetched meanwhile
+        (apply), until one fetched after it was made: an inbox fetch already under way would
+        show it undone again (#268)."""
+        change: list = [lay, None]   # and the seq a fetch must pass to have it, once made
+        with self.lock:
+            self.tour_kept.append(change)
+            lay(self.tour_state())
+
+        def send() -> None:
+            made = False
+            try:
+                made = self.quietly(path, body, refetch="now")
+            finally:
+                with self.lock:
+                    change[1] = self.next_seq()
+                    if not made:   # not kept: shown as the daemon has it once the inbox is fetched again
+                        self.dirty.add(("inbox",))
+                        self.lock.notify_all()
+        self.aside(send)
 
     def quietly(self, path: str, body: dict, refetch: str = "later") -> bool:
         """A command nobody waits to hear about (a splitter's size, a feature the tour

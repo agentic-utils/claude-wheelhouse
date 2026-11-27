@@ -479,7 +479,7 @@ async def test_a_save_the_filesystem_refuses_says_where_and_why(store, sid, doc)
             doc[1].parent.chmod(0o755)
         assert isinstance(app.screen, SaveFailed), "said in a prompt"
         said = str(app.screen.query_one(".dialog-prompt").render())
-        assert said == f"plan.md wasn't saved: {doc[1]} can't be written: Permission denied", said
+        assert said == f"plan.md wasn't saved: {doc[1]} can't be written: Permission denied (your edits are kept)", said
         await pressed(pilot, "escape", lambda: not isinstance(app.screen, SaveFailed))
         assert doc[1].read_text() == DOC and str(doc[1]) in app.doc_edits, "nothing written, the edits kept"
         assert app.query_one("#detail-pane").border_title == "Detail · edited · Ctrl+S saves"
