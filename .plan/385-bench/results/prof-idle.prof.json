@@ -1,0 +1,6892 @@
+{
+ "startup": {
+  "wall_s": 17.2,
+  "samples": 2721,
+  "ui_busy_pct": 22.5,
+  "ui_busy_ms": 3865,
+  "ui_cpu_ms": 5968,
+  "cumulative [function, ms, % of busy]": [
+   [
+    ".plan/385-bench/profapp.py:1 <module>",
+    3865,
+    100.0
+   ],
+   [
+    "claude_wheelhouse/cli.py:298 main",
+    3732,
+    96.6
+   ],
+   [
+    "claude_wheelhouse/cli.py:33 run_app",
+    3720,
+    96.2
+   ],
+   [
+    "events.py:86 _run",
+    3083,
+    79.8
+   ],
+   [
+    "base_events.py:1910 _run_once",
+    3083,
+    79.8
+   ],
+   [
+    "base_events.py:627 run_forever",
+    3083,
+    79.8
+   ],
+   [
+    "base_events.py:651 run_until_complete",
+    3083,
+    79.8
+   ],
+   [
+    "runners.py:86 run",
+    3083,
+    79.8
+   ],
+   [
+    "runners.py:160 run",
+    3083,
+    79.8
+   ],
+   [
+    "textual/app.py:2308 run",
+    3083,
+    79.8
+   ],
+   [
+    "textual/_callback.py:45 _invoke",
+    2913,
+    75.4
+   ],
+   [
+    "textual/_callback.py:62 invoke",
+    2913,
+    75.4
+   ],
+   [
+    "textual/timer.py:150 _run",
+    1671,
+    43.2
+   ],
+   [
+    "textual/timer.py:143 _run_timer",
+    1671,
+    43.2
+   ],
+   [
+    "textual/timer.py:180 _tick",
+    1664,
+    43.1
+   ],
+   [
+    "textual/screen.py:1188 _compositor_refresh",
+    1564,
+    40.5
+   ],
+   [
+    "textual/screen.py:1236 _on_timer_update",
+    1450,
+    37.5
+   ],
+   [
+    "textual/_compositor.py:1096 render_update",
+    1425,
+    36.9
+   ],
+   [
+    "textual/_compositor.py:1200 _render_chops",
+    1419,
+    36.7
+   ],
+   [
+    "textual/_compositor.py:1165 render_partial_update",
+    1349,
+    34.9
+   ],
+   [
+    "textual/_compositor.py:1031 _get_renders",
+    1179,
+    30.5
+   ],
+   [
+    "textual/_styles_cache.py:99 render_widget",
+    1166,
+    30.2
+   ],
+   [
+    "textual/widget.py:4271 render_lines",
+    1166,
+    30.2
+   ],
+   [
+    "textual/_styles_cache.py:163 render",
+    1047,
+    27.1
+   ],
+   [
+    "textual/_styles_cache.py:267 render_line",
+    927,
+    24.0
+   ],
+   [
+    "textual/message_pump.py:707 _dispatch_message",
+    845,
+    21.9
+   ],
+   [
+    "textual/screen.py:1316 _refresh_layout",
+    788,
+    20.4
+   ],
+   [
+    "textual/widgets/_data_table.py:2474 render_lines",
+    763,
+    19.7
+   ],
+   [
+    "<frozen importlib._bootstrap>:1304 _find_and_load_unlocked",
+    738,
+    19.1
+   ],
+   [
+    "<frozen importlib._bootstrap>:1349 _find_and_load",
+    738,
+    19.1
+   ],
+   [
+    "<frozen importlib._bootstrap_external>:989 exec_module",
+    725,
+    18.8
+   ],
+   [
+    "<frozen importlib._bootstrap>:911 _load_unlocked",
+    725,
+    18.8
+   ],
+   [
+    "textual/message_pump.py:810 _on_message",
+    725,
+    18.8
+   ],
+   [
+    "<frozen importlib._bootstrap>:480 _call_with_frames_removed",
+    719,
+    18.6
+   ],
+   [
+    "textual/message_pump.py:562 _process_messages",
+    700,
+    18.1
+   ],
+   [
+    "textual/message_pump.py:634 _process_messages_loop",
+    681,
+    17.6
+   ],
+   [
+    "textual/message_pump.py:802 on_event",
+    662,
+    17.1
+   ],
+   [
+    "textual/widgets/_data_table.py:2478 render_line",
+    662,
+    17.1
+   ],
+   [
+    "<frozen importlib._bootstrap_external>:140 _path_stat",
+    605,
+    15.7
+   ],
+   [
+    "<frozen importlib._bootstrap_external>:1491 _get_spec",
+    586,
+    15.2
+   ],
+   [
+    "<frozen importlib._bootstrap_external>:1520 find_spec",
+    586,
+    15.2
+   ],
+   [
+    "<frozen importlib._bootstrap>:1240 _find_spec",
+    586,
+    15.2
+   ],
+   [
+    "<frozen importlib._bootstrap_external>:1593 find_spec",
+    574,
+    14.8
+   ],
+   [
+    "textual/app.py:3364 _process_messages",
+    542,
+    14.0
+   ],
+   [
+    "textual/app.py:2220 run_async",
+    542,
+    14.0
+   ],
+   [
+    "textual/app.py:2334 run_app",
+    542,
+    14.0
+   ],
+   [
+    "textual/app.py:3420 run_process_messages",
+    536,
+    13.9
+   ],
+   [
+    "claude_wheelhouse/tui.py:5681 on_event",
+    473,
+    12.2
+   ],
+   [
+    "claude_wheelhouse/tui.py:1 <module>",
+    467,
+    12.1
+   ],
+   [
+    "textual/app.py:4060 on_event",
+    422,
+    10.9
+   ],
+   [
+    "tasks.py:973 factory",
+    422,
+    10.9
+   ],
+   [
+    "base_events.py:451 create_task",
+    422,
+    10.9
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line",
+    359,
+    9.3
+   ],
+   [
+    "<frozen importlib._bootstrap>:1390 _handle_fromlist",
+    296,
+    7.7
+   ],
+   [
+    "claude_wheelhouse/tui.py:1333 _render_line",
+    290,
+    7.5
+   ],
+   [
+    "claude_wheelhouse/tui.py:1347 _kept_line",
+    284,
+    7.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:5505 on_mount",
+    277,
+    7.2
+   ],
+   [
+    "textual/widgets/_data_table.py:2416 _render_line",
+    271,
+    7.0
+   ],
+   [
+    "claude_wheelhouse/tui.py:6366 paint_items",
+    271,
+    7.0
+   ],
+   [
+    "textual/widgets/_data_table.py:2248 _render_line_in_row",
+    252,
+    6.5
+   ]
+  ],
+  "self": [
+   [
+    "<frozen importlib._bootstrap_external>:140 _path_stat (line 147)",
+    605,
+    15.7
+   ],
+   [
+    "httpcore2/_backends/sync.py:123 read (line 127)",
+    139,
+    3.6
+   ],
+   [
+    "<string>:1 <lambda> (line 1)",
+    126,
+    3.3
+   ],
+   [
+    "selector_events.py:129 _read_from_self (line 132)",
+    82,
+    2.1
+   ],
+   [
+    "rich/control.py:181 strip_control_codes (line 192)",
+    82,
+    2.1
+   ],
+   [
+    "pathlib.py:1007 open (line 1015)",
+    57,
+    1.5
+   ],
+   [
+    "rich/cells.py:98 cell_len (line 109)",
+    57,
+    1.5
+   ],
+   [
+    "textual/cache.py:226 __init__ (line 226)",
+    44,
+    1.1
+   ],
+   [
+    "rich/text.py:144 __init__ (line 144)",
+    44,
+    1.1
+   ],
+   [
+    "_weakrefset.py:39 _remove (line 39)",
+    44,
+    1.1
+   ],
+   [
+    "<string>:2 __init__ (line 2)",
+    38,
+    1.0
+   ],
+   [
+    "textual/message_pump.py:146 _parent (line 146)",
+    38,
+    1.0
+   ],
+   [
+    "<frozen importlib._bootstrap_external>:1183 get_data (line 1186)",
+    32,
+    0.8
+   ],
+   [
+    "textual/reactive.py:290 __get__ (line 303)",
+    32,
+    0.8
+   ],
+   [
+    "rich/segment.py:629 divide (line 662)",
+    32,
+    0.8
+   ],
+   [
+    "rich/protocol.py:18 rich_cast (line 29)",
+    32,
+    0.8
+   ],
+   [
+    "rich/style.py:441 __hash__ (line 441)",
+    32,
+    0.8
+   ],
+   [
+    "textual/strip.py:454 apply_filter (line 454)",
+    32,
+    0.8
+   ],
+   [
+    "textual/css/styles.py:1507 get_rule (line 1510)",
+    32,
+    0.8
+   ],
+   [
+    "httpcore2/_backends/sync.py:129 write (line 138)",
+    25,
+    0.7
+   ],
+   [
+    "textual/message_pump.py:146 _parent (line 149)",
+    25,
+    0.7
+   ],
+   [
+    "textual/css/model.py:248 __hash__ (line 248)",
+    25,
+    0.7
+   ],
+   [
+    "textual/strip.py:94 __init__ (line 110)",
+    25,
+    0.7
+   ],
+   [
+    "textual/_compositor.py:1200 _render_chops (line 1240)",
+    25,
+    0.7
+   ],
+   [
+    "rich/console.py:1004 size (line 1024)",
+    25,
+    0.7
+   ],
+   [
+    "textual/widgets/_data_table.py:991 get_row (line 1007)",
+    25,
+    0.7
+   ],
+   [
+    "textual/_compositor.py:1200 _render_chops (line 1241)",
+    25,
+    0.7
+   ],
+   [
+    "rich/text.py:719 render (line 748)",
+    25,
+    0.7
+   ],
+   [
+    "threading.py:394 notify (line 410)",
+    25,
+    0.7
+   ],
+   [
+    "__init__.py:695 mtime (line 698)",
+    19,
+    0.5
+   ]
+  ],
+  "innermost wheelhouse line": [
+   [
+    "claude_wheelhouse/cli.py:33 run_app (line 57)",
+    1469,
+    38.0
+   ],
+   [
+    "claude_wheelhouse/tui.py:1347 _kept_line (line 1369)",
+    265,
+    6.9
+   ],
+   [
+    "claude_wheelhouse/client.py:333 request (line 341)",
+    183,
+    4.7
+   ],
+   [
+    "claude_wheelhouse/tui.py:1 <module> (line 33)",
+    120,
+    3.1
+   ],
+   [
+    "claude_wheelhouse/tui.py:7770 each_pane (line 7779)",
+    113,
+    2.9
+   ],
+   [
+    "claude_wheelhouse/tui.py:5681 on_event (line 5710)",
+    101,
+    2.6
+   ],
+   [
+    "claude_wheelhouse/tui.py:695 fill (line 720)",
+    95,
+    2.4
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line (line 1496)",
+    95,
+    2.4
+   ],
+   [
+    "claude_wheelhouse/tui.py:1 <module> (line 26)",
+    88,
+    2.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:1 <module> (line 32)",
+    57,
+    1.5
+   ],
+   [
+    "claude_wheelhouse/connect.py:129 hello (line 133)",
+    50,
+    1.3
+   ],
+   [
+    "claude_wheelhouse/connect.py:129 hello (line 135)",
+    50,
+    1.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line (line 1497)",
+    50,
+    1.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:1 <module> (line 4)",
+    44,
+    1.1
+   ],
+   [
+    "claude_wheelhouse/tui.py:323 cylon (line 329)",
+    44,
+    1.1
+   ],
+   [
+    "claude_wheelhouse/whatsnew.py:1 <module> (line 14)",
+    38,
+    1.0
+   ],
+   [
+    "claude_wheelhouse/tui.py:1 <module> (line 71)",
+    32,
+    0.8
+   ],
+   [
+    "claude_wheelhouse/tui.py:5097 write (line 5098)",
+    32,
+    0.8
+   ],
+   [
+    "claude_wheelhouse/tui.py:7481 mount_detail_parts (line 7492)",
+    25,
+    0.7
+   ],
+   [
+    "claude_wheelhouse/rows.py:41 <genexpr> (line 41)",
+    25,
+    0.7
+   ],
+   [
+    "claude_wheelhouse/features.py:133 read_env (line 139)",
+    25,
+    0.7
+   ],
+   [
+    "claude_wheelhouse/prs.py:1 <module> (line 32)",
+    19,
+    0.5
+   ],
+   [
+    "claude_wheelhouse/api.py:237 load (line 247)",
+    19,
+    0.5
+   ],
+   [
+    "claude_wheelhouse/tui.py:7470 mount_panes (line 7475)",
+    19,
+    0.5
+   ],
+   [
+    "claude_wheelhouse/tui.py:6495 item_cells (line 6525)",
+    19,
+    0.5
+   ],
+   [
+    "claude_wheelhouse/tui.py:684 cut (line 690)",
+    19,
+    0.5
+   ],
+   [
+    "claude_wheelhouse/client.py:654 inbox (line 657)",
+    19,
+    0.5
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line (line 1484)",
+    19,
+    0.5
+   ],
+   [
+    "claude_wheelhouse/features.py:1 <module> (line 67)",
+    13,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/store.py:1 <module> (line 12)",
+    13,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/models.py:1 <module> (line 6)",
+    13,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/store.py:1 <module> (line 21)",
+    13,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/prs.py:1 <module> (line 33)",
+    13,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:1 <module> (line 25)",
+    13,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:1 <module> (line 52)",
+    13,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:1914 show_button (line 1927)",
+    13,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/rows.py:47 plain (line 50)",
+    13,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:1447 sweep (line 1464)",
+    13,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line (line 1482)",
+    13,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:3233 render_line (line 3240)",
+    13,
+    0.3
+   ]
+  ],
+  "other threads running": [
+   [
+    "httpcore2/_backends/sync.py:123 read",
+    3007,
+    77.8
+   ],
+   [
+    "selector_events.py:141 _write_to_self",
+    63,
+    1.6
+   ],
+   [
+    "pathlib.py:837 stat",
+    57,
+    1.5
+   ],
+   [
+    "httpcore2/_synchronization.py:262 __enter__",
+    32,
+    0.8
+   ],
+   [
+    "httpcore2/_utils.py:20 is_socket_readable",
+    19,
+    0.5
+   ],
+   [
+    "typing.py:392 inner",
+    19,
+    0.5
+   ],
+   [
+    "textual/drivers/_writer_thread.py:48 run",
+    13,
+    0.3
+   ],
+   [
+    "_parser.py:512 _parse",
+    13,
+    0.3
+   ],
+   [
+    "rich/cells.py:98 cell_len",
+    13,
+    0.3
+   ],
+   [
+    "<string>:1 <lambda>",
+    13,
+    0.3
+   ],
+   [
+    "rich/text.py:144 __init__",
+    13,
+    0.3
+   ],
+   [
+    "threading.py:311 _acquire_restore",
+    13,
+    0.3
+   ],
+   [
+    "httpcore2/_backends/sync.py:129 write",
+    6,
+    0.2
+   ],
+   [
+    "pathlib.py:1061 _scandir",
+    6,
+    0.2
+   ],
+   [
+    "_compiler.py:243 _optimize_charset",
+    6,
+    0.2
+   ]
+  ]
+ },
+ "rest": {
+  "wall_s": 6.0,
+  "samples": 1234,
+  "ui_busy_pct": 6.5,
+  "ui_busy_ms": 390,
+  "ui_cpu_ms": 1019,
+  "cumulative [function, ms, % of busy]": [
+   [
+    "events.py:86 _run",
+    390,
+    100.0
+   ],
+   [
+    "base_events.py:1910 _run_once",
+    390,
+    100.0
+   ],
+   [
+    "base_events.py:627 run_forever",
+    390,
+    100.0
+   ],
+   [
+    "base_events.py:651 run_until_complete",
+    390,
+    100.0
+   ],
+   [
+    "runners.py:86 run",
+    390,
+    100.0
+   ],
+   [
+    "runners.py:160 run",
+    390,
+    100.0
+   ],
+   [
+    "textual/app.py:2308 run",
+    390,
+    100.0
+   ],
+   [
+    "claude_wheelhouse/cli.py:33 run_app",
+    390,
+    100.0
+   ],
+   [
+    "claude_wheelhouse/cli.py:298 main",
+    390,
+    100.0
+   ],
+   [
+    ".plan/385-bench/profapp.py:1 <module>",
+    390,
+    100.0
+   ],
+   [
+    "textual/_callback.py:45 _invoke",
+    360,
+    92.5
+   ],
+   [
+    "textual/_callback.py:62 invoke",
+    360,
+    92.5
+   ],
+   [
+    "textual/timer.py:150 _run",
+    360,
+    92.5
+   ],
+   [
+    "textual/timer.py:143 _run_timer",
+    360,
+    92.5
+   ],
+   [
+    "textual/timer.py:180 _tick",
+    356,
+    91.2
+   ],
+   [
+    "textual/screen.py:1236 _on_timer_update",
+    287,
+    73.8
+   ],
+   [
+    "textual/screen.py:1188 _compositor_refresh",
+    283,
+    72.5
+   ],
+   [
+    "textual/_compositor.py:1200 _render_chops",
+    219,
+    56.2
+   ],
+   [
+    "textual/_compositor.py:1165 render_partial_update",
+    219,
+    56.2
+   ],
+   [
+    "textual/_compositor.py:1096 render_update",
+    219,
+    56.2
+   ],
+   [
+    "textual/_compositor.py:1031 _get_renders",
+    200,
+    51.2
+   ],
+   [
+    "textual/_styles_cache.py:99 render_widget",
+    195,
+    50.0
+   ],
+   [
+    "textual/widget.py:4271 render_lines",
+    195,
+    50.0
+   ],
+   [
+    "textual/_styles_cache.py:163 render",
+    180,
+    46.2
+   ],
+   [
+    "textual/widgets/_data_table.py:2474 render_lines",
+    161,
+    41.2
+   ],
+   [
+    "textual/_styles_cache.py:267 render_line",
+    156,
+    40.0
+   ],
+   [
+    "textual/widgets/_data_table.py:2478 render_line",
+    107,
+    27.5
+   ],
+   [
+    "claude_wheelhouse/tui.py:5968 refresh_data",
+    68,
+    17.5
+   ],
+   [
+    "claude_wheelhouse/tui.py:5936 tick",
+    68,
+    17.5
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line",
+    63,
+    16.2
+   ],
+   [
+    "textual/app.py:3821 _display",
+    63,
+    16.2
+   ],
+   [
+    "textual/_compositor.py:235 render_segments",
+    58,
+    15.0
+   ],
+   [
+    "claude_wheelhouse/tui.py:7770 each_pane",
+    49,
+    12.5
+   ],
+   [
+    "textual/strip.py:94 __init__",
+    39,
+    10.0
+   ],
+   [
+    "textual/reactive.py:290 __get__",
+    39,
+    10.0
+   ],
+   [
+    "textual/dom.py:1084 rich_style",
+    34,
+    8.8
+   ],
+   [
+    "pane.py:83 tick",
+    29,
+    7.5
+   ],
+   [
+    "textual/strip.py:687 render_style",
+    24,
+    6.2
+   ],
+   [
+    "textual/strip.py:708 render",
+    24,
+    6.2
+   ],
+   [
+    "textual/cache.py:226 __init__",
+    24,
+    6.2
+   ],
+   [
+    "textual/strip.py:518 crop",
+    24,
+    6.2
+   ],
+   [
+    "textual/css/styles.py:1507 get_rule",
+    24,
+    6.2
+   ],
+   [
+    "selector_events.py:129 _read_from_self",
+    19,
+    5.0
+   ],
+   [
+    "<string>:1 <lambda>",
+    19,
+    5.0
+   ],
+   [
+    "textual/worker_manager.py:81 _new_worker",
+    19,
+    5.0
+   ],
+   [
+    "textual/dom.py:496 run_worker",
+    19,
+    5.0
+   ],
+   [
+    "textual/strip.py:454 apply_filter",
+    19,
+    5.0
+   ],
+   [
+    "textual/css/_style_properties.py:291 __get__",
+    15,
+    3.8
+   ],
+   [
+    "textual/css/_style_properties.py:414 __get__",
+    15,
+    3.8
+   ],
+   [
+    "textual/message_pump.py:146 _parent",
+    15,
+    3.8
+   ],
+   [
+    "_weakrefset.py:39 _remove",
+    15,
+    3.8
+   ],
+   [
+    "textual/color.py:417 multiply_alpha",
+    15,
+    3.8
+   ],
+   [
+    "rich/text.py:144 __init__",
+    15,
+    3.8
+   ],
+   [
+    "rich/text.py:1129 <genexpr>",
+    15,
+    3.8
+   ],
+   [
+    "rich/containers.py:69 __init__",
+    15,
+    3.8
+   ],
+   [
+    "rich/text.py:1106 divide",
+    15,
+    3.8
+   ],
+   [
+    "rich/text.py:198 __getitem__",
+    15,
+    3.8
+   ],
+   [
+    "claude_wheelhouse/tui.py:684 cut",
+    15,
+    3.8
+   ],
+   [
+    "claude_wheelhouse/tui.py:6300 paint_sessions",
+    15,
+    3.8
+   ],
+   [
+    "rich/style.py:441 __hash__",
+    15,
+    3.8
+   ]
+  ],
+  "self": [
+   [
+    "textual/strip.py:687 render_style (line 687)",
+    24,
+    6.2
+   ],
+   [
+    "textual/cache.py:226 __init__ (line 226)",
+    24,
+    6.2
+   ],
+   [
+    "selector_events.py:129 _read_from_self (line 132)",
+    19,
+    5.0
+   ],
+   [
+    "<string>:1 <lambda> (line 1)",
+    15,
+    3.8
+   ],
+   [
+    "_weakrefset.py:39 _remove (line 39)",
+    15,
+    3.8
+   ],
+   [
+    "rich/style.py:441 __hash__ (line 441)",
+    15,
+    3.8
+   ],
+   [
+    "textual/css/_style_properties.py:291 __get__ (line 291)",
+    10,
+    2.5
+   ],
+   [
+    "textual/reactive.py:290 __get__ (line 299)",
+    10,
+    2.5
+   ],
+   [
+    "textual/_compositor.py:235 render_segments (line 268)",
+    10,
+    2.5
+   ],
+   [
+    "textual/css/styles.py:1507 get_rule (line 1508)",
+    10,
+    2.5
+   ],
+   [
+    "rich/text.py:167 __len__ (line 167)",
+    10,
+    2.5
+   ],
+   [
+    "textual/message_pump.py:146 _parent (line 146)",
+    10,
+    2.5
+   ],
+   [
+    "textual/css/styles.py:1507 get_rule (line 1510)",
+    10,
+    2.5
+   ],
+   [
+    "textual/reactive.py:290 __get__ (line 290)",
+    10,
+    2.5
+   ],
+   [
+    "textual/strip.py:94 __init__ (line 94)",
+    10,
+    2.5
+   ],
+   [
+    "claude_wheelhouse/tui.py:7770 each_pane (line 7779)",
+    10,
+    2.5
+   ],
+   [
+    "rich/text.py:719 render (line 772)",
+    5,
+    1.2
+   ],
+   [
+    "pane.py:83 tick (line 86)",
+    5,
+    1.2
+   ],
+   [
+    "pane.py:83 tick (line 93)",
+    5,
+    1.2
+   ],
+   [
+    "textual/_two_way_dict.py:46 get_key (line 55)",
+    5,
+    1.2
+   ],
+   [
+    "textual/_compositor.py:1200 _render_chops (line 1236)",
+    5,
+    1.2
+   ],
+   [
+    "textual/_styles_cache.py:163 render (line 247)",
+    5,
+    1.2
+   ],
+   [
+    "queue.py:213 _put (line 214)",
+    5,
+    1.2
+   ],
+   [
+    "rich/style.py:340 __bool__ (line 340)",
+    5,
+    1.2
+   ],
+   [
+    "rich/text.py:758 get_current_style (line 760)",
+    5,
+    1.2
+   ],
+   [
+    "textual/message_pump.py:146 _parent (line 149)",
+    5,
+    1.2
+   ],
+   [
+    "rich/control.py:63 <genexpr> (line 63)",
+    5,
+    1.2
+   ],
+   [
+    "base_events.py:730 is_running (line 730)",
+    5,
+    1.2
+   ],
+   [
+    "claude_wheelhouse/tui.py:7799 module_sessions (line 7799)",
+    5,
+    1.2
+   ],
+   [
+    "rich/segment.py:629 divide (line 662)",
+    5,
+    1.2
+   ]
+  ],
+  "innermost wheelhouse line": [
+   [
+    "claude_wheelhouse/cli.py:33 run_app (line 57)",
+    244,
+    62.5
+   ],
+   [
+    "claude_wheelhouse/tui.py:7770 each_pane (line 7779)",
+    39,
+    10.0
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line (line 1496)",
+    19,
+    5.0
+   ],
+   [
+    "claude_wheelhouse/tui.py:684 cut (line 690)",
+    15,
+    3.8
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line (line 1497)",
+    10,
+    2.5
+   ],
+   [
+    "claude_wheelhouse/tui.py:323 cylon (line 329)",
+    10,
+    2.5
+   ],
+   [
+    "claude_wheelhouse/tui.py:1347 _kept_line (line 1369)",
+    10,
+    2.5
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line (line 1482)",
+    5,
+    1.2
+   ],
+   [
+    "claude_wheelhouse/tui.py:5097 write (line 5098)",
+    5,
+    1.2
+   ],
+   [
+    "claude_wheelhouse/tui.py:1499 dim_dot (line 1505)",
+    5,
+    1.2
+   ],
+   [
+    "claude_wheelhouse/tui.py:7799 module_sessions (line 7799)",
+    5,
+    1.2
+   ],
+   [
+    "claude_wheelhouse/tui.py:1499 dim_dot (line 1507)",
+    5,
+    1.2
+   ],
+   [
+    "claude_wheelhouse/client.py:638 model_state (line 638)",
+    5,
+    1.2
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line (line 1484)",
+    5,
+    1.2
+   ],
+   [
+    "claude_wheelhouse/tui.py:1262 cursor_key (line 1263)",
+    5,
+    1.2
+   ],
+   [
+    "claude_wheelhouse/tui.py:1347 _kept_line (line 1361)",
+    5,
+    1.2
+   ]
+  ],
+  "other threads running": [
+   [
+    "httpcore2/_backends/sync.py:123 read",
+    414,
+    106.2
+   ],
+   [
+    "textual/drivers/_writer_thread.py:48 run",
+    19,
+    5.0
+   ]
+  ]
+ },
+ "hover": {
+  "wall_s": 10.0,
+  "samples": 2012,
+  "ui_busy_pct": 8.1,
+  "ui_busy_ms": 807,
+  "ui_cpu_ms": 1972,
+  "cumulative [function, ms, % of busy]": [
+   [
+    "base_events.py:627 run_forever",
+    807,
+    100.0
+   ],
+   [
+    "base_events.py:651 run_until_complete",
+    807,
+    100.0
+   ],
+   [
+    "runners.py:86 run",
+    807,
+    100.0
+   ],
+   [
+    "runners.py:160 run",
+    807,
+    100.0
+   ],
+   [
+    "textual/app.py:2308 run",
+    807,
+    100.0
+   ],
+   [
+    "claude_wheelhouse/cli.py:33 run_app",
+    807,
+    100.0
+   ],
+   [
+    "claude_wheelhouse/cli.py:298 main",
+    807,
+    100.0
+   ],
+   [
+    ".plan/385-bench/profapp.py:1 <module>",
+    807,
+    100.0
+   ],
+   [
+    "events.py:86 _run",
+    802,
+    99.4
+   ],
+   [
+    "base_events.py:1910 _run_once",
+    802,
+    99.4
+   ],
+   [
+    "textual/_callback.py:45 _invoke",
+    737,
+    91.4
+   ],
+   [
+    "textual/_callback.py:62 invoke",
+    737,
+    91.4
+   ],
+   [
+    "textual/timer.py:180 _tick",
+    737,
+    91.4
+   ],
+   [
+    "textual/timer.py:150 _run",
+    737,
+    91.4
+   ],
+   [
+    "textual/timer.py:143 _run_timer",
+    737,
+    91.4
+   ],
+   [
+    "textual/screen.py:1188 _compositor_refresh",
+    633,
+    78.4
+   ],
+   [
+    "textual/screen.py:1236 _on_timer_update",
+    633,
+    78.4
+   ],
+   [
+    "textual/_compositor.py:1200 _render_chops",
+    538,
+    66.7
+   ],
+   [
+    "textual/_compositor.py:1165 render_partial_update",
+    538,
+    66.7
+   ],
+   [
+    "textual/_compositor.py:1096 render_update",
+    538,
+    66.7
+   ],
+   [
+    "textual/_compositor.py:1031 _get_renders",
+    478,
+    59.3
+   ],
+   [
+    "textual/_styles_cache.py:99 render_widget",
+    473,
+    58.6
+   ],
+   [
+    "textual/widget.py:4271 render_lines",
+    473,
+    58.6
+   ],
+   [
+    "textual/_styles_cache.py:163 render",
+    418,
+    51.9
+   ],
+   [
+    "textual/widgets/_data_table.py:2474 render_lines",
+    339,
+    42.0
+   ],
+   [
+    "textual/_styles_cache.py:267 render_line",
+    324,
+    40.1
+   ],
+   [
+    "textual/widgets/_data_table.py:2478 render_line",
+    249,
+    30.9
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line",
+    120,
+    14.8
+   ],
+   [
+    "claude_wheelhouse/tui.py:5968 refresh_data",
+    105,
+    13.0
+   ],
+   [
+    "claude_wheelhouse/tui.py:5936 tick",
+    105,
+    13.0
+   ],
+   [
+    "textual/app.py:3821 _display",
+    95,
+    11.7
+   ],
+   [
+    "textual/strip.py:94 __init__",
+    95,
+    11.7
+   ],
+   [
+    "textual/strip.py:454 apply_filter",
+    80,
+    9.9
+   ],
+   [
+    "textual/_compositor.py:235 render_segments",
+    75,
+    9.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:1347 _kept_line",
+    70,
+    8.6
+   ],
+   [
+    "claude_wheelhouse/tui.py:1333 _render_line",
+    70,
+    8.6
+   ],
+   [
+    "selector_events.py:129 _read_from_self",
+    65,
+    8.0
+   ],
+   [
+    "claude_wheelhouse/tui.py:7770 each_pane",
+    60,
+    7.4
+   ],
+   [
+    "textual/dom.py:1084 rich_style",
+    55,
+    6.8
+   ],
+   [
+    "pane.py:83 tick",
+    55,
+    6.8
+   ],
+   [
+    "claude_wheelhouse/tui.py:1653 _render_line",
+    55,
+    6.8
+   ],
+   [
+    "textual/css/styles.py:1507 get_rule",
+    50,
+    6.2
+   ],
+   [
+    "rich/text.py:719 render",
+    50,
+    6.2
+   ],
+   [
+    "textual/widget.py:2234 content_region",
+    45,
+    5.6
+   ],
+   [
+    "textual/widgets/_data_table.py:2416 _render_line",
+    45,
+    5.6
+   ],
+   [
+    "textual/widget.py:2284 region",
+    40,
+    4.9
+   ],
+   [
+    "textual/widget.py:2198 size",
+    40,
+    4.9
+   ],
+   [
+    "textual/cache.py:226 __init__",
+    40,
+    4.9
+   ],
+   [
+    "textual/widgets/_data_table.py:2248 _render_line_in_row",
+    40,
+    4.9
+   ],
+   [
+    "textual/dom.py:783 screen",
+    35,
+    4.3
+   ],
+   [
+    "textual/css/_style_properties.py:414 __get__",
+    35,
+    4.3
+   ],
+   [
+    "textual/widgets/_data_table.py:2087 _render_cell",
+    35,
+    4.3
+   ],
+   [
+    "<string>:1 <lambda>",
+    35,
+    4.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:6366 paint_items",
+    30,
+    3.7
+   ],
+   [
+    "rich/style.py:441 __hash__",
+    30,
+    3.7
+   ],
+   [
+    "textual/filter.py:264 apply",
+    30,
+    3.7
+   ],
+   [
+    "_weakrefset.py:39 _remove",
+    30,
+    3.7
+   ],
+   [
+    "textual/strip.py:576 divide",
+    30,
+    3.7
+   ],
+   [
+    "textual/worker_manager.py:81 _new_worker",
+    30,
+    3.7
+   ],
+   [
+    "textual/dom.py:496 run_worker",
+    30,
+    3.7
+   ]
+  ],
+  "self": [
+   [
+    "selector_events.py:129 _read_from_self (line 132)",
+    65,
+    8.0
+   ],
+   [
+    "textual/cache.py:226 __init__ (line 226)",
+    40,
+    4.9
+   ],
+   [
+    "<string>:1 <lambda> (line 1)",
+    35,
+    4.3
+   ],
+   [
+    "rich/style.py:441 __hash__ (line 441)",
+    30,
+    3.7
+   ],
+   [
+    "_weakrefset.py:39 _remove (line 39)",
+    30,
+    3.7
+   ],
+   [
+    "textual/strip.py:454 apply_filter (line 454)",
+    30,
+    3.7
+   ],
+   [
+    "textual/css/styles.py:1507 get_rule (line 1510)",
+    25,
+    3.1
+   ],
+   [
+    "rich/text.py:719 render (line 748)",
+    25,
+    3.1
+   ],
+   [
+    "textual/message_pump.py:146 _parent (line 146)",
+    20,
+    2.5
+   ],
+   [
+    "textual/css/styles.py:1507 get_rule (line 1508)",
+    20,
+    2.5
+   ],
+   [
+    "claude_wheelhouse/client.py:654 inbox (line 657)",
+    15,
+    1.9
+   ],
+   [
+    "threading.py:394 notify (line 410)",
+    15,
+    1.9
+   ],
+   [
+    "rich/segment.py:629 divide (line 662)",
+    15,
+    1.9
+   ],
+   [
+    "textual/strip.py:687 render_style (line 687)",
+    15,
+    1.9
+   ],
+   [
+    "textual/css/_style_properties.py:291 __get__ (line 291)",
+    15,
+    1.9
+   ],
+   [
+    "textual/_styles_cache.py:163 render (line 241)",
+    10,
+    1.2
+   ],
+   [
+    "pane.py:151 repaint (line 174)",
+    10,
+    1.2
+   ],
+   [
+    "claude_wheelhouse/tui.py:1259 keys (line 1260)",
+    10,
+    1.2
+   ],
+   [
+    "rich/text.py:443 copy (line 445)",
+    10,
+    1.2
+   ],
+   [
+    "textual/_compositor.py:1200 _render_chops (line 1241)",
+    10,
+    1.2
+   ],
+   [
+    "claude_wheelhouse/tui.py:308 dot_dimmed (line 308)",
+    10,
+    1.2
+   ],
+   [
+    "textual/strip.py:94 __init__ (line 99)",
+    10,
+    1.2
+   ],
+   [
+    "rich/style.py:757 __add__ (line 757)",
+    10,
+    1.2
+   ],
+   [
+    "textual/css/styles.py:1485 has_rule (line 1485)",
+    10,
+    1.2
+   ],
+   [
+    "rich/control.py:181 strip_control_codes (line 192)",
+    10,
+    1.2
+   ],
+   [
+    "textual/dom.py:783 screen (line 799)",
+    10,
+    1.2
+   ],
+   [
+    "textual/strip.py:94 __init__ (line 111)",
+    10,
+    1.2
+   ],
+   [
+    "textual/_compositor.py:495 visible_widgets (line 519)",
+    5,
+    0.6
+   ],
+   [
+    "rich/segment.py:372 <genexpr> (line 372)",
+    5,
+    0.6
+   ],
+   [
+    "textual/color.py:498 __add__ (line 500)",
+    5,
+    0.6
+   ]
+  ],
+  "innermost wheelhouse line": [
+   [
+    "claude_wheelhouse/cli.py:33 run_app (line 57)",
+    508,
+    63.0
+   ],
+   [
+    "claude_wheelhouse/tui.py:7770 each_pane (line 7779)",
+    55,
+    6.8
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line (line 1496)",
+    50,
+    6.2
+   ],
+   [
+    "claude_wheelhouse/tui.py:1347 _kept_line (line 1369)",
+    45,
+    5.6
+   ],
+   [
+    "claude_wheelhouse/tui.py:5097 write (line 5098)",
+    20,
+    2.5
+   ],
+   [
+    "claude_wheelhouse/tui.py:1347 _kept_line (line 1361)",
+    15,
+    1.9
+   ],
+   [
+    "claude_wheelhouse/client.py:654 inbox (line 657)",
+    15,
+    1.9
+   ],
+   [
+    "claude_wheelhouse/tui.py:1259 keys (line 1260)",
+    10,
+    1.2
+   ],
+   [
+    "claude_wheelhouse/tui.py:323 cylon (line 329)",
+    10,
+    1.2
+   ],
+   [
+    "claude_wheelhouse/tui.py:308 dot_dimmed (line 308)",
+    10,
+    1.2
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line (line 1497)",
+    10,
+    1.2
+   ],
+   [
+    "claude_wheelhouse/tui.py:1347 _kept_line (line 1367)",
+    5,
+    0.6
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line (line 1494)",
+    5,
+    0.6
+   ],
+   [
+    "claude_wheelhouse/tui.py:8000 paint_sendbar (line 8043)",
+    5,
+    0.6
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line (line 1475)",
+    5,
+    0.6
+   ],
+   [
+    "claude_wheelhouse/tui.py:1499 dim_dot (line 1507)",
+    5,
+    0.6
+   ],
+   [
+    "claude_wheelhouse/tui.py:7841 controls (line 7849)",
+    5,
+    0.6
+   ],
+   [
+    "claude_wheelhouse/tui.py:684 cut (line 690)",
+    5,
+    0.6
+   ],
+   [
+    "claude_wheelhouse/tui.py:1347 _kept_line (line 1360)",
+    5,
+    0.6
+   ],
+   [
+    "claude_wheelhouse/store.py:610 runner (line 610)",
+    5,
+    0.6
+   ],
+   [
+    "claude_wheelhouse/tui.py:6576 <genexpr> (line 6576)",
+    5,
+    0.6
+   ],
+   [
+    "claude_wheelhouse/tui.py:313 dimmed (line 316)",
+    5,
+    0.6
+   ],
+   [
+    "claude_wheelhouse/tui.py:1483 <genexpr> (line 1483)",
+    5,
+    0.6
+   ]
+  ],
+  "other threads running": [
+   [
+    "httpcore2/_backends/sync.py:123 read",
+    807,
+    100.0
+   ],
+   [
+    "textual/drivers/_writer_thread.py:48 run",
+    40,
+    4.9
+   ],
+   [
+    "pathlib.py:837 stat",
+    10,
+    1.2
+   ],
+   [
+    "threading.py:311 _acquire_restore",
+    5,
+    0.6
+   ]
+  ]
+ },
+ "between": {
+  "wall_s": 31.1,
+  "samples": 6496,
+  "ui_busy_pct": 5.1,
+  "ui_busy_ms": 1598,
+  "ui_cpu_ms": 4648,
+  "cumulative [function, ms, % of busy]": [
+   [
+    "events.py:86 _run",
+    1598,
+    100.0
+   ],
+   [
+    "base_events.py:1910 _run_once",
+    1598,
+    100.0
+   ],
+   [
+    "base_events.py:627 run_forever",
+    1598,
+    100.0
+   ],
+   [
+    "base_events.py:651 run_until_complete",
+    1598,
+    100.0
+   ],
+   [
+    "runners.py:86 run",
+    1598,
+    100.0
+   ],
+   [
+    "runners.py:160 run",
+    1598,
+    100.0
+   ],
+   [
+    "textual/app.py:2308 run",
+    1598,
+    100.0
+   ],
+   [
+    "claude_wheelhouse/cli.py:33 run_app",
+    1598,
+    100.0
+   ],
+   [
+    "claude_wheelhouse/cli.py:298 main",
+    1598,
+    100.0
+   ],
+   [
+    ".plan/385-bench/profapp.py:1 <module>",
+    1598,
+    100.0
+   ],
+   [
+    "textual/_callback.py:45 _invoke",
+    1488,
+    93.1
+   ],
+   [
+    "textual/_callback.py:62 invoke",
+    1488,
+    93.1
+   ],
+   [
+    "textual/timer.py:150 _run",
+    1364,
+    85.3
+   ],
+   [
+    "textual/timer.py:143 _run_timer",
+    1364,
+    85.3
+   ],
+   [
+    "textual/timer.py:180 _tick",
+    1354,
+    84.7
+   ],
+   [
+    "textual/screen.py:1188 _compositor_refresh",
+    1105,
+    69.2
+   ],
+   [
+    "textual/screen.py:1236 _on_timer_update",
+    1101,
+    68.9
+   ],
+   [
+    "textual/_compositor.py:1096 render_update",
+    971,
+    60.8
+   ],
+   [
+    "textual/_compositor.py:1200 _render_chops",
+    967,
+    60.5
+   ],
+   [
+    "textual/_compositor.py:1165 render_partial_update",
+    909,
+    56.9
+   ],
+   [
+    "textual/_compositor.py:1031 _get_renders",
+    833,
+    52.1
+   ],
+   [
+    "textual/_styles_cache.py:99 render_widget",
+    828,
+    51.8
+   ],
+   [
+    "textual/widget.py:4271 render_lines",
+    828,
+    51.8
+   ],
+   [
+    "textual/_styles_cache.py:163 render",
+    718,
+    44.9
+   ],
+   [
+    "textual/_styles_cache.py:267 render_line",
+    584,
+    36.5
+   ],
+   [
+    "textual/widgets/_data_table.py:2474 render_lines",
+    574,
+    35.9
+   ],
+   [
+    "textual/widgets/_data_table.py:2478 render_line",
+    474,
+    29.6
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line",
+    273,
+    17.1
+   ],
+   [
+    "claude_wheelhouse/tui.py:5968 refresh_data",
+    249,
+    15.6
+   ],
+   [
+    "claude_wheelhouse/tui.py:5936 tick",
+    249,
+    15.6
+   ],
+   [
+    "claude_wheelhouse/tui.py:7770 each_pane",
+    201,
+    12.6
+   ],
+   [
+    "pane.py:83 tick",
+    153,
+    9.6
+   ],
+   [
+    "textual/message_pump.py:707 _dispatch_message",
+    144,
+    9.0
+   ],
+   [
+    "textual/message_pump.py:634 _process_messages_loop",
+    139,
+    8.7
+   ],
+   [
+    "textual/app.py:3821 _display",
+    134,
+    8.4
+   ],
+   [
+    "textual/strip.py:94 __init__",
+    129,
+    8.1
+   ],
+   [
+    "textual/message_pump.py:810 _on_message",
+    129,
+    8.1
+   ],
+   [
+    "textual/_compositor.py:235 render_segments",
+    115,
+    7.2
+   ],
+   [
+    "textual/worker_manager.py:81 _new_worker",
+    115,
+    7.2
+   ],
+   [
+    "textual/dom.py:496 run_worker",
+    115,
+    7.2
+   ],
+   [
+    "tasks.py:412 create_task",
+    110,
+    6.9
+   ],
+   [
+    "textual/dom.py:1084 rich_style",
+    110,
+    6.9
+   ],
+   [
+    "tasks.py:973 factory",
+    105,
+    6.6
+   ],
+   [
+    "base_events.py:451 create_task",
+    105,
+    6.6
+   ],
+   [
+    "rich/text.py:719 render",
+    91,
+    5.7
+   ],
+   [
+    "textual/screen.py:1316 _refresh_layout",
+    91,
+    5.7
+   ],
+   [
+    "textual/app.py:3420 run_process_messages",
+    91,
+    5.7
+   ],
+   [
+    "textual/app.py:3364 _process_messages",
+    91,
+    5.7
+   ],
+   [
+    "textual/app.py:2220 run_async",
+    91,
+    5.7
+   ],
+   [
+    "textual/app.py:2334 run_app",
+    91,
+    5.7
+   ],
+   [
+    "textual/strip.py:454 apply_filter",
+    86,
+    5.4
+   ],
+   [
+    "selector_events.py:129 _read_from_self",
+    86,
+    5.4
+   ],
+   [
+    "textual/message_pump.py:562 _process_messages",
+    86,
+    5.4
+   ],
+   [
+    "textual/worker.py:389 _start",
+    81,
+    5.1
+   ],
+   [
+    "textual/worker_manager.py:65 add_worker",
+    81,
+    5.1
+   ],
+   [
+    "textual/message_pump.py:802 on_event",
+    77,
+    4.8
+   ],
+   [
+    "claude_wheelhouse/tui.py:1347 _kept_line",
+    72,
+    4.5
+   ],
+   [
+    "claude_wheelhouse/tui.py:1333 _render_line",
+    72,
+    4.5
+   ],
+   [
+    "textual/strip.py:576 divide",
+    72,
+    4.5
+   ],
+   [
+    "textual/worker.py:358 _run",
+    67,
+    4.2
+   ]
+  ],
+  "self": [
+   [
+    "selector_events.py:129 _read_from_self (line 132)",
+    86,
+    5.4
+   ],
+   [
+    "<string>:1 <lambda> (line 1)",
+    62,
+    3.9
+   ],
+   [
+    "textual/cache.py:226 __init__ (line 226)",
+    57,
+    3.6
+   ],
+   [
+    "_weakrefset.py:39 _remove (line 39)",
+    53,
+    3.3
+   ],
+   [
+    "textual/strip.py:687 render_style (line 687)",
+    38,
+    2.4
+   ],
+   [
+    "textual/_styles_cache.py:163 render (line 241)",
+    38,
+    2.4
+   ],
+   [
+    "textual/strip.py:454 apply_filter (line 454)",
+    29,
+    1.8
+   ],
+   [
+    "textual/message_pump.py:146 _parent (line 146)",
+    29,
+    1.8
+   ],
+   [
+    "rich/style.py:441 __hash__ (line 441)",
+    24,
+    1.5
+   ],
+   [
+    "claude_wheelhouse/client.py:654 inbox (line 657)",
+    24,
+    1.5
+   ],
+   [
+    "httpcore2/_backends/sync.py:123 read (line 127)",
+    24,
+    1.5
+   ],
+   [
+    "textual/css/_style_properties.py:1162 __get__ (line 1162)",
+    19,
+    1.2
+   ],
+   [
+    "textual/_compositor.py:1200 _render_chops (line 1240)",
+    19,
+    1.2
+   ],
+   [
+    "textual/css/styles.py:1507 get_rule (line 1508)",
+    19,
+    1.2
+   ],
+   [
+    "textual/reactive.py:290 __get__ (line 306)",
+    19,
+    1.2
+   ],
+   [
+    "textual/_compositor.py:1200 _render_chops (line 1241)",
+    14,
+    0.9
+   ],
+   [
+    "rich/cells.py:98 cell_len (line 109)",
+    14,
+    0.9
+   ],
+   [
+    "textual/color.py:498 __add__ (line 498)",
+    14,
+    0.9
+   ],
+   [
+    "claude_wheelhouse/store.py:610 runner (line 610)",
+    14,
+    0.9
+   ],
+   [
+    "textual/css/styles.py:1485 has_rule (line 1485)",
+    14,
+    0.9
+   ],
+   [
+    "textual/css/_style_properties.py:970 __get__ (line 970)",
+    14,
+    0.9
+   ],
+   [
+    "textual/cache.py:282 get (line 282)",
+    14,
+    0.9
+   ],
+   [
+    "rich/control.py:181 strip_control_codes (line 181)",
+    14,
+    0.9
+   ],
+   [
+    "textual/dom.py:809 id (line 809)",
+    14,
+    0.9
+   ],
+   [
+    "textual/strip.py:30 get_line_length (line 40)",
+    10,
+    0.6
+   ],
+   [
+    "textual/css/styles.py:1507 get_rule (line 1510)",
+    10,
+    0.6
+   ],
+   [
+    "textual/_compositor.py:1200 _render_chops (line 1236)",
+    10,
+    0.6
+   ],
+   [
+    "textual/reactive.py:290 __get__ (line 290)",
+    10,
+    0.6
+   ],
+   [
+    "rich/control.py:181 strip_control_codes (line 192)",
+    10,
+    0.6
+   ],
+   [
+    "textual/color.py:498 __add__ (line 500)",
+    10,
+    0.6
+   ]
+  ],
+  "innermost wheelhouse line": [
+   [
+    "claude_wheelhouse/cli.py:33 run_app (line 57)",
+    909,
+    56.9
+   ],
+   [
+    "claude_wheelhouse/tui.py:7770 each_pane (line 7779)",
+    163,
+    10.2
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line (line 1496)",
+    100,
+    6.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line (line 1497)",
+    48,
+    3.0
+   ],
+   [
+    "claude_wheelhouse/tui.py:1347 _kept_line (line 1369)",
+    43,
+    2.7
+   ],
+   [
+    "claude_wheelhouse/tui.py:9741 new_session (line 9745)",
+    38,
+    2.4
+   ],
+   [
+    "claude_wheelhouse/tui.py:323 cylon (line 329)",
+    29,
+    1.8
+   ],
+   [
+    "claude_wheelhouse/client.py:333 request (line 341)",
+    29,
+    1.8
+   ],
+   [
+    "claude_wheelhouse/client.py:654 inbox (line 657)",
+    24,
+    1.5
+   ],
+   [
+    "claude_wheelhouse/tui.py:5097 write (line 5098)",
+    19,
+    1.2
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line (line 1494)",
+    14,
+    0.9
+   ],
+   [
+    "claude_wheelhouse/store.py:610 runner (line 610)",
+    14,
+    0.9
+   ],
+   [
+    "claude_wheelhouse/tui.py:1347 _kept_line (line 1361)",
+    14,
+    0.9
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line (line 1482)",
+    10,
+    0.6
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line (line 1484)",
+    10,
+    0.6
+   ],
+   [
+    "claude_wheelhouse/tui.py:313 dimmed (line 316)",
+    10,
+    0.6
+   ],
+   [
+    "claude_wheelhouse/tui.py:1483 <genexpr> (line 1483)",
+    10,
+    0.6
+   ],
+   [
+    "claude_wheelhouse/tui.py:1259 keys (line 1260)",
+    10,
+    0.6
+   ],
+   [
+    "claude_wheelhouse/tui.py:323 cylon (line 326)",
+    10,
+    0.6
+   ],
+   [
+    "claude_wheelhouse/tui.py:1499 dim_dot (line 1507)",
+    10,
+    0.6
+   ],
+   [
+    "claude_wheelhouse/hub.py:243 lifeless (line 243)",
+    10,
+    0.6
+   ],
+   [
+    "claude_wheelhouse/client.py:603 running (line 604)",
+    10,
+    0.6
+   ],
+   [
+    "claude_wheelhouse/tui.py:6719 conversation_sids (line 6722)",
+    5,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:1347 _kept_line (line 1358)",
+    5,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:684 cut (line 691)",
+    5,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:673 same (line 676)",
+    5,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:1347 _kept_line (line 1367)",
+    5,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:8383 paint_session_info (line 8399)",
+    5,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/transcript_usage.py:608 follower (line 612)",
+    5,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:695 fill (line 707)",
+    5,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line (line 1475)",
+    5,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:684 cut (line 687)",
+    5,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:3439 compose (line 3465)",
+    5,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:1347 _kept_line (line 1355)",
+    5,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:1914 show_button (line 1927)",
+    5,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:3073 <genexpr> (line 3073)",
+    5,
+    0.3
+   ]
+  ],
+  "other threads running": [
+   [
+    "httpcore2/_backends/sync.py:123 read",
+    1723,
+    107.8
+   ],
+   [
+    "textual/drivers/_writer_thread.py:48 run",
+    67,
+    4.2
+   ],
+   [
+    "pathlib.py:837 stat",
+    57,
+    3.6
+   ],
+   [
+    "textual/drivers/linux_driver.py:434 process_selector_events",
+    19,
+    1.2
+   ],
+   [
+    "threading.py:311 _acquire_restore",
+    10,
+    0.6
+   ],
+   [
+    "httpcore2/_utils.py:20 is_socket_readable",
+    5,
+    0.3
+   ],
+   [
+    "selector_events.py:141 _write_to_self",
+    5,
+    0.3
+   ]
+  ]
+ },
+ "sweep": {
+  "wall_s": 15.0,
+  "samples": 2746,
+  "ui_busy_pct": 14.5,
+  "ui_busy_ms": 2175,
+  "ui_cpu_ms": 5482,
+  "cumulative [function, ms, % of busy]": [
+   [
+    "events.py:86 _run",
+    2175,
+    100.0
+   ],
+   [
+    "base_events.py:1910 _run_once",
+    2175,
+    100.0
+   ],
+   [
+    "base_events.py:627 run_forever",
+    2175,
+    100.0
+   ],
+   [
+    "base_events.py:651 run_until_complete",
+    2175,
+    100.0
+   ],
+   [
+    "runners.py:86 run",
+    2175,
+    100.0
+   ],
+   [
+    "runners.py:160 run",
+    2175,
+    100.0
+   ],
+   [
+    "textual/app.py:2308 run",
+    2175,
+    100.0
+   ],
+   [
+    "claude_wheelhouse/cli.py:33 run_app",
+    2175,
+    100.0
+   ],
+   [
+    "claude_wheelhouse/cli.py:298 main",
+    2175,
+    100.0
+   ],
+   [
+    ".plan/385-bench/profapp.py:1 <module>",
+    2175,
+    100.0
+   ],
+   [
+    "textual/_callback.py:45 _invoke",
+    1857,
+    85.4
+   ],
+   [
+    "textual/_callback.py:62 invoke",
+    1857,
+    85.4
+   ],
+   [
+    "textual/timer.py:150 _run",
+    1846,
+    84.9
+   ],
+   [
+    "textual/timer.py:143 _run_timer",
+    1846,
+    84.9
+   ],
+   [
+    "textual/timer.py:180 _tick",
+    1836,
+    84.4
+   ],
+   [
+    "textual/screen.py:1236 _on_timer_update",
+    1638,
+    75.3
+   ],
+   [
+    "textual/screen.py:1188 _compositor_refresh",
+    1616,
+    74.3
+   ],
+   [
+    "textual/_compositor.py:1165 render_partial_update",
+    1496,
+    68.8
+   ],
+   [
+    "textual/_compositor.py:1096 render_update",
+    1496,
+    68.8
+   ],
+   [
+    "textual/_compositor.py:1200 _render_chops",
+    1490,
+    68.5
+   ],
+   [
+    "textual/_compositor.py:1031 _get_renders",
+    1189,
+    54.7
+   ],
+   [
+    "textual/_styles_cache.py:99 render_widget",
+    1183,
+    54.4
+   ],
+   [
+    "textual/widget.py:4271 render_lines",
+    1183,
+    54.4
+   ],
+   [
+    "textual/_styles_cache.py:163 render",
+    975,
+    44.8
+   ],
+   [
+    "textual/widgets/_data_table.py:2474 render_lines",
+    849,
+    39.0
+   ],
+   [
+    "textual/_styles_cache.py:267 render_line",
+    784,
+    36.0
+   ],
+   [
+    "textual/widgets/_data_table.py:2478 render_line",
+    608,
+    28.0
+   ],
+   [
+    "selector_events.py:129 _read_from_self",
+    247,
+    11.3
+   ],
+   [
+    "textual/dom.py:1084 rich_style",
+    241,
+    11.1
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line",
+    225,
+    10.3
+   ],
+   [
+    "textual/strip.py:94 __init__",
+    186,
+    8.6
+   ],
+   [
+    "claude_wheelhouse/tui.py:5968 refresh_data",
+    170,
+    7.8
+   ],
+   [
+    "claude_wheelhouse/tui.py:5936 tick",
+    170,
+    7.8
+   ],
+   [
+    "textual/strip.py:454 apply_filter",
+    159,
+    7.3
+   ],
+   [
+    "textual/strip.py:576 divide",
+    148,
+    6.8
+   ],
+   [
+    "<string>:1 <lambda>",
+    121,
+    5.5
+   ],
+   [
+    "textual/css/styles.py:1507 get_rule",
+    110,
+    5.0
+   ],
+   [
+    "textual/screen.py:1316 _refresh_layout",
+    110,
+    5.0
+   ],
+   [
+    "textual/app.py:3821 _display",
+    99,
+    4.5
+   ],
+   [
+    "textual/filter.py:264 apply",
+    99,
+    4.5
+   ],
+   [
+    "textual/_compositor.py:235 render_segments",
+    93,
+    4.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:7770 each_pane",
+    93,
+    4.3
+   ],
+   [
+    "textual/strip.py:518 crop",
+    88,
+    4.0
+   ],
+   [
+    "textual/reactive.py:290 __get__",
+    82,
+    3.8
+   ],
+   [
+    "claude_wheelhouse/tui.py:1333 _render_line",
+    82,
+    3.8
+   ],
+   [
+    "pane.py:83 tick",
+    77,
+    3.5
+   ],
+   [
+    "textual/message_pump.py:634 _process_messages_loop",
+    77,
+    3.5
+   ],
+   [
+    "claude_wheelhouse/tui.py:1347 _kept_line",
+    77,
+    3.5
+   ],
+   [
+    "textual/widget.py:2198 size",
+    71,
+    3.3
+   ],
+   [
+    "textual/message_pump.py:707 _dispatch_message",
+    71,
+    3.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:1653 _render_line",
+    71,
+    3.3
+   ],
+   [
+    "textual/css/_style_properties.py:970 __get__",
+    66,
+    3.0
+   ],
+   [
+    "textual/dom.py:1185 background_colors",
+    66,
+    3.0
+   ],
+   [
+    "textual/cache.py:226 __init__",
+    60,
+    2.8
+   ],
+   [
+    "textual/widget.py:2234 content_region",
+    60,
+    2.8
+   ],
+   [
+    "rich/style.py:757 __add__",
+    55,
+    2.5
+   ],
+   [
+    "rich/style.py:441 __hash__",
+    55,
+    2.5
+   ],
+   [
+    "textual/css/_style_properties.py:1162 __get__",
+    49,
+    2.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:6366 paint_items",
+    49,
+    2.3
+   ],
+   [
+    "_weakrefset.py:39 _remove",
+    49,
+    2.3
+   ]
+  ],
+  "self": [
+   [
+    "selector_events.py:129 _read_from_self (line 132)",
+    247,
+    11.3
+   ],
+   [
+    "<string>:1 <lambda> (line 1)",
+    115,
+    5.3
+   ],
+   [
+    "textual/cache.py:226 __init__ (line 226)",
+    60,
+    2.8
+   ],
+   [
+    "textual/_compositor.py:1200 _render_chops (line 1241)",
+    49,
+    2.3
+   ],
+   [
+    "textual/css/styles.py:1507 get_rule (line 1510)",
+    49,
+    2.3
+   ],
+   [
+    "_weakrefset.py:39 _remove (line 39)",
+    49,
+    2.3
+   ],
+   [
+    "rich/style.py:441 __hash__ (line 441)",
+    49,
+    2.3
+   ],
+   [
+    "textual/reactive.py:290 __get__ (line 290)",
+    44,
+    2.0
+   ],
+   [
+    "textual/_compositor.py:1200 _render_chops (line 1240)",
+    44,
+    2.0
+   ],
+   [
+    "textual/filter.py:264 apply (line 283)",
+    44,
+    2.0
+   ],
+   [
+    "textual/_compositor.py:1200 _render_chops (line 1235)",
+    38,
+    1.8
+   ],
+   [
+    "textual/css/_style_properties.py:970 __get__ (line 970)",
+    33,
+    1.5
+   ],
+   [
+    "textual/css/styles.py:1507 get_rule (line 1508)",
+    33,
+    1.5
+   ],
+   [
+    "textual/color.py:498 __add__ (line 500)",
+    27,
+    1.3
+   ],
+   [
+    "textual/cache.py:282 get (line 282)",
+    27,
+    1.3
+   ],
+   [
+    "textual/css/styles.py:1507 get_rule (line 1507)",
+    27,
+    1.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:1259 keys (line 1260)",
+    27,
+    1.3
+   ],
+   [
+    "textual/_styles_cache.py:163 render (line 241)",
+    27,
+    1.3
+   ],
+   [
+    "textual/message_pump.py:146 _parent (line 146)",
+    27,
+    1.3
+   ],
+   [
+    "rich/segment.py:629 divide (line 662)",
+    22,
+    1.0
+   ],
+   [
+    "rich/style.py:757 __add__ (line 757)",
+    22,
+    1.0
+   ],
+   [
+    "textual/strip.py:94 __init__ (line 100)",
+    22,
+    1.0
+   ],
+   [
+    "textual/strip.py:454 apply_filter (line 454)",
+    22,
+    1.0
+   ],
+   [
+    "textual/strip.py:276 cell_length (line 276)",
+    22,
+    1.0
+   ],
+   [
+    "textual/message_pump.py:146 _parent (line 149)",
+    22,
+    1.0
+   ],
+   [
+    "textual/strip.py:94 __init__ (line 97)",
+    16,
+    0.8
+   ],
+   [
+    "textual/reactive.py:290 __get__ (line 303)",
+    16,
+    0.8
+   ],
+   [
+    "textual/css/_style_properties.py:1057 __get__ (line 1057)",
+    16,
+    0.8
+   ],
+   [
+    "textual/css/_style_properties.py:1162 __get__ (line 1162)",
+    16,
+    0.8
+   ],
+   [
+    "textual/color.py:417 multiply_alpha (line 429)",
+    16,
+    0.8
+   ]
+  ],
+  "innermost wheelhouse line": [
+   [
+    "claude_wheelhouse/cli.py:33 run_app (line 57)",
+    1622,
+    74.6
+   ],
+   [
+    "claude_wheelhouse/tui.py:7770 each_pane (line 7779)",
+    88,
+    4.0
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line (line 1496)",
+    66,
+    3.0
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line (line 1497)",
+    60,
+    2.8
+   ],
+   [
+    "claude_wheelhouse/tui.py:5681 on_event (line 5710)",
+    49,
+    2.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:1347 _kept_line (line 1361)",
+    33,
+    1.5
+   ],
+   [
+    "claude_wheelhouse/tui.py:1259 keys (line 1260)",
+    27,
+    1.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:1347 _kept_line (line 1355)",
+    27,
+    1.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line (line 1494)",
+    22,
+    1.0
+   ],
+   [
+    "claude_wheelhouse/client.py:654 inbox (line 657)",
+    16,
+    0.8
+   ],
+   [
+    "claude_wheelhouse/tui.py:323 cylon (line 329)",
+    16,
+    0.8
+   ],
+   [
+    "claude_wheelhouse/tui.py:673 same (line 676)",
+    11,
+    0.5
+   ],
+   [
+    "claude_wheelhouse/tui.py:3233 render_line (line 3240)",
+    11,
+    0.5
+   ],
+   [
+    "claude_wheelhouse/tui.py:313 dimmed (line 316)",
+    11,
+    0.5
+   ],
+   [
+    "claude_wheelhouse/tui.py:323 cylon (line 326)",
+    11,
+    0.5
+   ],
+   [
+    "claude_wheelhouse/tui.py:1447 sweep (line 1464)",
+    11,
+    0.5
+   ],
+   [
+    "claude_wheelhouse/tui.py:3227 show (line 3231)",
+    5,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:684 cut (line 691)",
+    5,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/client.py:431 catch_up (line 435)",
+    5,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:1347 _kept_line (line 1360)",
+    5,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:7371 <genexpr> (line 7371)",
+    5,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/knurl.py:29 render_bar (line 36)",
+    5,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line (line 1482)",
+    5,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line (line 1484)",
+    5,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:5097 write (line 5098)",
+    5,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:1333 _render_line (line 1333)",
+    5,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:1347 _kept_line (line 1358)",
+    5,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:7984 under_way (line 7985)",
+    5,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:1347 _kept_line (line 1363)",
+    5,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:1499 dim_dot (line 1504)",
+    5,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/rows.py:38 faded (line 41)",
+    5,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:1483 <genexpr> (line 1483)",
+    5,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:1499 dim_dot (line 1507)",
+    5,
+    0.3
+   ]
+  ],
+  "other threads running": [
+   [
+    "httpcore2/_backends/sync.py:123 read",
+    2192,
+    100.8
+   ],
+   [
+    "textual/drivers/linux_driver.py:434 process_selector_events",
+    175,
+    8.1
+   ],
+   [
+    "textual/drivers/_writer_thread.py:48 run",
+    60,
+    2.8
+   ],
+   [
+    "pathlib.py:837 stat",
+    11,
+    0.5
+   ],
+   [
+    "selector_events.py:141 _write_to_self",
+    5,
+    0.3
+   ]
+  ]
+ },
+ "click": {
+  "wall_s": 17.2,
+  "samples": 3030,
+  "ui_busy_pct": 16.6,
+  "ui_busy_ms": 2849,
+  "ui_cpu_ms": 6042,
+  "cumulative [function, ms, % of busy]": [
+   [
+    "events.py:86 _run",
+    2849,
+    100.0
+   ],
+   [
+    "base_events.py:1910 _run_once",
+    2849,
+    100.0
+   ],
+   [
+    "base_events.py:627 run_forever",
+    2849,
+    100.0
+   ],
+   [
+    "base_events.py:651 run_until_complete",
+    2849,
+    100.0
+   ],
+   [
+    "runners.py:86 run",
+    2849,
+    100.0
+   ],
+   [
+    "runners.py:160 run",
+    2849,
+    100.0
+   ],
+   [
+    "textual/app.py:2308 run",
+    2849,
+    100.0
+   ],
+   [
+    "claude_wheelhouse/cli.py:33 run_app",
+    2849,
+    100.0
+   ],
+   [
+    "claude_wheelhouse/cli.py:298 main",
+    2849,
+    100.0
+   ],
+   [
+    ".plan/385-bench/profapp.py:1 <module>",
+    2849,
+    100.0
+   ],
+   [
+    "textual/_callback.py:45 _invoke",
+    2645,
+    92.8
+   ],
+   [
+    "textual/_callback.py:62 invoke",
+    2645,
+    92.8
+   ],
+   [
+    "textual/timer.py:150 _run",
+    2231,
+    78.3
+   ],
+   [
+    "textual/timer.py:143 _run_timer",
+    2231,
+    78.3
+   ],
+   [
+    "textual/timer.py:180 _tick",
+    2226,
+    78.1
+   ],
+   [
+    "textual/screen.py:1236 _on_timer_update",
+    1778,
+    62.4
+   ],
+   [
+    "textual/screen.py:1188 _compositor_refresh",
+    1603,
+    56.3
+   ],
+   [
+    "textual/_compositor.py:1165 render_partial_update",
+    1427,
+    50.1
+   ],
+   [
+    "textual/_compositor.py:1096 render_update",
+    1427,
+    50.1
+   ],
+   [
+    "textual/_compositor.py:1200 _render_chops",
+    1421,
+    49.9
+   ],
+   [
+    "textual/_compositor.py:1031 _get_renders",
+    1178,
+    41.4
+   ],
+   [
+    "textual/_styles_cache.py:99 render_widget",
+    1161,
+    40.8
+   ],
+   [
+    "textual/widget.py:4271 render_lines",
+    1161,
+    40.8
+   ],
+   [
+    "textual/_styles_cache.py:163 render",
+    985,
+    34.6
+   ],
+   [
+    "textual/_styles_cache.py:267 render_line",
+    798,
+    28.0
+   ],
+   [
+    "textual/screen.py:1316 _refresh_layout",
+    787,
+    27.6
+   ],
+   [
+    "textual/widgets/_data_table.py:2474 render_lines",
+    657,
+    23.1
+   ],
+   [
+    "textual/widgets/_data_table.py:2478 render_line",
+    493,
+    17.3
+   ],
+   [
+    "textual/message_pump.py:634 _process_messages_loop",
+    476,
+    16.7
+   ],
+   [
+    "claude_wheelhouse/tui.py:8591 settle",
+    459,
+    16.1
+   ],
+   [
+    "textual/message_pump.py:707 _dispatch_message",
+    453,
+    15.9
+   ],
+   [
+    "textual/message_pump.py:810 _on_message",
+    436,
+    15.3
+   ],
+   [
+    "textual/app.py:3420 run_process_messages",
+    430,
+    15.1
+   ],
+   [
+    "textual/app.py:3364 _process_messages",
+    430,
+    15.1
+   ],
+   [
+    "textual/app.py:2220 run_async",
+    430,
+    15.1
+   ],
+   [
+    "textual/app.py:2334 run_app",
+    430,
+    15.1
+   ],
+   [
+    "claude_wheelhouse/tui.py:8583 highlighted",
+    419,
+    14.7
+   ],
+   [
+    "claude_wheelhouse/tui.py:5968 refresh_data",
+    419,
+    14.7
+   ],
+   [
+    "claude_wheelhouse/tui.py:5936 tick",
+    419,
+    14.7
+   ],
+   [
+    "claude_wheelhouse/tui.py:8618 select_row",
+    357,
+    12.5
+   ],
+   [
+    "claude_wheelhouse/tui.py:6366 paint_items",
+    306,
+    10.7
+   ],
+   [
+    "claude_wheelhouse/tui.py:7770 each_pane",
+    289,
+    10.1
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line",
+    244,
+    8.5
+   ],
+   [
+    "pane.py:83 tick",
+    244,
+    8.5
+   ],
+   [
+    "claude_wheelhouse/tui.py:7223 paint_detail",
+    227,
+    8.0
+   ],
+   [
+    "textual/strip.py:94 __init__",
+    210,
+    7.4
+   ],
+   [
+    "textual/dom.py:496 run_worker",
+    198,
+    7.0
+   ],
+   [
+    "textual/worker_manager.py:81 _new_worker",
+    193,
+    6.8
+   ],
+   [
+    "textual/app.py:3821 _display",
+    176,
+    6.2
+   ],
+   [
+    "httpx2/_client.py:949 send",
+    170,
+    6.0
+   ],
+   [
+    "httpx2/_client.py:743 request",
+    170,
+    6.0
+   ],
+   [
+    "claude_wheelhouse/client.py:333 request",
+    170,
+    6.0
+   ],
+   [
+    "claude_wheelhouse/client.py:354 get",
+    170,
+    6.0
+   ],
+   [
+    "claude_wheelhouse/client.py:494 fetch",
+    170,
+    6.0
+   ],
+   [
+    "claude_wheelhouse/client.py:564 shown",
+    170,
+    6.0
+   ],
+   [
+    "claude_wheelhouse/client.py:669 thread",
+    170,
+    6.0
+   ],
+   [
+    "claude_wheelhouse/tui.py:6901 item_blocks",
+    170,
+    6.0
+   ],
+   [
+    "httpcore2/_sync/connection_pool.py:191 handle_request",
+    159,
+    5.6
+   ],
+   [
+    "httpx2/_transports/default.py:225 handle_request",
+    159,
+    5.6
+   ],
+   [
+    "httpx2/_client.py:1065 _send_single_request",
+    159,
+    5.6
+   ]
+  ],
+  "self": [
+   [
+    "_weakrefset.py:39 _remove (line 39)",
+    153,
+    5.4
+   ],
+   [
+    "selector_events.py:129 _read_from_self (line 132)",
+    142,
+    5.0
+   ],
+   [
+    "<string>:1 <lambda> (line 1)",
+    96,
+    3.4
+   ],
+   [
+    "claude_wheelhouse/tui.py:1259 keys (line 1260)",
+    74,
+    2.6
+   ],
+   [
+    "textual/reactive.py:290 __get__ (line 290)",
+    57,
+    2.0
+   ],
+   [
+    "httpcore2/_backends/sync.py:129 write (line 138)",
+    51,
+    1.8
+   ],
+   [
+    "textual/cache.py:226 __init__ (line 226)",
+    51,
+    1.8
+   ],
+   [
+    "textual/css/styles.py:1507 get_rule (line 1510)",
+    51,
+    1.8
+   ],
+   [
+    "httpcore2/_backends/sync.py:123 read (line 127)",
+    45,
+    1.6
+   ],
+   [
+    "claude_wheelhouse/client.py:654 inbox (line 657)",
+    45,
+    1.6
+   ],
+   [
+    "textual/css/styles.py:1507 get_rule (line 1508)",
+    45,
+    1.6
+   ],
+   [
+    "textual/message_pump.py:146 _parent (line 146)",
+    45,
+    1.6
+   ],
+   [
+    "httpcore2/_utils.py:20 is_socket_readable (line 47)",
+    45,
+    1.6
+   ],
+   [
+    "textual/strip.py:454 apply_filter (line 454)",
+    40,
+    1.4
+   ],
+   [
+    "textual/color.py:498 __add__ (line 500)",
+    34,
+    1.2
+   ],
+   [
+    "textual/_compositor.py:1200 _render_chops (line 1241)",
+    34,
+    1.2
+   ],
+   [
+    "rich/style.py:441 __hash__ (line 441)",
+    34,
+    1.2
+   ],
+   [
+    "textual/_compositor.py:1200 _render_chops (line 1240)",
+    34,
+    1.2
+   ],
+   [
+    "textual/_styles_cache.py:163 render (line 241)",
+    34,
+    1.2
+   ],
+   [
+    "textual/reactive.py:290 __get__ (line 306)",
+    28,
+    1.0
+   ],
+   [
+    "textual/strip.py:708 render (line 723)",
+    23,
+    0.8
+   ],
+   [
+    "httpcore2/_backends/sync.py:129 write (line 137)",
+    23,
+    0.8
+   ],
+   [
+    "textual/strip.py:687 render_style (line 687)",
+    23,
+    0.8
+   ],
+   [
+    "textual/_compositor.py:1200 _render_chops (line 1235)",
+    23,
+    0.8
+   ],
+   [
+    "rich/style.py:131 __init__ (line 160)",
+    23,
+    0.8
+   ],
+   [
+    "textual/cache.py:282 get (line 282)",
+    23,
+    0.8
+   ],
+   [
+    "textual/dom.py:1225 ancestors_with_self (line 1225)",
+    17,
+    0.6
+   ],
+   [
+    "rich/segment.py:629 divide (line 662)",
+    17,
+    0.6
+   ],
+   [
+    "textual/strip.py:94 __init__ (line 94)",
+    17,
+    0.6
+   ],
+   [
+    "textual/strip.py:94 __init__ (line 110)",
+    17,
+    0.6
+   ]
+  ],
+  "innermost wheelhouse line": [
+   [
+    "claude_wheelhouse/cli.py:33 run_app (line 57)",
+    1625,
+    57.1
+   ],
+   [
+    "claude_wheelhouse/tui.py:7770 each_pane (line 7779)",
+    261,
+    9.1
+   ],
+   [
+    "claude_wheelhouse/client.py:333 request (line 341)",
+    170,
+    6.0
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line (line 1496)",
+    79,
+    2.8
+   ],
+   [
+    "claude_wheelhouse/tui.py:1259 keys (line 1260)",
+    74,
+    2.6
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line (line 1497)",
+    45,
+    1.6
+   ],
+   [
+    "claude_wheelhouse/client.py:654 inbox (line 657)",
+    45,
+    1.6
+   ],
+   [
+    "claude_wheelhouse/tui.py:1347 _kept_line (line 1369)",
+    40,
+    1.4
+   ],
+   [
+    "claude_wheelhouse/tui.py:5097 write (line 5098)",
+    34,
+    1.2
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line (line 1475)",
+    23,
+    0.8
+   ],
+   [
+    "claude_wheelhouse/rows.py:41 <genexpr> (line 41)",
+    17,
+    0.6
+   ],
+   [
+    "claude_wheelhouse/tui.py:1447 sweep (line 1464)",
+    17,
+    0.6
+   ],
+   [
+    "claude_wheelhouse/tui.py:6495 item_cells (line 6502)",
+    17,
+    0.6
+   ],
+   [
+    "claude_wheelhouse/tui.py:661 row_values (line 664)",
+    17,
+    0.6
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line (line 1494)",
+    11,
+    0.4
+   ],
+   [
+    "claude_wheelhouse/tui.py:303 eye_at (line 305)",
+    11,
+    0.4
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line (line 1482)",
+    11,
+    0.4
+   ],
+   [
+    "claude_wheelhouse/tui.py:611 _block_lines (line 617)",
+    11,
+    0.4
+   ],
+   [
+    "claude_wheelhouse/tui.py:673 same (line 676)",
+    11,
+    0.4
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line (line 1484)",
+    11,
+    0.4
+   ],
+   [
+    "claude_wheelhouse/features.py:133 read_env (line 139)",
+    11,
+    0.4
+   ],
+   [
+    "claude_wheelhouse/tui.py:6569 items_state (line 6576)",
+    11,
+    0.4
+   ],
+   [
+    "claude_wheelhouse/tui.py:1499 dim_dot (line 1507)",
+    11,
+    0.4
+   ],
+   [
+    "claude_wheelhouse/tui.py:6615 ranked_keyed (line 6640)",
+    11,
+    0.4
+   ],
+   [
+    "claude_wheelhouse/tui.py:399 item_rows (line 406)",
+    11,
+    0.4
+   ],
+   [
+    "claude_wheelhouse/tui.py:527 item_key (line 527)",
+    11,
+    0.4
+   ],
+   [
+    "claude_wheelhouse/tui.py:1083 frame (line 1091)",
+    11,
+    0.4
+   ],
+   [
+    "claude_wheelhouse/tui.py:5681 on_event (line 5710)",
+    6,
+    0.2
+   ],
+   [
+    "claude_wheelhouse/tui.py:6194 sessions (line 6194)",
+    6,
+    0.2
+   ],
+   [
+    "claude_wheelhouse/tui.py:1347 _kept_line (line 1367)",
+    6,
+    0.2
+   ],
+   [
+    "claude_wheelhouse/tui.py:308 dot_dimmed (line 308)",
+    6,
+    0.2
+   ],
+   [
+    "claude_wheelhouse/client.py:591 sessions (line 591)",
+    6,
+    0.2
+   ],
+   [
+    "claude_wheelhouse/tui.py:6216 running (line 6216)",
+    6,
+    0.2
+   ],
+   [
+    "claude_wheelhouse/knurl.py:29 render_bar (line 52)",
+    6,
+    0.2
+   ],
+   [
+    "claude_wheelhouse/tui.py:1483 <genexpr> (line 1483)",
+    6,
+    0.2
+   ],
+   [
+    "claude_wheelhouse/tui.py:1499 dim_dot (line 1504)",
+    6,
+    0.2
+   ],
+   [
+    "claude_wheelhouse/tui.py:7223 paint_detail (line 7223)",
+    6,
+    0.2
+   ],
+   [
+    "claude_wheelhouse/tui.py:323 cylon (line 326)",
+    6,
+    0.2
+   ],
+   [
+    "claude_wheelhouse/store.py:610 runner (line 610)",
+    6,
+    0.2
+   ],
+   [
+    "claude_wheelhouse/client.py:525 apply (line 542)",
+    6,
+    0.2
+   ]
+  ],
+  "other threads running": [
+   [
+    "httpcore2/_backends/sync.py:123 read",
+    2979,
+    104.6
+   ],
+   [
+    "textual/drivers/_writer_thread.py:48 run",
+    74,
+    2.6
+   ],
+   [
+    "pathlib.py:837 stat",
+    45,
+    1.6
+   ],
+   [
+    "selector_events.py:141 _write_to_self",
+    28,
+    1.0
+   ],
+   [
+    "threading.py:311 _acquire_restore",
+    23,
+    0.8
+   ],
+   [
+    "threading.py:299 __enter__",
+    11,
+    0.4
+   ],
+   [
+    "textual/drivers/linux_driver.py:434 process_selector_events",
+    6,
+    0.2
+   ],
+   [
+    "httpcore2/_utils.py:20 is_socket_readable",
+    6,
+    0.2
+   ],
+   [
+    "decoder.py:343 raw_decode",
+    6,
+    0.2
+   ],
+   [
+    "httpcore2/_backends/sync.py:129 write",
+    6,
+    0.2
+   ]
+  ]
+ },
+ "arrow": {
+  "wall_s": 12.0,
+  "samples": 2241,
+  "ui_busy_pct": 12.8,
+  "ui_busy_ms": 1535,
+  "ui_cpu_ms": 3608,
+  "cumulative [function, ms, % of busy]": [
+   [
+    "events.py:86 _run",
+    1535,
+    100.0
+   ],
+   [
+    "base_events.py:1910 _run_once",
+    1535,
+    100.0
+   ],
+   [
+    "base_events.py:627 run_forever",
+    1535,
+    100.0
+   ],
+   [
+    "base_events.py:651 run_until_complete",
+    1535,
+    100.0
+   ],
+   [
+    "runners.py:86 run",
+    1535,
+    100.0
+   ],
+   [
+    "runners.py:160 run",
+    1535,
+    100.0
+   ],
+   [
+    "textual/app.py:2308 run",
+    1535,
+    100.0
+   ],
+   [
+    "claude_wheelhouse/cli.py:33 run_app",
+    1535,
+    100.0
+   ],
+   [
+    "claude_wheelhouse/cli.py:298 main",
+    1535,
+    100.0
+   ],
+   [
+    ".plan/385-bench/profapp.py:1 <module>",
+    1535,
+    100.0
+   ],
+   [
+    "textual/_callback.py:45 _invoke",
+    1428,
+    93.0
+   ],
+   [
+    "textual/_callback.py:62 invoke",
+    1428,
+    93.0
+   ],
+   [
+    "textual/timer.py:180 _tick",
+    1031,
+    67.1
+   ],
+   [
+    "textual/timer.py:150 _run",
+    1031,
+    67.1
+   ],
+   [
+    "textual/timer.py:143 _run_timer",
+    1031,
+    67.1
+   ],
+   [
+    "textual/screen.py:1236 _on_timer_update",
+    886,
+    57.7
+   ],
+   [
+    "textual/screen.py:1188 _compositor_refresh",
+    843,
+    54.9
+   ],
+   [
+    "textual/_compositor.py:1165 render_partial_update",
+    735,
+    47.9
+   ],
+   [
+    "textual/_compositor.py:1096 render_update",
+    735,
+    47.9
+   ],
+   [
+    "textual/_compositor.py:1200 _render_chops",
+    730,
+    47.6
+   ],
+   [
+    "textual/_compositor.py:1031 _get_renders",
+    623,
+    40.6
+   ],
+   [
+    "textual/_styles_cache.py:99 render_widget",
+    612,
+    39.9
+   ],
+   [
+    "textual/widget.py:4271 render_lines",
+    612,
+    39.9
+   ],
+   [
+    "textual/_styles_cache.py:163 render",
+    521,
+    33.9
+   ],
+   [
+    "textual/message_pump.py:707 _dispatch_message",
+    419,
+    27.3
+   ],
+   [
+    "textual/message_pump.py:634 _process_messages_loop",
+    419,
+    27.3
+   ],
+   [
+    "textual/app.py:3420 run_process_messages",
+    419,
+    27.3
+   ],
+   [
+    "textual/app.py:3364 _process_messages",
+    419,
+    27.3
+   ],
+   [
+    "textual/app.py:2220 run_async",
+    419,
+    27.3
+   ],
+   [
+    "textual/app.py:2334 run_app",
+    419,
+    27.3
+   ],
+   [
+    "textual/_styles_cache.py:267 render_line",
+    413,
+    26.9
+   ],
+   [
+    "claude_wheelhouse/tui.py:8591 settle",
+    376,
+    24.5
+   ],
+   [
+    "textual/message_pump.py:810 _on_message",
+    376,
+    24.5
+   ],
+   [
+    "textual/screen.py:1316 _refresh_layout",
+    376,
+    24.5
+   ],
+   [
+    "claude_wheelhouse/tui.py:8583 highlighted",
+    370,
+    24.1
+   ],
+   [
+    "claude_wheelhouse/tui.py:8618 select_row",
+    311,
+    20.3
+   ],
+   [
+    "textual/widgets/_data_table.py:2474 render_lines",
+    295,
+    19.2
+   ],
+   [
+    "textual/widgets/_data_table.py:2478 render_line",
+    215,
+    14.0
+   ],
+   [
+    "claude_wheelhouse/tui.py:7223 paint_detail",
+    215,
+    14.0
+   ],
+   [
+    "claude_wheelhouse/tui.py:7770 each_pane",
+    209,
+    13.6
+   ],
+   [
+    "httpx2/_client.py:949 send",
+    177,
+    11.5
+   ],
+   [
+    "httpx2/_client.py:743 request",
+    177,
+    11.5
+   ],
+   [
+    "claude_wheelhouse/client.py:333 request",
+    177,
+    11.5
+   ],
+   [
+    "claude_wheelhouse/client.py:354 get",
+    177,
+    11.5
+   ],
+   [
+    "claude_wheelhouse/client.py:494 fetch",
+    177,
+    11.5
+   ],
+   [
+    "claude_wheelhouse/client.py:564 shown",
+    177,
+    11.5
+   ],
+   [
+    "claude_wheelhouse/client.py:669 thread",
+    177,
+    11.5
+   ],
+   [
+    "claude_wheelhouse/tui.py:6901 item_blocks",
+    177,
+    11.5
+   ],
+   [
+    "pane.py:83 tick",
+    161,
+    10.5
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line",
+    145,
+    9.4
+   ],
+   [
+    "claude_wheelhouse/tui.py:5968 refresh_data",
+    134,
+    8.7
+   ],
+   [
+    "claude_wheelhouse/tui.py:5936 tick",
+    134,
+    8.7
+   ],
+   [
+    "textual/strip.py:94 __init__",
+    129,
+    8.4
+   ],
+   [
+    "httpcore2/_backends/sync.py:123 read",
+    118,
+    7.7
+   ],
+   [
+    "httpcore2/_sync/http11.py:194 _receive_event",
+    118,
+    7.7
+   ],
+   [
+    "_weakrefset.py:39 _remove",
+    113,
+    7.3
+   ],
+   [
+    "textual/worker_manager.py:81 _new_worker",
+    107,
+    7.0
+   ],
+   [
+    "textual/dom.py:496 run_worker",
+    107,
+    7.0
+   ],
+   [
+    "textual/app.py:3821 _display",
+    107,
+    7.0
+   ],
+   [
+    "httpcore2/_sync/http11.py:63 handle_request",
+    91,
+    5.9
+   ]
+  ],
+  "self": [
+   [
+    "_weakrefset.py:39 _remove (line 39)",
+    113,
+    7.3
+   ],
+   [
+    "httpcore2/_backends/sync.py:123 read (line 127)",
+    102,
+    6.6
+   ],
+   [
+    "selector_events.py:129 _read_from_self (line 132)",
+    86,
+    5.6
+   ],
+   [
+    "<string>:1 <lambda> (line 1)",
+    75,
+    4.9
+   ],
+   [
+    "textual/cache.py:226 __init__ (line 226)",
+    43,
+    2.8
+   ],
+   [
+    "claude_wheelhouse/tui.py:1259 keys (line 1260)",
+    38,
+    2.4
+   ],
+   [
+    "textual/_styles_cache.py:163 render (line 241)",
+    32,
+    2.1
+   ],
+   [
+    "claude_wheelhouse/client.py:654 inbox (line 657)",
+    32,
+    2.1
+   ],
+   [
+    "claude_wheelhouse/store.py:610 runner (line 610)",
+    32,
+    2.1
+   ],
+   [
+    "httpcore2/_backends/sync.py:129 write (line 138)",
+    27,
+    1.7
+   ],
+   [
+    "textual/_compositor.py:1200 _render_chops (line 1235)",
+    27,
+    1.7
+   ],
+   [
+    "threading.py:394 notify (line 410)",
+    27,
+    1.7
+   ],
+   [
+    "textual/_compositor.py:1200 _render_chops (line 1241)",
+    21,
+    1.4
+   ],
+   [
+    "httpcore2/_utils.py:20 is_socket_readable (line 47)",
+    21,
+    1.4
+   ],
+   [
+    "rich/control.py:181 strip_control_codes (line 192)",
+    21,
+    1.4
+   ],
+   [
+    "pathlib.py:1007 open (line 1015)",
+    21,
+    1.4
+   ],
+   [
+    "rich/style.py:441 __hash__ (line 441)",
+    21,
+    1.4
+   ],
+   [
+    "textual/reactive.py:290 __get__ (line 306)",
+    16,
+    1.0
+   ],
+   [
+    "textual/app.py:1478 available_themes (line 1478)",
+    16,
+    1.0
+   ],
+   [
+    "textual/css/_style_properties.py:291 __get__ (line 291)",
+    16,
+    1.0
+   ],
+   [
+    "httpcore2/_backends/sync.py:123 read (line 126)",
+    16,
+    1.0
+   ],
+   [
+    "textual/message_pump.py:146 _parent (line 149)",
+    16,
+    1.0
+   ],
+   [
+    "textual/strip.py:359 adjust_cell_length (line 359)",
+    11,
+    0.7
+   ],
+   [
+    "textual/reactive.py:290 __get__ (line 303)",
+    11,
+    0.7
+   ],
+   [
+    "textual/_styles_cache.py:99 render_widget (line 99)",
+    11,
+    0.7
+   ],
+   [
+    "threading.py:299 __enter__ (line 299)",
+    11,
+    0.7
+   ],
+   [
+    "textual/css/_style_properties.py:1162 __get__ (line 1162)",
+    11,
+    0.7
+   ],
+   [
+    "textual/filter.py:264 apply (line 283)",
+    11,
+    0.7
+   ],
+   [
+    "textual/_compositor.py:495 visible_widgets (line 517)",
+    11,
+    0.7
+   ],
+   [
+    "rich/style.py:757 __add__ (line 757)",
+    11,
+    0.7
+   ]
+  ],
+  "innermost wheelhouse line": [
+   [
+    "claude_wheelhouse/cli.py:33 run_app (line 57)",
+    773,
+    50.3
+   ],
+   [
+    "claude_wheelhouse/client.py:333 request (line 341)",
+    177,
+    11.5
+   ],
+   [
+    "claude_wheelhouse/tui.py:7770 each_pane (line 7779)",
+    161,
+    10.5
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line (line 1496)",
+    48,
+    3.1
+   ],
+   [
+    "claude_wheelhouse/tui.py:1259 keys (line 1260)",
+    38,
+    2.4
+   ],
+   [
+    "claude_wheelhouse/client.py:654 inbox (line 657)",
+    32,
+    2.1
+   ],
+   [
+    "claude_wheelhouse/store.py:610 runner (line 610)",
+    32,
+    2.1
+   ],
+   [
+    "claude_wheelhouse/tui.py:5097 write (line 5098)",
+    32,
+    2.1
+   ],
+   [
+    "claude_wheelhouse/features.py:133 read_env (line 139)",
+    21,
+    1.4
+   ],
+   [
+    "claude_wheelhouse/tui.py:1347 _kept_line (line 1361)",
+    21,
+    1.4
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line (line 1497)",
+    16,
+    1.0
+   ],
+   [
+    "claude_wheelhouse/tui.py:695 fill (line 713)",
+    11,
+    0.7
+   ],
+   [
+    "claude_wheelhouse/knurl.py:29 render_bar (line 47)",
+    11,
+    0.7
+   ],
+   [
+    "claude_wheelhouse/tui.py:1447 sweep (line 1464)",
+    11,
+    0.7
+   ],
+   [
+    "claude_wheelhouse/tui.py:673 same (line 676)",
+    11,
+    0.7
+   ],
+   [
+    "claude_wheelhouse/tui.py:1281 go (line 1295)",
+    11,
+    0.7
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line (line 1484)",
+    11,
+    0.7
+   ],
+   [
+    "claude_wheelhouse/tui.py:6569 items_state (line 6576)",
+    11,
+    0.7
+   ],
+   [
+    "claude_wheelhouse/tui.py:323 cylon (line 329)",
+    11,
+    0.7
+   ],
+   [
+    "claude_wheelhouse/tui.py:1262 cursor_key (line 1263)",
+    5,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:1265 final (line 1273)",
+    5,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:684 cut (line 690)",
+    5,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:7799 module_sessions (line 7801)",
+    5,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:323 cylon (line 326)",
+    5,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/knurl.py:29 render_bar (line 36)",
+    5,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/client.py:431 catch_up (line 435)",
+    5,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line (line 1482)",
+    5,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:841 update (line 856)",
+    5,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/client.py:603 running (line 604)",
+    5,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line (line 1491)",
+    5,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:6300 paint_sessions (line 6316)",
+    5,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:1269 <genexpr> (line 1269)",
+    5,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line (line 1494)",
+    5,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:1347 _kept_line (line 1369)",
+    5,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:1347 _kept_line (line 1355)",
+    5,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:308 dot_dimmed (line 308)",
+    5,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line (line 1475)",
+    5,
+    0.3
+   ]
+  ],
+  "other threads running": [
+   [
+    "httpcore2/_backends/sync.py:123 read",
+    1578,
+    102.8
+   ],
+   [
+    "textual/drivers/_writer_thread.py:48 run",
+    32,
+    2.1
+   ],
+   [
+    "pathlib.py:837 stat",
+    27,
+    1.7
+   ],
+   [
+    "threading.py:311 _acquire_restore",
+    27,
+    1.7
+   ],
+   [
+    "threading.py:299 __enter__",
+    5,
+    0.3
+   ]
+  ]
+ },
+ "dialog": {
+  "wall_s": 30.8,
+  "samples": 4924,
+  "ui_busy_pct": 17.9,
+  "ui_busy_ms": 5513,
+  "ui_cpu_ms": 13238,
+  "cumulative [function, ms, % of busy]": [
+   [
+    "events.py:86 _run",
+    5513,
+    100.0
+   ],
+   [
+    "base_events.py:1910 _run_once",
+    5513,
+    100.0
+   ],
+   [
+    "base_events.py:627 run_forever",
+    5513,
+    100.0
+   ],
+   [
+    "base_events.py:651 run_until_complete",
+    5513,
+    100.0
+   ],
+   [
+    "runners.py:86 run",
+    5513,
+    100.0
+   ],
+   [
+    "runners.py:160 run",
+    5513,
+    100.0
+   ],
+   [
+    "textual/app.py:2308 run",
+    5513,
+    100.0
+   ],
+   [
+    "claude_wheelhouse/cli.py:33 run_app",
+    5513,
+    100.0
+   ],
+   [
+    "claude_wheelhouse/cli.py:298 main",
+    5513,
+    100.0
+   ],
+   [
+    ".plan/385-bench/profapp.py:1 <module>",
+    5513,
+    100.0
+   ],
+   [
+    "textual/_callback.py:45 _invoke",
+    5369,
+    97.4
+   ],
+   [
+    "textual/_callback.py:62 invoke",
+    5369,
+    97.4
+   ],
+   [
+    "textual/screen.py:1188 _compositor_refresh",
+    4244,
+    77.0
+   ],
+   [
+    "textual/_compositor.py:1096 render_update",
+    4050,
+    73.5
+   ],
+   [
+    "textual/_compositor.py:1200 _render_chops",
+    4044,
+    73.4
+   ],
+   [
+    "textual/timer.py:150 _run",
+    3850,
+    69.8
+   ],
+   [
+    "textual/timer.py:143 _run_timer",
+    3850,
+    69.8
+   ],
+   [
+    "textual/timer.py:180 _tick",
+    3825,
+    69.4
+   ],
+   [
+    "textual/_compositor.py:1031 _get_renders",
+    3500,
+    63.5
+   ],
+   [
+    "textual/screen.py:1236 _on_timer_update",
+    3438,
+    62.4
+   ],
+   [
+    "textual/_compositor.py:1140 render_full_update",
+    2819,
+    51.1
+   ],
+   [
+    "claude_wheelhouse/tui.py:3359 render_lines",
+    2669,
+    48.4
+   ],
+   [
+    "textual/widget.py:4271 render_lines",
+    2325,
+    42.2
+   ],
+   [
+    "textual/_styles_cache.py:99 render_widget",
+    2313,
+    42.0
+   ],
+   [
+    "claude_wheelhouse/tui.py:3375 lines_beneath",
+    2219,
+    40.2
+   ],
+   [
+    "textual/_styles_cache.py:163 render",
+    1888,
+    34.2
+   ],
+   [
+    "textual/message_pump.py:707 _dispatch_message",
+    1575,
+    28.6
+   ],
+   [
+    "textual/screen.py:1316 _refresh_layout",
+    1556,
+    28.2
+   ],
+   [
+    "textual/message_pump.py:562 _process_messages",
+    1550,
+    28.1
+   ],
+   [
+    "textual/message_pump.py:634 _process_messages_loop",
+    1544,
+    28.0
+   ],
+   [
+    "textual/message_pump.py:810 _on_message",
+    1531,
+    27.8
+   ],
+   [
+    "textual/message_pump.py:802 on_event",
+    1519,
+    27.6
+   ],
+   [
+    "textual/_styles_cache.py:267 render_line",
+    1319,
+    23.9
+   ],
+   [
+    "textual/_compositor.py:1165 render_partial_update",
+    1231,
+    22.3
+   ],
+   [
+    "textual/strip.py:576 divide",
+    1156,
+    21.0
+   ],
+   [
+    "textual/strip.py:94 __init__",
+    1075,
+    19.5
+   ],
+   [
+    "textual/screen.py:1465 _on_screen_resume",
+    813,
+    14.7
+   ],
+   [
+    "textual/widgets/_data_table.py:2474 render_lines",
+    769,
+    13.9
+   ],
+   [
+    "textual/widgets/_data_table.py:2478 render_line",
+    613,
+    11.1
+   ],
+   [
+    "textual/strip.py:454 apply_filter",
+    469,
+    8.5
+   ],
+   [
+    "textual/cache.py:226 __init__",
+    431,
+    7.8
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line",
+    425,
+    7.7
+   ],
+   [
+    "tasks.py:973 factory",
+    400,
+    7.3
+   ],
+   [
+    "base_events.py:451 create_task",
+    400,
+    7.3
+   ],
+   [
+    "tasks.py:412 create_task",
+    400,
+    7.3
+   ],
+   [
+    "textual/css/stylesheet.py:470 apply",
+    388,
+    7.0
+   ],
+   [
+    "textual/message_pump.py:588 _pre_process",
+    381,
+    6.9
+   ],
+   [
+    "claude_wheelhouse/tui.py:5681 on_event",
+    375,
+    6.8
+   ],
+   [
+    "textual/app.py:3420 run_process_messages",
+    375,
+    6.8
+   ],
+   [
+    "textual/app.py:3364 _process_messages",
+    375,
+    6.8
+   ],
+   [
+    "textual/app.py:2220 run_async",
+    375,
+    6.8
+   ],
+   [
+    "textual/app.py:2334 run_app",
+    375,
+    6.8
+   ],
+   [
+    "textual/app.py:2895 push_screen",
+    369,
+    6.7
+   ],
+   [
+    "claude_wheelhouse/tui.py:9741 new_session",
+    369,
+    6.7
+   ],
+   [
+    "claude_wheelhouse/tui.py:9736 action_new_session",
+    369,
+    6.7
+   ],
+   [
+    "textual/app.py:4250 _dispatch_action",
+    369,
+    6.7
+   ],
+   [
+    "textual/app.py:4223 run_action",
+    369,
+    6.7
+   ],
+   [
+    "textual/app.py:3966 _check_bindings",
+    369,
+    6.7
+   ],
+   [
+    "claude_wheelhouse/tui.py:5712 take_key",
+    369,
+    6.7
+   ],
+   [
+    "claude_wheelhouse/tui.py:5968 refresh_data",
+    356,
+    6.5
+   ]
+  ],
+  "self": [
+   [
+    "textual/cache.py:226 __init__ (line 226)",
+    381,
+    6.9
+   ],
+   [
+    "<string>:1 <lambda> (line 1)",
+    250,
+    4.5
+   ],
+   [
+    "_weakrefset.py:39 _remove (line 39)",
+    206,
+    3.7
+   ],
+   [
+    "textual/strip.py:454 apply_filter (line 454)",
+    206,
+    3.7
+   ],
+   [
+    "textual/_compositor.py:1200 _render_chops (line 1240)",
+    169,
+    3.1
+   ],
+   [
+    "rich/style.py:441 __hash__ (line 441)",
+    144,
+    2.6
+   ],
+   [
+    "textual/strip.py:94 __init__ (line 106)",
+    131,
+    2.4
+   ],
+   [
+    "rich/segment.py:155 split_cells (line 170)",
+    88,
+    1.6
+   ],
+   [
+    "textual/color.py:498 __add__ (line 500)",
+    75,
+    1.4
+   ],
+   [
+    "rich/segment.py:629 divide (line 662)",
+    75,
+    1.4
+   ],
+   [
+    "textual/_compositor.py:1200 _render_chops (line 1241)",
+    75,
+    1.4
+   ],
+   [
+    "textual/strip.py:94 __init__ (line 101)",
+    75,
+    1.4
+   ],
+   [
+    "textual/strip.py:94 __init__ (line 102)",
+    69,
+    1.2
+   ],
+   [
+    "selector_events.py:129 _read_from_self (line 132)",
+    69,
+    1.2
+   ],
+   [
+    "textual/strip.py:94 __init__ (line 110)",
+    69,
+    1.2
+   ],
+   [
+    "textual/_styles_cache.py:163 render (line 241)",
+    69,
+    1.2
+   ],
+   [
+    "textual/strip.py:94 __init__ (line 99)",
+    63,
+    1.1
+   ],
+   [
+    "textual/_compositor.py:1200 _render_chops (line 1235)",
+    56,
+    1.0
+   ],
+   [
+    "textual/strip.py:94 __init__ (line 111)",
+    56,
+    1.0
+   ],
+   [
+    "pathlib.py:1007 open (line 1015)",
+    56,
+    1.0
+   ],
+   [
+    "textual/reactive.py:290 __get__ (line 303)",
+    56,
+    1.0
+   ],
+   [
+    "rich/style.py:431 __eq__ (line 431)",
+    50,
+    0.9
+   ],
+   [
+    "textual/reactive.py:290 __get__ (line 290)",
+    50,
+    0.9
+   ],
+   [
+    "textual/cache.py:282 get (line 282)",
+    50,
+    0.9
+   ],
+   [
+    "textual/message_pump.py:146 _parent (line 149)",
+    44,
+    0.8
+   ],
+   [
+    "textual/css/styles.py:1507 get_rule (line 1508)",
+    44,
+    0.8
+   ],
+   [
+    "textual/css/model.py:248 __hash__ (line 248)",
+    44,
+    0.8
+   ],
+   [
+    "textual/strip.py:284 join (line 297)",
+    44,
+    0.8
+   ],
+   [
+    "textual/strip.py:94 __init__ (line 94)",
+    44,
+    0.8
+   ],
+   [
+    "textual/strip.py:708 render (line 723)",
+    44,
+    0.8
+   ]
+  ],
+  "innermost wheelhouse line": [
+   [
+    "claude_wheelhouse/cli.py:33 run_app (line 57)",
+    1844,
+    33.4
+   ],
+   [
+    "claude_wheelhouse/tui.py:3375 lines_beneath (line 3392)",
+    1838,
+    33.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:3359 render_lines (line 3371)",
+    306,
+    5.6
+   ],
+   [
+    "claude_wheelhouse/tui.py:9741 new_session (line 9745)",
+    275,
+    5.0
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line (line 1496)",
+    188,
+    3.4
+   ],
+   [
+    "claude_wheelhouse/tui.py:7770 each_pane (line 7779)",
+    150,
+    2.7
+   ],
+   [
+    "claude_wheelhouse/tui.py:3375 lines_beneath (line 3393)",
+    125,
+    2.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:3405 shade (line 3413)",
+    63,
+    1.1
+   ],
+   [
+    "claude_wheelhouse/tui.py:3405 shade (line 3410)",
+    63,
+    1.1
+   ],
+   [
+    "claude_wheelhouse/features.py:133 read_env (line 139)",
+    56,
+    1.0
+   ],
+   [
+    "claude_wheelhouse/tui.py:323 cylon (line 329)",
+    38,
+    0.7
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line (line 1497)",
+    38,
+    0.7
+   ],
+   [
+    "claude_wheelhouse/tui.py:1347 _kept_line (line 1369)",
+    31,
+    0.6
+   ],
+   [
+    "claude_wheelhouse/tui.py:1447 sweep (line 1464)",
+    25,
+    0.5
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line (line 1484)",
+    25,
+    0.5
+   ],
+   [
+    "claude_wheelhouse/tui.py:5097 write (line 5098)",
+    25,
+    0.5
+   ],
+   [
+    "claude_wheelhouse/tui.py:695 fill (line 713)",
+    25,
+    0.5
+   ],
+   [
+    "claude_wheelhouse/tui.py:3439 compose (line 3465)",
+    25,
+    0.5
+   ],
+   [
+    "claude_wheelhouse/client.py:654 inbox (line 657)",
+    25,
+    0.5
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line (line 1494)",
+    25,
+    0.5
+   ],
+   [
+    "claude_wheelhouse/tui.py:3405 shade (line 3414)",
+    19,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:7987 bar_widgets (line 7993)",
+    19,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:1499 dim_dot (line 1507)",
+    19,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:323 cylon (line 326)",
+    19,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:1347 _kept_line (line 1361)",
+    19,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:303 eye_at (line 305)",
+    19,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/docroots.py:299 declared (line 299)",
+    13,
+    0.2
+   ],
+   [
+    "claude_wheelhouse/tui.py:673 same (line 676)",
+    13,
+    0.2
+   ],
+   [
+    "claude_wheelhouse/tui.py:7799 module_sessions (line 7801)",
+    13,
+    0.2
+   ],
+   [
+    "claude_wheelhouse/tui.py:3233 render_line (line 3234)",
+    6,
+    0.1
+   ],
+   [
+    "claude_wheelhouse/tui.py:6300 paint_sessions (line 6323)",
+    6,
+    0.1
+   ],
+   [
+    "claude_wheelhouse/tui.py:684 cut (line 691)",
+    6,
+    0.1
+   ],
+   [
+    "claude_wheelhouse/tui.py:3439 compose (line 3456)",
+    6,
+    0.1
+   ],
+   [
+    "claude_wheelhouse/tui.py:3233 render_line (line 3240)",
+    6,
+    0.1
+   ],
+   [
+    "claude_wheelhouse/tui.py:7873 focus_compactions (line 7873)",
+    6,
+    0.1
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line (line 1483)",
+    6,
+    0.1
+   ],
+   [
+    "claude_wheelhouse/tui.py:5097 write (line 5097)",
+    6,
+    0.1
+   ],
+   [
+    "claude_wheelhouse/tui.py:1914 show_button (line 1928)",
+    6,
+    0.1
+   ],
+   [
+    "claude_wheelhouse/tui.py:1333 _render_line (line 1333)",
+    6,
+    0.1
+   ],
+   [
+    "claude_wheelhouse/tui.py:1447 sweep (line 1461)",
+    6,
+    0.1
+   ]
+  ],
+  "other threads running": [
+   [
+    "httpcore2/_backends/sync.py:123 read",
+    5544,
+    100.6
+   ],
+   [
+    "textual/drivers/_writer_thread.py:48 run",
+    244,
+    4.4
+   ],
+   [
+    "pathlib.py:837 stat",
+    38,
+    0.7
+   ],
+   [
+    "threading.py:311 _acquire_restore",
+    25,
+    0.5
+   ],
+   [
+    "threading.py:299 __enter__",
+    19,
+    0.3
+   ],
+   [
+    "selector_events.py:141 _write_to_self",
+    19,
+    0.3
+   ],
+   [
+    "textual/drivers/linux_driver.py:434 process_selector_events",
+    13,
+    0.2
+   ],
+   [
+    "httpcore2/_utils.py:20 is_socket_readable",
+    6,
+    0.1
+   ]
+  ]
+ },
+ "pin": {
+  "wall_s": 37.3,
+  "samples": 6739,
+  "ui_busy_pct": 25.5,
+  "ui_busy_ms": 9499,
+  "ui_cpu_ms": 8832,
+  "cumulative [function, ms, % of busy]": [
+   [
+    "events.py:86 _run",
+    9499,
+    100.0
+   ],
+   [
+    "base_events.py:1910 _run_once",
+    9499,
+    100.0
+   ],
+   [
+    "base_events.py:627 run_forever",
+    9499,
+    100.0
+   ],
+   [
+    "base_events.py:651 run_until_complete",
+    9499,
+    100.0
+   ],
+   [
+    "runners.py:86 run",
+    9499,
+    100.0
+   ],
+   [
+    "runners.py:160 run",
+    9499,
+    100.0
+   ],
+   [
+    "textual/app.py:2308 run",
+    9499,
+    100.0
+   ],
+   [
+    "claude_wheelhouse/cli.py:33 run_app",
+    9499,
+    100.0
+   ],
+   [
+    "claude_wheelhouse/cli.py:298 main",
+    9499,
+    100.0
+   ],
+   [
+    ".plan/385-bench/profapp.py:1 <module>",
+    9499,
+    100.0
+   ],
+   [
+    "textual/_callback.py:45 _invoke",
+    9189,
+    96.7
+   ],
+   [
+    "textual/_callback.py:62 invoke",
+    9189,
+    96.7
+   ],
+   [
+    "textual/message_pump.py:634 _process_messages_loop",
+    6038,
+    63.6
+   ],
+   [
+    "textual/message_pump.py:707 _dispatch_message",
+    6027,
+    63.4
+   ],
+   [
+    "textual/app.py:3420 run_process_messages",
+    6010,
+    63.3
+   ],
+   [
+    "textual/app.py:3364 _process_messages",
+    6010,
+    63.3
+   ],
+   [
+    "textual/app.py:2220 run_async",
+    6010,
+    63.3
+   ],
+   [
+    "textual/app.py:2334 run_app",
+    6010,
+    63.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:5681 on_event",
+    6004,
+    63.2
+   ],
+   [
+    "textual/app.py:4250 _dispatch_action",
+    5949,
+    62.6
+   ],
+   [
+    "textual/app.py:4223 run_action",
+    5949,
+    62.6
+   ],
+   [
+    "textual/app.py:3966 _check_bindings",
+    5949,
+    62.6
+   ],
+   [
+    "claude_wheelhouse/tui.py:5712 take_key",
+    5949,
+    62.6
+   ],
+   [
+    "claude_wheelhouse/tui.py:8920 toggle_now",
+    5944,
+    62.6
+   ],
+   [
+    "claude_wheelhouse/tui.py:8915 toggle_pinned",
+    5944,
+    62.6
+   ],
+   [
+    "claude_wheelhouse/tui.py:8935 action_toggle_pinned",
+    5944,
+    62.6
+   ],
+   [
+    "claude_wheelhouse/client.py:333 request",
+    5850,
+    61.6
+   ],
+   [
+    "httpx2/_client.py:743 request",
+    5734,
+    60.4
+   ],
+   [
+    "httpx2/_client.py:949 send",
+    5728,
+    60.3
+   ],
+   [
+    "httpcore2/_backends/sync.py:123 read",
+    5573,
+    58.7
+   ],
+   [
+    "httpcore2/_sync/http11.py:194 _receive_event",
+    5573,
+    58.7
+   ],
+   [
+    "httpcore2/_sync/connection_pool.py:191 handle_request",
+    5568,
+    58.6
+   ],
+   [
+    "httpx2/_transports/default.py:225 handle_request",
+    5568,
+    58.6
+   ],
+   [
+    "httpx2/_client.py:1065 _send_single_request",
+    5568,
+    58.6
+   ],
+   [
+    "httpx2/_client.py:1030 _send_handling_redirects",
+    5568,
+    58.6
+   ],
+   [
+    "httpx2/_client.py:996 _send_handling_auth",
+    5568,
+    58.6
+   ],
+   [
+    "httpcore2/_sync/http11.py:63 handle_request",
+    5485,
+    57.7
+   ],
+   [
+    "httpcore2/_sync/connection.py:67 handle_request",
+    5485,
+    57.7
+   ],
+   [
+    "httpcore2/_sync/http11.py:160 _receive_response_headers",
+    5424,
+    57.1
+   ],
+   [
+    "claude_wheelhouse/tui.py:5968 refresh_data",
+    5048,
+    53.1
+   ],
+   [
+    "claude_wheelhouse/client.py:405 refresh",
+    4644,
+    48.9
+   ],
+   [
+    "claude_wheelhouse/client.py:354 get",
+    4628,
+    48.7
+   ],
+   [
+    "claude_wheelhouse/client.py:494 fetch",
+    4628,
+    48.7
+   ],
+   [
+    "claude_wheelhouse/client.py:431 catch_up",
+    4628,
+    48.7
+   ],
+   [
+    "textual/timer.py:150 _run",
+    2245,
+    23.6
+   ],
+   [
+    "textual/timer.py:143 _run_timer",
+    2245,
+    23.6
+   ],
+   [
+    "textual/timer.py:180 _tick",
+    2239,
+    23.6
+   ],
+   [
+    "textual/screen.py:1236 _on_timer_update",
+    1885,
+    19.8
+   ],
+   [
+    "textual/screen.py:1188 _compositor_refresh",
+    1786,
+    18.8
+   ],
+   [
+    "textual/_compositor.py:1200 _render_chops",
+    1648,
+    17.3
+   ],
+   [
+    "textual/_compositor.py:1165 render_partial_update",
+    1648,
+    17.3
+   ],
+   [
+    "textual/_compositor.py:1096 render_update",
+    1648,
+    17.3
+   ],
+   [
+    "textual/_compositor.py:1031 _get_renders",
+    1471,
+    15.5
+   ],
+   [
+    "textual/_styles_cache.py:99 render_widget",
+    1449,
+    15.3
+   ],
+   [
+    "textual/widget.py:4271 render_lines",
+    1449,
+    15.3
+   ],
+   [
+    "textual/_styles_cache.py:163 render",
+    1294,
+    13.6
+   ],
+   [
+    "claude_wheelhouse/client.py:359 command",
+    1227,
+    12.9
+   ],
+   [
+    "claude_wheelhouse/client.py:391 done",
+    1227,
+    12.9
+   ],
+   [
+    "claude_wheelhouse/client.py:1024 set_pinned",
+    1227,
+    12.9
+   ],
+   [
+    "textual/_styles_cache.py:267 render_line",
+    1095,
+    11.5
+   ]
+  ],
+  "self": [
+   [
+    "httpcore2/_backends/sync.py:123 read (line 127)",
+    5551,
+    58.4
+   ],
+   [
+    "selector_events.py:129 _read_from_self (line 132)",
+    249,
+    2.6
+   ],
+   [
+    "<string>:1 <lambda> (line 1)",
+    149,
+    1.6
+   ],
+   [
+    "claude_wheelhouse/tui.py:6615 ranked_keyed (line 6640)",
+    100,
+    1.0
+   ],
+   [
+    "decoder.py:343 raw_decode (line 353)",
+    94,
+    1.0
+   ],
+   [
+    "httpcore2/_utils.py:20 is_socket_readable (line 47)",
+    88,
+    0.9
+   ],
+   [
+    "_weakrefset.py:39 _remove (line 39)",
+    88,
+    0.9
+   ],
+   [
+    "claude_wheelhouse/tui.py:451 item_tip (line 451)",
+    83,
+    0.9
+   ],
+   [
+    "pathlib.py:1007 open (line 1015)",
+    66,
+    0.7
+   ],
+   [
+    "claude_wheelhouse/tui.py:527 item_key (line 527)",
+    61,
+    0.6
+   ],
+   [
+    "textual/reactive.py:290 __get__ (line 290)",
+    55,
+    0.6
+   ],
+   [
+    "httpcore2/_backends/sync.py:129 write (line 138)",
+    55,
+    0.6
+   ],
+   [
+    "rich/text.py:144 __init__ (line 144)",
+    55,
+    0.6
+   ],
+   [
+    "rich/style.py:757 __add__ (line 757)",
+    50,
+    0.5
+   ],
+   [
+    "textual/cache.py:226 __init__ (line 226)",
+    50,
+    0.5
+   ],
+   [
+    "rich/style.py:441 __hash__ (line 441)",
+    50,
+    0.5
+   ],
+   [
+    "textual/color.py:498 __add__ (line 500)",
+    50,
+    0.5
+   ],
+   [
+    "claude_wheelhouse/tui.py:661 row_values (line 664)",
+    44,
+    0.5
+   ],
+   [
+    "textual/strip.py:454 apply_filter (line 454)",
+    44,
+    0.5
+   ],
+   [
+    "textual/_compositor.py:1200 _render_chops (line 1240)",
+    44,
+    0.5
+   ],
+   [
+    "claude_wheelhouse/tui.py:1083 frame (line 1091)",
+    39,
+    0.4
+   ],
+   [
+    "claude_wheelhouse/client.py:525 apply (line 542)",
+    33,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:154 under_way_parents (line 162)",
+    33,
+    0.3
+   ],
+   [
+    "textual/_compositor.py:1200 _render_chops (line 1241)",
+    33,
+    0.3
+   ],
+   [
+    "textual/css/styles.py:1507 get_rule (line 1510)",
+    33,
+    0.3
+   ],
+   [
+    "textual/_styles_cache.py:163 render (line 241)",
+    33,
+    0.3
+   ],
+   [
+    "textual/reactive.py:290 __get__ (line 303)",
+    28,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:6602 hides_at (line 6602)",
+    28,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:6495 item_cells (line 6495)",
+    28,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:6590 completed_hidden (line 6590)",
+    28,
+    0.3
+   ]
+  ],
+  "innermost wheelhouse line": [
+   [
+    "claude_wheelhouse/client.py:333 request (line 341)",
+    5734,
+    60.4
+   ],
+   [
+    "claude_wheelhouse/cli.py:33 run_app (line 57)",
+    1393,
+    14.7
+   ],
+   [
+    "claude_wheelhouse/tui.py:1347 _kept_line (line 1369)",
+    387,
+    4.1
+   ],
+   [
+    "claude_wheelhouse/tui.py:7770 each_pane (line 7779)",
+    221,
+    2.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line (line 1496)",
+    133,
+    1.4
+   ],
+   [
+    "claude_wheelhouse/client.py:333 request (line 352)",
+    116,
+    1.2
+   ],
+   [
+    "claude_wheelhouse/tui.py:6615 ranked_keyed (line 6640)",
+    100,
+    1.0
+   ],
+   [
+    "claude_wheelhouse/tui.py:451 item_tip (line 451)",
+    83,
+    0.9
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line (line 1497)",
+    66,
+    0.7
+   ],
+   [
+    "claude_wheelhouse/features.py:133 read_env (line 139)",
+    66,
+    0.7
+   ],
+   [
+    "claude_wheelhouse/client.py:525 apply (line 542)",
+    61,
+    0.6
+   ],
+   [
+    "claude_wheelhouse/tui.py:527 item_key (line 527)",
+    61,
+    0.6
+   ],
+   [
+    "claude_wheelhouse/tui.py:5681 on_event (line 5710)",
+    44,
+    0.5
+   ],
+   [
+    "claude_wheelhouse/tui.py:661 row_values (line 664)",
+    44,
+    0.5
+   ],
+   [
+    "claude_wheelhouse/tui.py:323 cylon (line 329)",
+    39,
+    0.4
+   ],
+   [
+    "claude_wheelhouse/tui.py:1083 frame (line 1091)",
+    39,
+    0.4
+   ],
+   [
+    "claude_wheelhouse/tui.py:684 cut (line 690)",
+    33,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:154 under_way_parents (line 162)",
+    33,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:1259 keys (line 1260)",
+    33,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:6602 hides_at (line 6602)",
+    28,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:6495 item_cells (line 6495)",
+    28,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:6590 completed_hidden (line 6590)",
+    28,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:399 item_rows (line 420)",
+    28,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:1468 _render_line (line 1494)",
+    28,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:6366 paint_items (line 6445)",
+    22,
+    0.2
+   ],
+   [
+    "claude_wheelhouse/tui.py:6495 item_cells (line 6502)",
+    22,
+    0.2
+   ],
+   [
+    "claude_wheelhouse/client.py:405 refresh (line 419)",
+    22,
+    0.2
+   ],
+   [
+    "claude_wheelhouse/client.py:654 inbox (line 657)",
+    22,
+    0.2
+   ],
+   [
+    "claude_wheelhouse/tui.py:7797 <genexpr> (line 7797)",
+    17,
+    0.2
+   ],
+   [
+    "claude_wheelhouse/tui.py:6974 <genexpr> (line 6974)",
+    17,
+    0.2
+   ],
+   [
+    "claude_wheelhouse/tui.py:1347 _kept_line (line 1355)",
+    17,
+    0.2
+   ],
+   [
+    "claude_wheelhouse/tui.py:673 same (line 676)",
+    17,
+    0.2
+   ],
+   [
+    "claude_wheelhouse/tui.py:1090 <lambda> (line 1090)",
+    17,
+    0.2
+   ],
+   [
+    "claude_wheelhouse/client.py:638 model_state (line 638)",
+    17,
+    0.2
+   ],
+   [
+    "claude_wheelhouse/tui.py:695 fill (line 707)",
+    17,
+    0.2
+   ],
+   [
+    "claude_wheelhouse/client.py:525 apply (line 544)",
+    17,
+    0.2
+   ],
+   [
+    "claude_wheelhouse/tui.py:6366 paint_items (line 6456)",
+    11,
+    0.1
+   ],
+   [
+    "claude_wheelhouse/tui.py:323 cylon (line 326)",
+    11,
+    0.1
+   ],
+   [
+    "claude_wheelhouse/tui.py:313 dimmed (line 316)",
+    11,
+    0.1
+   ],
+   [
+    "claude_wheelhouse/tui.py:1499 dim_dot (line 1507)",
+    11,
+    0.1
+   ]
+  ],
+  "other threads running": [
+   [
+    "httpcore2/_backends/sync.py:123 read",
+    14464,
+    152.3
+   ],
+   [
+    "selector_events.py:141 _write_to_self",
+    94,
+    1.0
+   ],
+   [
+    "decoder.py:343 raw_decode",
+    83,
+    0.9
+   ],
+   [
+    "claude_wheelhouse/tui.py:6642 arrangement",
+    77,
+    0.8
+   ],
+   [
+    "claude_wheelhouse/tui.py:6707 sort_key",
+    66,
+    0.7
+   ],
+   [
+    "textual/drivers/_writer_thread.py:48 run",
+    61,
+    0.6
+   ],
+   [
+    "claude_wheelhouse/ordering.py:36 field",
+    55,
+    0.6
+   ],
+   [
+    "claude_wheelhouse/tui.py:6974 <genexpr>",
+    39,
+    0.4
+   ],
+   [
+    "httpcore2/_backends/sync.py:129 write",
+    33,
+    0.3
+   ],
+   [
+    "pathlib.py:837 stat",
+    33,
+    0.3
+   ],
+   [
+    "httpcore2/_utils.py:20 is_socket_readable",
+    33,
+    0.3
+   ],
+   [
+    "claude_wheelhouse/ordering.py:166 arrange",
+    28,
+    0.3
+   ],
+   [
+    "_weakrefset.py:39 _remove",
+    28,
+    0.3
+   ],
+   [
+    "threading.py:299 __enter__",
+    22,
+    0.2
+   ],
+   [
+    "claude_wheelhouse/ordering.py:193 <genexpr>",
+    22,
+    0.2
+   ]
+  ]
+ },
+ "key": {
+  "wall_s": 6.0,
+  "samples": 1376,
+  "ui_busy_pct": 0.9,
+  "ui_busy_ms": 57,
+  "ui_cpu_ms": 446,
+  "cumulative [function, ms, % of busy]": [
+   [
+    "events.py:86 _run",
+    57,
+    100.0
+   ],
+   [
+    "base_events.py:1910 _run_once",
+    57,
+    100.0
+   ],
+   [
+    "base_events.py:627 run_forever",
+    57,
+    100.0
+   ],
+   [
+    "base_events.py:651 run_until_complete",
+    57,
+    100.0
+   ],
+   [
+    "runners.py:86 run",
+    57,
+    100.0
+   ],
+   [
+    "runners.py:160 run",
+    57,
+    100.0
+   ],
+   [
+    "textual/app.py:2308 run",
+    57,
+    100.0
+   ],
+   [
+    "claude_wheelhouse/cli.py:33 run_app",
+    57,
+    100.0
+   ],
+   [
+    "claude_wheelhouse/cli.py:298 main",
+    57,
+    100.0
+   ],
+   [
+    ".plan/385-bench/profapp.py:1 <module>",
+    57,
+    100.0
+   ],
+   [
+    "textual/_callback.py:45 _invoke",
+    48,
+    84.6
+   ],
+   [
+    "textual/_callback.py:62 invoke",
+    48,
+    84.6
+   ],
+   [
+    "textual/timer.py:180 _tick",
+    48,
+    84.6
+   ],
+   [
+    "textual/timer.py:150 _run",
+    48,
+    84.6
+   ],
+   [
+    "textual/timer.py:143 _run_timer",
+    48,
+    84.6
+   ],
+   [
+    "textual/screen.py:1188 _compositor_refresh",
+    26,
+    46.2
+   ],
+   [
+    "textual/screen.py:1236 _on_timer_update",
+    26,
+    46.2
+   ],
+   [
+    "claude_wheelhouse/tui.py:7770 each_pane",
+    22,
+    38.5
+   ],
+   [
+    "claude_wheelhouse/tui.py:5968 refresh_data",
+    22,
+    38.5
+   ],
+   [
+    "claude_wheelhouse/tui.py:5936 tick",
+    22,
+    38.5
+   ],
+   [
+    "textual/_compositor.py:1200 _render_chops",
+    22,
+    38.5
+   ],
+   [
+    "textual/_compositor.py:1165 render_partial_update",
+    22,
+    38.5
+   ],
+   [
+    "textual/_compositor.py:1096 render_update",
+    22,
+    38.5
+   ],
+   [
+    "textual/worker_manager.py:81 _new_worker",
+    17,
+    30.8
+   ],
+   [
+    "textual/dom.py:496 run_worker",
+    17,
+    30.8
+   ],
+   [
+    "pane.py:83 tick",
+    17,
+    30.8
+   ],
+   [
+    "textual/_styles_cache.py:99 render_widget",
+    17,
+    30.8
+   ],
+   [
+    "textual/widget.py:4271 render_lines",
+    17,
+    30.8
+   ],
+   [
+    "textual/_compositor.py:1031 _get_renders",
+    17,
+    30.8
+   ],
+   [
+    "textual/_styles_cache.py:163 render",
+    13,
+    23.1
+   ],
+   [
+    "textual/worker.py:358 _run",
+    13,
+    23.1
+   ],
+   [
+    "tasks.py:973 factory",
+    13,
+    23.1
+   ],
+   [
+    "base_events.py:451 create_task",
+    13,
+    23.1
+   ],
+   [
+    "tasks.py:412 create_task",
+    13,
+    23.1
+   ],
+   [
+    "textual/worker.py:389 _start",
+    13,
+    23.1
+   ],
+   [
+    "textual/worker_manager.py:65 add_worker",
+    13,
+    23.1
+   ],
+   [
+    "textual/message_pump.py:810 _on_message",
+    9,
+    15.4
+   ],
+   [
+    "textual/message_pump.py:707 _dispatch_message",
+    9,
+    15.4
+   ],
+   [
+    "textual/message_pump.py:634 _process_messages_loop",
+    9,
+    15.4
+   ],
+   [
+    "textual/message_pump.py:562 _process_messages",
+    9,
+    15.4
+   ],
+   [
+    "textual/worker.py:284 _run_threaded",
+    9,
+    15.4
+   ],
+   [
+    "textual/worker.py:346 run",
+    9,
+    15.4
+   ],
+   [
+    "textual/message_pump.py:743 _get_dispatch_methods",
+    4,
+    7.7
+   ],
+   [
+    "textual/worker.py:141 __init__",
+    4,
+    7.7
+   ],
+   [
+    "textual/strip.py:454 apply_filter",
+    4,
+    7.7
+   ],
+   [
+    "textual/widgets/_data_table.py:2474 render_lines",
+    4,
+    7.7
+   ],
+   [
+    "textual/dom.py:775 parent",
+    4,
+    7.7
+   ],
+   [
+    "textual/__init__.py:63 __init__",
+    4,
+    7.7
+   ],
+   [
+    "textual/__init__.py:152 event",
+    4,
+    7.7
+   ],
+   [
+    "threading.py:277 __init__",
+    4,
+    7.7
+   ],
+   [
+    "_base.py:328 __init__",
+    4,
+    7.7
+   ],
+   [
+    "thread.py:164 submit",
+    4,
+    7.7
+   ],
+   [
+    "base_events.py:849 run_in_executor",
+    4,
+    7.7
+   ],
+   [
+    "textual/css/_style_properties.py:414 __get__",
+    4,
+    7.7
+   ],
+   [
+    "textual/_styles_cache.py:267 render_line",
+    4,
+    7.7
+   ],
+   [
+    "textual/css/styles.py:1507 get_rule",
+    4,
+    7.7
+   ],
+   [
+    "textual/css/_style_properties.py:1162 __get__",
+    4,
+    7.7
+   ],
+   [
+    "textual/dom.py:1185 background_colors",
+    4,
+    7.7
+   ],
+   [
+    "threading.py:394 notify",
+    4,
+    7.7
+   ],
+   [
+    "queue.py:122 put",
+    4,
+    7.7
+   ]
+  ],
+  "self": [
+   [
+    "textual/message_pump.py:743 _get_dispatch_methods (line 754)",
+    4,
+    7.7
+   ],
+   [
+    "textual/worker.py:141 __init__ (line 141)",
+    4,
+    7.7
+   ],
+   [
+    "textual/strip.py:454 apply_filter (line 454)",
+    4,
+    7.7
+   ],
+   [
+    "textual/dom.py:775 parent (line 775)",
+    4,
+    7.7
+   ],
+   [
+    "textual/__init__.py:63 __init__ (line 63)",
+    4,
+    7.7
+   ],
+   [
+    "threading.py:277 __init__ (line 293)",
+    4,
+    7.7
+   ],
+   [
+    "textual/css/_style_properties.py:414 __get__ (line 414)",
+    4,
+    7.7
+   ],
+   [
+    "textual/css/styles.py:1507 get_rule (line 1510)",
+    4,
+    7.7
+   ],
+   [
+    "threading.py:394 notify (line 410)",
+    4,
+    7.7
+   ],
+   [
+    "inspect.py:405 _has_coroutine_mark (line 409)",
+    4,
+    7.7
+   ],
+   [
+    "textual/_compositor.py:1200 _render_chops (line 1240)",
+    4,
+    7.7
+   ],
+   [
+    "textual/_styles_cache.py:163 render (line 241)",
+    4,
+    7.7
+   ],
+   [
+    "contextlib.py:299 helper (line 299)",
+    4,
+    7.7
+   ]
+  ],
+  "innermost wheelhouse line": [
+   [
+    "claude_wheelhouse/cli.py:33 run_app (line 57)",
+    31,
+    53.8
+   ],
+   [
+    "claude_wheelhouse/tui.py:7770 each_pane (line 7779)",
+    17,
+    30.8
+   ],
+   [
+    "claude_wheelhouse/tui.py:7770 each_pane (line 7775)",
+    4,
+    7.7
+   ],
+   [
+    "claude_wheelhouse/tui.py:5097 write (line 5098)",
+    4,
+    7.7
+   ]
+  ],
+  "other threads running": [
+   [
+    "httpcore2/_backends/sync.py:123 read",
+    61,
+    107.7
+   ],
+   [
+    "pathlib.py:837 stat",
+    17,
+    30.8
+   ],
+   [
+    "textual/drivers/linux_driver.py:434 process_selector_events",
+    4,
+    7.7
+   ],
+   [
+    "threading.py:311 _acquire_restore",
+    4,
+    7.7
+   ]
+  ]
+ },
+ "burst": {
+  "wall_s": 6.0,
+  "samples": 1352,
+  "ui_busy_pct": 1.0,
+  "ui_busy_ms": 62,
+  "ui_cpu_ms": 570,
+  "cumulative [function, ms, % of busy]": [
+   [
+    "events.py:86 _run",
+    62,
+    100.0
+   ],
+   [
+    "base_events.py:1910 _run_once",
+    62,
+    100.0
+   ],
+   [
+    "base_events.py:627 run_forever",
+    62,
+    100.0
+   ],
+   [
+    "base_events.py:651 run_until_complete",
+    62,
+    100.0
+   ],
+   [
+    "runners.py:86 run",
+    62,
+    100.0
+   ],
+   [
+    "runners.py:160 run",
+    62,
+    100.0
+   ],
+   [
+    "textual/app.py:2308 run",
+    62,
+    100.0
+   ],
+   [
+    "claude_wheelhouse/cli.py:33 run_app",
+    62,
+    100.0
+   ],
+   [
+    "claude_wheelhouse/cli.py:298 main",
+    62,
+    100.0
+   ],
+   [
+    ".plan/385-bench/profapp.py:1 <module>",
+    62,
+    100.0
+   ],
+   [
+    "textual/_callback.py:45 _invoke",
+    44,
+    71.4
+   ],
+   [
+    "textual/_callback.py:62 invoke",
+    44,
+    71.4
+   ],
+   [
+    "textual/timer.py:180 _tick",
+    44,
+    71.4
+   ],
+   [
+    "textual/timer.py:150 _run",
+    44,
+    71.4
+   ],
+   [
+    "textual/timer.py:143 _run_timer",
+    44,
+    71.4
+   ],
+   [
+    "claude_wheelhouse/tui.py:5968 refresh_data",
+    22,
+    35.7
+   ],
+   [
+    "claude_wheelhouse/tui.py:5936 tick",
+    22,
+    35.7
+   ],
+   [
+    "textual/screen.py:1188 _compositor_refresh",
+    22,
+    35.7
+   ],
+   [
+    "textual/screen.py:1236 _on_timer_update",
+    22,
+    35.7
+   ],
+   [
+    "selector_events.py:129 _read_from_self",
+    13,
+    21.4
+   ],
+   [
+    "claude_wheelhouse/tui.py:7770 each_pane",
+    13,
+    21.4
+   ],
+   [
+    "textual/_compositor.py:1031 _get_renders",
+    13,
+    21.4
+   ],
+   [
+    "textual/_compositor.py:1200 _render_chops",
+    13,
+    21.4
+   ],
+   [
+    "textual/_compositor.py:1165 render_partial_update",
+    13,
+    21.4
+   ],
+   [
+    "textual/_compositor.py:1096 render_update",
+    13,
+    21.4
+   ],
+   [
+    "claude_wheelhouse/tui.py:6300 paint_sessions",
+    9,
+    14.3
+   ],
+   [
+    "textual/worker.py:284 _run_threaded",
+    9,
+    14.3
+   ],
+   [
+    "textual/worker.py:346 run",
+    9,
+    14.3
+   ],
+   [
+    "textual/worker.py:358 _run",
+    9,
+    14.3
+   ],
+   [
+    "tasks.py:973 factory",
+    9,
+    14.3
+   ],
+   [
+    "base_events.py:451 create_task",
+    9,
+    14.3
+   ],
+   [
+    "tasks.py:412 create_task",
+    9,
+    14.3
+   ],
+   [
+    "textual/worker.py:389 _start",
+    9,
+    14.3
+   ],
+   [
+    "textual/worker_manager.py:65 add_worker",
+    9,
+    14.3
+   ],
+   [
+    "textual/worker_manager.py:81 _new_worker",
+    9,
+    14.3
+   ],
+   [
+    "textual/dom.py:496 run_worker",
+    9,
+    14.3
+   ],
+   [
+    "pane.py:83 tick",
+    9,
+    14.3
+   ],
+   [
+    "textual/_styles_cache.py:99 render_widget",
+    9,
+    14.3
+   ],
+   [
+    "textual/widget.py:4271 render_lines",
+    9,
+    14.3
+   ],
+   [
+    "threading.py:394 notify",
+    9,
+    14.3
+   ],
+   [
+    "queue.py:122 put",
+    9,
+    14.3
+   ],
+   [
+    "textual/drivers/_writer_thread.py:20 write",
+    9,
+    14.3
+   ],
+   [
+    "textual/drivers/linux_driver.py:187 write",
+    9,
+    14.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:5097 write",
+    9,
+    14.3
+   ],
+   [
+    "textual/app.py:4588 _begin_update",
+    9,
+    14.3
+   ],
+   [
+    "textual/app.py:3821 _display",
+    9,
+    14.3
+   ],
+   [
+    "textual/widgets/_data_table.py:991 get_row",
+    4,
+    7.1
+   ],
+   [
+    "claude_wheelhouse/tui.py:695 fill",
+    4,
+    7.1
+   ],
+   [
+    "threading.py:308 _release_save",
+    4,
+    7.1
+   ],
+   [
+    "threading.py:323 wait",
+    4,
+    7.1
+   ],
+   [
+    "threading.py:468 acquire",
+    4,
+    7.1
+   ],
+   [
+    "thread.py:183 _adjust_thread_count",
+    4,
+    7.1
+   ],
+   [
+    "thread.py:164 submit",
+    4,
+    7.1
+   ],
+   [
+    "base_events.py:849 run_in_executor",
+    4,
+    7.1
+   ],
+   [
+    "textual/message_pump.py:146 _parent",
+    4,
+    7.1
+   ],
+   [
+    "textual/dom.py:783 screen",
+    4,
+    7.1
+   ],
+   [
+    "textual/widget.py:2284 region",
+    4,
+    7.1
+   ],
+   [
+    "<string>:1 <lambda>",
+    4,
+    7.1
+   ],
+   [
+    "textual/dom.py:1084 rich_style",
+    4,
+    7.1
+   ],
+   [
+    "textual/css/styles.py:1386 rich_style",
+    4,
+    7.1
+   ]
+  ],
+  "self": [
+   [
+    "selector_events.py:129 _read_from_self (line 132)",
+    13,
+    21.4
+   ],
+   [
+    "threading.py:394 notify (line 410)",
+    9,
+    14.3
+   ],
+   [
+    "textual/widgets/_data_table.py:991 get_row (line 1007)",
+    4,
+    7.1
+   ],
+   [
+    "threading.py:308 _release_save (line 308)",
+    4,
+    7.1
+   ],
+   [
+    "textual/message_pump.py:146 _parent (line 146)",
+    4,
+    7.1
+   ],
+   [
+    "<string>:1 <lambda> (line 1)",
+    4,
+    7.1
+   ],
+   [
+    "pane.py:559 outcome (line 561)",
+    4,
+    7.1
+   ],
+   [
+    "textual/content.py:1329 render (line 1417)",
+    4,
+    7.1
+   ],
+   [
+    "_weakrefset.py:39 _remove (line 39)",
+    4,
+    7.1
+   ],
+   [
+    "contextlib.py:104 __init__ (line 108)",
+    4,
+    7.1
+   ],
+   [
+    "<frozen abc>:117 __instancecheck__ (line 117)",
+    4,
+    7.1
+   ]
+  ],
+  "innermost wheelhouse line": [
+   [
+    "claude_wheelhouse/cli.py:33 run_app (line 57)",
+    31,
+    50.0
+   ],
+   [
+    "claude_wheelhouse/tui.py:7770 each_pane (line 7779)",
+    13,
+    21.4
+   ],
+   [
+    "claude_wheelhouse/tui.py:5097 write (line 5098)",
+    9,
+    14.3
+   ],
+   [
+    "claude_wheelhouse/tui.py:695 fill (line 713)",
+    4,
+    7.1
+   ],
+   [
+    "claude_wheelhouse/tui.py:684 cut (line 690)",
+    4,
+    7.1
+   ]
+  ],
+  "other threads running": [
+   [
+    "httpcore2/_backends/sync.py:123 read",
+    71,
+    114.3
+   ],
+   [
+    "threading.py:311 _acquire_restore",
+    4,
+    7.1
+   ]
+  ]
+ }
+}

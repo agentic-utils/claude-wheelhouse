@@ -1,0 +1,96 @@
+{
+ "label": "exp-coalesce-load",
+ "load": 1,
+ "cpu_busy_pct": {
+  "rest": 18,
+  "sweep": 100,
+  "hover": 100
+ },
+ "own_cpu_pct": {
+  "rest": {
+   "app_cpu_pct": 13,
+   "daemon_cpu_pct": 2,
+   "others_pct": 3
+  },
+  "sweep": {
+   "app_cpu_pct": 25,
+   "daemon_cpu_pct": 3,
+   "load_cpu_pct": 72,
+   "others_pct": 0
+  },
+  "hover": {
+   "app_cpu_pct": 18,
+   "daemon_cpu_pct": 3,
+   "load_cpu_pct": 79,
+   "others_pct": 0
+  }
+ },
+ "core": "13",
+ "loadavg": [
+  "2.57",
+  "3.77",
+  "10.32"
+ ],
+ "at_rest": {
+  "writes_per_s": 22.8,
+  "bytes_per_s": 70065,
+  "inbox_row_writes": 0
+ },
+ "summary": {
+  "sweep_settle": {
+   "n": 5,
+   "missed": 0,
+   "p50": 616.8,
+   "p95": 701.1,
+   "max": 701.1
+  },
+  "hover": {
+   "n": 30,
+   "missed": 1,
+   "p50": 38.7,
+   "p95": 121.9,
+   "max": 167.9
+  }
+ },
+ "raw": {
+  "sweep_settle": [
+   701.1,
+   656.5,
+   616.8,
+   575.6,
+   578.9
+  ],
+  "hover": [
+   121.9,
+   null,
+   79.1,
+   25.6,
+   36.1,
+   23.4,
+   119.4,
+   167.9,
+   31.5,
+   67.5,
+   27.4,
+   34.6,
+   24.5,
+   56.7,
+   30.5,
+   66.3,
+   20.8,
+   76.8,
+   34.2,
+   79.6,
+   26.8,
+   60.4,
+   26.8,
+   77.5,
+   26.1,
+   42.4,
+   35.1,
+   82.9,
+   38.7,
+   75.4
+  ]
+ }
+}
