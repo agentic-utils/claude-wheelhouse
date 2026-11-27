@@ -1466,12 +1466,34 @@ class RowCells(Widget):
         super().__init__(**kwargs)
         self.column = column   # "eye" or "dot" (SessionList.cell_spans)
         self.table: "SessionList | None" = None
+        self.kept: dict[tuple, Strip] = {}   # its lines as drawn, by line and look (render_lines)
+        self.kept_for = -1   # the list's drawing (SessionList.drawn) they were drawn from
 
     def render_lines(self, crop: Region) -> list[Strip]:
-        if self.table is None:
+        """Its lines, each drawn once for each look of its cells: the eye's eight places, or the
+        dot's two shades, while the list draws nothing new (SessionList.drawn). So a frame
+        costs a lookup a line; the list's own line is asked for only when the list changed."""
+        table = self.table
+        if table is None:
             return super().render_lines(crop)
-        with self.table.styled():   # the list's style worked out once for these lines, not per line
-            return super().render_lines(crop)
+        if table.drawn != self.kept_for:
+            self.kept.clear()
+            self.kept_for = table.drawn
+        look = eye_at(table.eye_frame, table.EYE) if self.column == "eye" else dot_dimmed(table.eye_frame)
+        offset = self.region.offset - table.region.offset
+        keys = [(y, look, offset, self.size.width) for y in crop.line_range]
+        if missing := [k for k in keys if k not in self.kept]:
+            filters, background = self.get_line_filters(), self.background_colors[1]
+            with table.styled():   # the list's style worked out once for these lines, not per line
+                for key in missing:
+                    strip = self.render_line(key[0])
+                    for line_filter in filters:   # as Textual's styles cache does for every widget
+                        strip = strip.apply_filter(line_filter, background)
+                    self.kept[key] = strip
+        strips = [self.kept[k] for k in keys]
+        if crop.column_span != (0, self.size.width):
+            strips = [strip.crop(*crop.column_span) for strip in strips]
+        return strips
 
     def render_line(self, y: int) -> Strip:
         table, width = self.table, self.size.width
@@ -1516,6 +1538,7 @@ class SessionList(SinkList):
         self.placing = False   # a place_cells asked for and not yet run
 
     cells: tuple = ()   # the windows over the eyes and the dots (RowCells), once mounted (watch)
+    drawn = 0   # counts the list's refreshes: the windows' kept lines are good while it stands (RowCells)
 
     def watch(self, *cells: RowCells) -> None:
         """The windows that draw the animated cells over the list (RowCells)."""
@@ -1571,9 +1594,16 @@ class SessionList(SinkList):
         """The list drawn again, and the windows over it with it, as they show what it draws
         (RowCells): a few short lines each. Not their place, which render_lines keeps."""
         super().refresh(*regions, repaint=repaint, layout=layout, recompose=recompose)
+        self.drawn += 1
         for window in self.cells:
-            if window.display:
+            if not window.display:
+                continue
+            if not regions:
                 window.refresh()
+                continue
+            at = Region(*(window.region.offset - self.region.offset), *window.size)
+            if parts := [part.translate(-at.offset) for r in regions if (part := r.intersection(at))]:
+                window.refresh(*parts)   # the window's part of what the list draws again
         return self
 
     def name_room(self, rows: list[tuple]) -> int:
@@ -1599,6 +1629,8 @@ class SessionList(SinkList):
         if swept == self.swept and blinked == self.blinked:
             return
         was, moved, flashed = self.swept, swept != self.swept, blinked != self.blinked
+        if was is None or was[:2] != swept[:2]:
+            self.drawn += 1   # other rows busy or blue: the windows' kept lines go (RowCells)
         self.swept, self.blinked = swept, blinked
         cells = eye_change(was[2], swept[2], self.EYE) if moved and was is not None and was[:2] == swept[:2] else None
         eye = len(self.columns) - 1   # the eye's cell, the last (_render_line): its cells alone drawn again (#327)
