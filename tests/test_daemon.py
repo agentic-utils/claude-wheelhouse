@@ -31,6 +31,7 @@ def daemon(store, monkeypatch, sdk_on):
     """A daemon in SDK mode, which a remote client's sessions need (test_sdk_mode_off_refuses_new_sessions)."""
     monkeypatch.setattr(launch, "open_session", lambda store, sid, may_tab=True: None)
     monkeypatch.setattr(launch, "restore_session", lambda store, sid, sdk=None, may_tab=True: None)
+    monkeypatch.setattr(launch, "open_shell", lambda store, cwd, title, *a, **k: None)   # /shell: no real tab (#388)
     d = Daemon(store, hosts("127.0.0.1", 7428), TOKEN, inline=True)
     d.feed = Feed(start=100)
     yield d

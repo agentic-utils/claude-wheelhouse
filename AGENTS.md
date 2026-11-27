@@ -256,6 +256,10 @@ and `transcripts.py` the transcripts the core's and the stats module's tests wri
   tabs, stub the plan usage poll (no test runs the real `claude`: `test_plan_usage.py`
   uses a fake, and `WHEELHOUSE_CLAUDE` points every other probe, a test-started daemon's
   too, at one that isn't there), the tutorial offer and the dwell timer. A test that needs a real host or the shipped behaviour opts in explicitly.
+- No test starts Windows (#388): on WSL a real `cmd.exe` or `wt.exe` opens a Windows
+  Terminal tab. `no_windows_started` refuses any process start that names `cmd.exe`,
+  `wt.exe` or `powershell.exe`, and fails the test even when the code caught the error.
+  Stub the launch (`launch.open_tab`, `launch.open_shell`), or take `fake_launchers`.
 - A test marked `both` runs three ways (the `via` fixture): through a hub in process, and
   through a daemon served on the test's database, fetching at each refresh or on the
   client's own threads. Mark a TUI test `both` when its behaviour must hold through the

@@ -1,4 +1,6 @@
 import json
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -369,3 +371,29 @@ def test_shell_env_drops_the_wheelhouses_and_claudes_variables():
     base = {"PATH": "/bin", "WHEELHOUSE_DB": "x", "WHEELHOUSE_SESSION_ID": "s", "WHEELHOUSE_TOKEN": "t",
             "CLAUDECODE": "1", "CLAUDE_CONFIG_DIR": "/c", "HOME": "/h"}
     assert launch.shell_env(base) == {"PATH": "/bin", "CLAUDE_CONFIG_DIR": "/c", "HOME": "/h"}
+
+
+@pytest.mark.parametrize("start, desc", [
+    (lambda: subprocess.run(["cmd.exe", "/c", "echo"]), "subprocess.run, a bare name"),
+    (lambda: subprocess.Popen(["/nonexistent/wt.exe", "new-tab"]), "Popen, a path"),
+    (lambda: subprocess.run("true; /nonexistent/wt.exe new-tab", shell=True), "a shell line"),
+    (lambda: os.system("/nonexistent/powershell.exe -c x"), "os.system"),
+    (lambda: os.posix_spawnp("/nonexistent/cmd.exe", ["cmd.exe"], {}), "os.posix_spawnp"),
+])
+def test_no_test_starts_windows(no_windows_started, start, desc):
+    """#388: a test that starts cmd.exe, wt.exe or PowerShell is refused, and fails at its end
+    though the code under test caught the error. The record is taken here, so this one passes."""
+    before = len(no_windows_started)
+    with pytest.raises(PermissionError, match="test guard"):
+        start()
+    assert len(no_windows_started) == before + 1, desc
+    del no_windows_started[before:]
+
+
+def test_fake_launchers_are_let_through(fake_launchers, no_windows_started):
+    """#388: fake_launchers' own cmd.exe and wt.exe run, first on PATH; a real one still doesn't."""
+    subprocess.run(["cmd.exe", "/c", "wt.exe", "new-tab"], check=True)
+    assert (fake_launchers / "calls.log").read_text() == "cmd.exe /c wt.exe new-tab\n"
+    with pytest.raises(PermissionError, match="test guard"):
+        subprocess.run(["/nonexistent/wt.exe"])
+    no_windows_started.pop()

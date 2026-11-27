@@ -2,6 +2,8 @@ import functools
 import itertools
 import json
 import os
+import re
+import shutil
 import signal
 import subprocess
 import time
@@ -581,6 +583,99 @@ def no_group_kill(monkeypatch):
     monkeypatch.setattr(liveness, "getpgid", lambda pid: -pid)
     monkeypatch.setattr(liveness, "killpg", lambda group, sig: killed.append((group, sig)))
     return killed
+
+
+# No test starts Windows: a real cmd.exe or wt.exe on WSL opens a Windows Terminal tab and
+# takes the focus (#388). CI has none, so a test that reaches one passes there unseen.
+LAUNCHER = re.compile(r"[^\s\"'&|;()<>]*\b(?:cmd|wt|powershell|pwsh)\.exe\b", re.IGNORECASE)
+SPAWN_REFUSED = []   # every start refused, as (the test running, the call)
+fake_launchers_dir = [None]   # the bin of the test's fake launchers (fake_launchers), else None
+
+
+def launchers_in(words) -> list[str]:
+    """Each word of a command (a shell line's too) that names cmd.exe, wt.exe or PowerShell."""
+    return [m.group() for w in words for m in LAUNCHER.finditer(os.fsdecode(w))]
+
+
+def faked(word: str, env) -> bool:
+    """The launcher a word names is the test's fake: a path into fake_launchers' bin, or a bare
+    name the command's PATH finds there first."""
+    fakes = fake_launchers_dir[0]
+    if fakes is None:
+        return False
+    path = (env or os.environ).get("PATH", os.defpath)
+    found = word if "/" in word else shutil.which(word.strip("\\"), path=os.fsdecode(path))
+    return found is not None and Path(found).resolve().parent == fakes.resolve()
+
+
+def refuse_launcher(name: str, words, env=None) -> None:
+    """Raises PermissionError, and records it, for a start that names a real launcher."""
+    words = [w for w in ([words] if isinstance(words, (str, bytes, os.PathLike)) else words) if w is not None]
+    real = [w for w in launchers_in(words) if not faked(w, env)]
+    if real:
+        call = f"{name}({' '.join(os.fsdecode(w) for w in words)[:200]}): starts {real[0]}"
+        SPAWN_REFUSED.append((running[0], call))
+        raise PermissionError(f"test guard: {call}")
+
+
+def launcher_guarded(name, real, words_env):
+    @functools.wraps(real)
+    def guarded(*args, **kwargs):
+        refuse_launcher(name, *words_env(*args, **kwargs))
+        return real(*args, **kwargs)
+    return guarded
+
+
+real_execute_child = subprocess.Popen._execute_child
+
+
+def guarded_execute_child(self, args, executable, *rest, **kwargs):
+    """Every subprocess start (run, check_output, Popen, asyncio's, os.popen) passes here."""
+    env = rest[5] if len(rest) > 5 else kwargs.get("env")
+    refuse_launcher("subprocess", [executable, *([args] if isinstance(args, (str, bytes)) else args)], env)
+    return real_execute_child(self, args, executable, *rest, **kwargs)
+
+
+# for the whole run, as the signal guard: os.exec*p, os.execl* and os.spawnl* call these
+subprocess.Popen._execute_child = guarded_execute_child
+for _name, _words_env in [
+        ("execv", lambda path, args: ([path, *args], None)),
+        ("execve", lambda path, args, env: ([path, *args], env)),
+        ("spawnv", lambda mode, path, args: ([path, *args], None)),
+        ("spawnve", lambda mode, path, args, env: ([path, *args], env)),
+        ("spawnvp", lambda mode, file, args: ([file, *args], None)),
+        ("spawnvpe", lambda mode, file, args, env: ([file, *args], env)),
+        ("posix_spawn", lambda path, argv, env, **kw: ([path, *argv], env)),
+        ("posix_spawnp", lambda path, argv, env, **kw: ([path, *argv], env)),
+        ("system", lambda command: ([command], None))]:
+    setattr(os, _name, launcher_guarded(f"os.{_name}", getattr(os, _name), _words_env))
+
+
+@pytest.fixture(autouse=True)
+def no_windows_started(request):
+    """No test starts cmd.exe, wt.exe or PowerShell (refuse_launcher), unless it asks for
+    fake_launchers: the start is refused, and the test fails naming it, though the code under
+    test caught the error."""
+    fake_launchers_dir[0] = None
+    before = len(SPAWN_REFUSED)
+    yield SPAWN_REFUSED
+    fake_launchers_dir[0] = None
+    mine = [call for _, call in SPAWN_REFUSED[before:]]
+    assert not mine, f"{request.node.nodeid} started Windows: {mine}. Stub the launch, or use fake_launchers"
+
+
+@pytest.fixture
+def fake_launchers(tmp_path, monkeypatch, no_windows_started):
+    """cmd.exe, wt.exe and powershell.exe as scripts first on PATH, each adding its arguments
+    as a line to calls.log in the bin it returns. The test's only way past no_windows_started."""
+    fakes = tmp_path / "fake-launchers"
+    fakes.mkdir()
+    for name in ("cmd.exe", "wt.exe", "powershell.exe"):
+        (fakes / name).write_text(f'#!/bin/sh\necho "{name} $*" >> "{fakes}/calls.log"\n')
+        (fakes / name).chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fakes}{os.pathsep}{os.environ['PATH']}")
+    fake_launchers_dir[0] = fakes
+    return fakes
 
 
 @pytest.fixture
