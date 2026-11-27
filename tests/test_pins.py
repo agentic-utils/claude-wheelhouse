@@ -207,6 +207,7 @@ async def test_a_pin_shows_before_the_daemon_answers(store, sid, tmp_path, via, 
     ("inbox unfetched", "the pin's answer bringing no inbox (an older daemon's) and the lane's inbox fetch "
                         "failing: the pin stays drawn until a fresh inbox shows it"),
     ("inbox brought", "the pin's answer brings the inbox as the pin left it: the lane fetches no inbox"),
+    ("deletes", "Deletes typed while the first is held on the daemon queue on the lane: no thread each (#391)"),
 ])
 async def test_the_lane_keeps_order_and_always_lands(store, sid, tmp_path, via, case, desc):
     """#385 review: a command on the lane always lands, whatever goes wrong after it is sent, and
@@ -216,6 +217,7 @@ async def test_the_lane_keeps_order_and_always_lands(store, sid, tmp_path, via, 
     t1, t2 = post(store, sid, tmp_path, "task", "one"), post(store, sid, tmp_path, "task", "two")
     q = post(store, sid, tmp_path, "question", "which db?", status="closed")
     p = store.post_item(sid, "permission", "Bash: make")
+    asked = [post(store, sid, tmp_path, "question", f"ask {n}") for n in range(3)] if case == "deletes" else []
     app = WheelhouseApp(store)
     go, sent = threading.Event(), threading.Event()
     lane = []
@@ -255,6 +257,11 @@ async def test_the_lane_keeps_order_and_always_lands(store, sid, tmp_path, via, 
             app.client.set_pinned = held(app.client.set_pinned)
             await on(t1)
             await pilot.press("alt+p")
+        elif case == "deletes":
+            app.client.close = held(app.client.close)
+            for ref in asked:
+                await on(ref)
+                await pilot.press("delete", "alt+y")   # an open question: confirmed
         elif case == "allow ctrl+r":
             await pilot.press("alt+v")   # the closed question in sight
             app.client.answer_permission = held(app.client.answer_permission)
@@ -295,6 +302,10 @@ async def test_the_lane_keeps_order_and_always_lands(store, sid, tmp_path, via, 
             await on(q)
             await pilot.press("ctrl+r")
             assert store.item(sid, q)["status"] == "closed", f"{desc}: not sent ahead of the Allow"
+        elif case == "deletes":
+            assert len(app.calls) == len(asked), f"{desc}: each Delete under way"
+            assert not [w for w in app.workers if w.group == "delete" and not w.is_finished], desc
+            assert all(store.item(sid, ref)["status"] == "open" for ref in asked), f"{desc}: none landed yet"
         lane_workers = [w for w in app.workers if w.group == "lane" and not w.is_finished]
         assert len(lane_workers) <= 1, f"{desc}: one thread of the pool however many queue (on_lane)"
         await landed()
@@ -305,6 +316,8 @@ async def test_the_lane_keeps_order_and_always_lands(store, sid, tmp_path, via, 
         elif case == "pin ctrl+z pin":
             assert store.item(sid, t1)["pinned"], f"{desc}: {notices(app)}"
             assert notices(app)[-3:] == [f"pinned {t1}", f"undone: pinned {t1}", f"pinned {t1}"], desc
+        elif case == "deletes":
+            assert [store.item(sid, ref)["status"] for ref in asked] == ["closed"] * 3, f"{desc}: {notices(app)}"
         elif case == "allow ctrl+r":
             assert store.item(sid, p)["status"] == "allowed", desc
             assert store.item(sid, q)["status"] == "answered", f"{desc}: {notices(app)}"
@@ -323,6 +336,50 @@ async def test_the_lane_keeps_order_and_always_lands(store, sid, tmp_path, via, 
                 await pilot.pause(0.02)
             assert not app.client.letting_go and not app.client.expecting, f"{desc}: let go once fresh"
             assert str(table.get_row(f"{sid}|{t1}")[0]) == PIN, f"{desc}: as fetched"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("via", ["threaded"], indirect=True)
+@pytest.mark.parametrize("first, desc", [
+    ("delete", "a Delete answered as the app quits: the Allow queued behind it still reaches the daemon"),
+    ("pin", "a pin answered as the app quits: the Allow queued behind it still reaches the daemon"),
+])
+async def test_quitting_lets_the_lane_finish(store, sid, tmp_path, via, monkeypatch, first, desc):
+    """#399 review: a job on the lane hands its landing to the UI thread without waiting for
+    it, so a close waiting on the calls under way (on_unmount) never holds up the job behind."""
+    import threading
+    import time
+    from claude_wheelhouse import tui
+    monkeypatch.setattr(tui, "CALLS_WAIT", 3)
+    done = post(store, sid, tmp_path, "task", "done", status="done")
+    t2 = post(store, sid, tmp_path, "task", "two")
+    p = store.post_item(sid, "permission", "Bash: make")
+    app = WheelhouseApp(store)
+    go, sent = threading.Event(), threading.Event()
+
+    def held(real):
+        def call(*args):
+            if not sent.is_set():   # the first call alone, held until the app quits
+                sent.set()
+                go.wait(10)
+            return real(*args)
+        return call
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        table = app.items_table
+        table.focus()
+        app.client.close, app.client.set_pinned = held(app.client.close), held(app.client.set_pinned)
+        for ref, key in [(done, "delete") if first == "delete" else (t2, "alt+p"), (p, "alt+y")]:
+            table.move_cursor(row=table.get_row_index(f"{sid}|{ref}"))
+            await pilot.pause()
+            await pilot.press(key)
+        assert sent.wait(10), f"{desc}: the first call reached the daemon"
+        threading.Timer(0.3, go.set).start()   # answered once the close has started waiting
+        started = time.monotonic()
+        app.exit()
+    took = time.monotonic() - started
+    assert store.item(sid, p)["status"] == "allowed", f"{desc}: the Allow behind was dropped after {took:.1f}s"
+    assert took < 2, f"{desc}: the close waited {took:.1f}s"
 
 
 @pytest.mark.anyio

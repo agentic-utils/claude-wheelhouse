@@ -6763,6 +6763,28 @@ class WheelhouseApp(App):
             return False
         return True
 
+    def post_soon(self, callback: Callable[[], object]) -> bool:
+        """From a job on the lane (on_lane): callback on the UI thread, as post does, but without
+        waiting for it to run, so the job behind never waits on the UI thread, which a close
+        holds while it waits for the calls under way (on_unmount). In the order posted. False
+        if the app is closing, so it never runs. Follows App.call_from_thread."""
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            return False
+
+        async def run() -> None:
+            with self._context():
+                callback()
+
+        def said(future) -> None:
+            if not future.cancelled() and (error := future.exception()) is not None:
+                self.log.error(f"command lane landing: {error!r}")
+        try:
+            asyncio.run_coroutine_threadsafe(run(), loop).add_done_callback(said)
+        except RuntimeError:   # the loop closed meanwhile
+            return False
+        return True
+
     def read_landed(self, sid: str) -> None:
         self.paint_sessions()
         self.each_pane("landed", sid)   # a repaint, not a tick: a tick would start another read
@@ -9443,15 +9465,16 @@ class WheelhouseApp(App):
                 self.client.fetch_now()   # one that fails is left to the refresh (RemoteClient.fetch_now)
             finally:   # whatever went wrong, the lane moves on and the key behind isn't held
                 made.set()
-                if not self.post(land):
+                if not self.post_soon(land):
                     self.sending.remove(made)
                     self.holding.discard(made)
         self.on_lane(work)
 
     def on_lane(self, job: Callable[[], None]) -> None:
         """job run on the command lane, after those asked before it: one worker runs them all in
-        turn (drain_lane), so however many queue on a daemon that hangs, they hold one thread of
-        the pool, never the rest (a conversation's read, a spawn)."""
+        turn (drain_lane), so however many queue on a daemon that hangs, commands and Deletes
+        (delete_off_thread), they hold one thread of the pool, never the rest (a conversation's
+        read, a spawn)."""
         with self.lane_lock:
             self.lane_jobs.append(job)
             if self.lane_running:
@@ -9529,7 +9552,7 @@ class WheelhouseApp(App):
 
         def work() -> None:
             value = reading()
-            self.post(lambda: self.is_running and bool(self.screen_stack) and done(value))
+            self.post_soon(lambda: self.is_running and bool(self.screen_stack) and done(value))
         self.on_lane(work)
 
     def open_after_read(self, title: str, read: Callable[[], object], dialog: Callable[[object], Screen],
@@ -9581,9 +9604,9 @@ class WheelhouseApp(App):
         self.send_off(call, landed, undo)
 
     def delete_off_thread(self, acts: list, landed: Callable[[list], None]) -> None:
-        """Delete's rows off the inbox at once, and the hub's calls on a worker thread, one after
-        another (#234): a call is a daemon round trip, queued behind the hub's tick, so twenty
-        took seconds on the UI thread. acts: each (item, its family, [] for none), deleted as
+        """Delete's rows off the inbox at once, and the hub's calls on the command lane (on_lane),
+        one after another (#234): a call is a daemon round trip, queued behind the hub's tick, so
+        twenty took seconds on the UI thread. acts: each (item, its family, [] for none), deleted as
         Delete does (Hub.delete_family, else Hub.close). Until they land their rows stay off
         whatever a refresh brings (going); then landed(done) on the UI thread, done the acts that
         acted, to say and make undoable, and the inbox read again. One that failed comes back,
@@ -9633,8 +9656,8 @@ class WheelhouseApp(App):
                         results.append(e)
             finally:
                 made.set()
-            self.post(lambda: self.as_typed(at, lambda: self.deletes_landed(keys, acts, results, landed, made)))
-        self.run_worker(work, thread=True, group="delete", exit_on_error=False)
+            self.post_soon(lambda: self.as_typed(at, lambda: self.deletes_landed(keys, acts, results, landed, made)))
+        self.on_lane(work)   # behind the commands asked before it, on the lane's one thread, not a thread each
 
     def deletes_landed(self, keys: set, acts: list, results: list, landed: Callable[[list], None],
                        made: threading.Event) -> None:
