@@ -2902,6 +2902,18 @@ class DocView(Beneath, Screen):
 
 
 @dataclasses.dataclass(frozen=True)
+class DocSave:
+    """A doc's save asked (WheelhouseApp.save_doc): the text, the mtime it goes from, what runs
+    once it's saved (thens) or ends unsaved (faileds), whether forced, and since (doc_written)."""
+    text: str
+    mtime: int | None
+    thens: list
+    faileds: list
+    force: bool
+    since: tuple
+
+
+@dataclasses.dataclass(frozen=True)
 class DocEdit:
     """A doc's unsaved edits, kept by its path (DocEditor.edits): the file's text they began
     from and its mtime then (a save's base), the buffer, the buffer as last rendered
@@ -5534,10 +5546,11 @@ class WheelhouseApp(App):
         self.blink = False   # whether the busy dots were last dimmed (animate, dot_dimmed)
         self.steps_chosen = False   # the first-press dialog answered, here or before (first_press)
         self.steps_reading = False   # first_press's read under way: another press waits with it
-        self.doc_saving: collections.Counter[str] = collections.Counter()   # each doc's saves on the lane (save_doc)
-        self.doc_chain: dict[str, int | None] = {}   # each doc's mtime as the last of them wrote it, on the lane
-        self.efforts: dict[str, list[str]] = {}   # each session's efforts asked and not yet landed, shown meanwhile (set_effort)
-        self.steps_waiting: dict[str, Callable[[], None]] = {}   # the presses first_press holds, by button
+        self.doc_busy: set[str] = set()   # the docs with a save under way or its prompt open (save_doc)
+        self.doc_waiting: dict[str, DocSave] = {}   # the newest save of each asked meanwhile, to go next
+        self.efforts: dict[str, list[str]] = {}
+        self.drops_across: dict[str, dict] = {}   # the drags across groups under way, by list (drop_row)   # each session's efforts asked and not yet landed, shown meanwhile (set_effort)
+        self.steps_waiting: dict[tuple, Callable[[], None]] = {}   # the presses first_press holds, by button and target
         self.animating = True   # whether it runs: paused while unfocused with nothing busy (pace)
         self.input_at = -REST   # when the last key, click or pointer move came: the animation rests after it (frame_due)
         self.frame_period = 0.0   # seconds between animate's timer's fires (frame_due)
@@ -7184,13 +7197,24 @@ class WheelhouseApp(App):
         else:
             tokens = [self.client.expect_session(k, pos=i, pos_group=token) for i, k in enumerate(new)]
             let_go = self.client.expected_session
-        was = self.item_sort if which == "items" else self.session_sort
+        if across:   # the sort before the first of the drags across under way, kept to put back
+            pending = self.drops_across.setdefault(which, {"was": self.item_sort if which == "items"
+                                                           else self.session_sort, "pending": 0, "ok": False})
+            pending["pending"] += 1
         self.dropped_row(which, across, new)
 
-        def failed() -> None:
-            if across:
-                self.set_sort(which, was)
-        self.send_off(call, settled=lambda: [let_go(t) for t in tokens], failed=failed, shown=True)
+        def ended(ok: bool) -> None:   # landed or failed, one of them each
+            if not across:
+                return
+            pending = self.drops_across[which]
+            pending["ok"] = pending["ok"] or ok
+            pending["pending"] -= 1
+            if not pending["pending"]:   # the last of them: if none was written, the sort back on
+                del self.drops_across[which]
+                if not pending["ok"]:
+                    self.set_sort(which, pending["was"])
+        self.send_off(call, lambda _: ended(True), failed=lambda: ended(False),
+                      settled=lambda: [let_go(t) for t in tokens], shown=True)
 
     def dropped_row(self, which: str, across: bool, new: list[str]) -> None:
         """drop_row's order written: the rows it placed painted there."""
@@ -7473,58 +7497,76 @@ class WheelhouseApp(App):
         the command lane (send_off, #391), the editor open meanwhile: what's typed while it saves
         stays in the buffer (doc_written's since: editor, the one saving, and the edits kept as
         the save was asked), and a save that fails keeps it all and says so.
-        A save asked while one of the same doc is still on the lane goes from what that one
-        wrote (doc_chain), not the mtime its editor had then, so a quick second Ctrl+S never
-        conflicts with the first (#391 review)."""
-        since = (editor, self.doc_edits.get(path))
-        after = self.doc_saving[path]   # saves of this doc ahead of it on the lane
-        self.doc_saving[path] += 1
 
-        def write() -> dict:   # on the lane, after those ahead of it
-            sent = self.doc_chain.get(path, mtime) if after else mtime
+        One save of a doc at a time (#391 review): asked while one is under way or its prompt is
+        open, it waits, the newest of those asked meanwhile replacing the rest (their `then`s and
+        `failed`s kept), and goes once that one ends, from what it wrote; an Overwrite writes the
+        newest text. Older text is never written after newer."""
+        ask = DocSave(text, mtime, [then] if then else [], [failed] if failed else [], force,
+                      (editor, self.doc_edits.get(path)))
+        if path in self.doc_busy:
+            if (old := self.doc_waiting.get(path)) is not None:
+                ask = dataclasses.replace(ask, thens=old.thens + ask.thens, faileds=old.faileds + ask.faileds)
+            self.doc_waiting[path] = ask
+            return
+        self.doc_write(path, ask)
+
+    def doc_write(self, path: str, ask: "DocSave") -> None:
+        """save_doc's write, on the lane, its answer to doc_saved."""
+        self.doc_busy.add(path)
+
+        def write() -> dict:
             try:
-                answer = self.client.write_doc(path, text, sent, force)
+                return self.client.write_doc(path, ask.text, ask.mtime, ask.force)
             except Exception as e:   # anything at all: said in the prompt, the edits kept
-                answer = {"refused": str(e) or type(e).__name__}
-            if not ({"conflict", "gone", "refused"} & set(answer)):
-                self.doc_chain[path] = answer.get("mtime_ns")
-            return answer
+                return {"refused": str(e) or type(e).__name__}
+        self.send_off(write, lambda answer: self.doc_saved(answer, path, ask))
 
-        def settled() -> None:
-            self.doc_saving[path] -= 1
-            if not self.doc_saving[path]:
-                del self.doc_saving[path]
-                self.doc_chain.pop(path, None)
-        self.send_off(write, lambda answer: self.doc_saved(answer, path, text, mtime, then, failed, since),
-                      settled=settled)
-
-    def doc_saved(self, answer: dict, path: str, text: str, mtime: int | None,
-                  then: Callable[[], None] | None, failed: Callable[[], None] | None, since: tuple) -> None:
-        """save_doc's answer, on the UI thread."""
+    def doc_saved(self, answer: dict, path: str, ask: "DocSave") -> None:
+        """save_doc's answer, on the UI thread: the save waiting, if any, goes next."""
         name = os.path.basename(path)
-        again = functools.partial(self.save_doc, path, text, mtime, then, True, failed, since[0])
+
+        def newest(**changes) -> "DocSave":   # the newest asked, carrying this one's thens and faileds
+            later = self.doc_waiting.pop(path, None)
+            if later is None:
+                return dataclasses.replace(ask, **changes)
+            return dataclasses.replace(later, thens=ask.thens + later.thens, faileds=ask.faileds + later.faileds,
+                                       **changes)
+
+        def ended(saved: bool = False, mtime: int | None = None) -> None:
+            self.doc_busy.discard(path)
+            if saved and (later := self.doc_waiting.pop(path, None)) is not None:
+                self.doc_write(path, dataclasses.replace(later, mtime=mtime))   # from what this one wrote
+                return
+            if not saved:   # nothing written: every save waiting ends too, its edits kept
+                for failed in [*ask.faileds, *(f for f in getattr(self.doc_waiting.pop(path, None), "faileds", []))]:
+                    failed()
+
         if answer.get("conflict"):
             def chose(choice: str | None) -> None:
                 if choice == "overwrite":
-                    again()
+                    self.doc_write(path, newest(force=True))
                 elif choice == "reload":
+                    self.doc_waiting.pop(path, None)   # the file's text instead, as chosen
+                    self.doc_busy.discard(path)
                     self.doc_written(path, answer.get("text", ""), answer.get("mtime_ns"), reloaded=True)
-                elif failed is not None:
-                    failed()
+                else:
+                    ended()
             self.push_screen(SaveConflict(f"{name} has changed on disk since you started editing. Overwrite it "
                                           "with your edits, Reload it (your edits are lost), or Cancel?"), chose)
         elif answer.get("gone"):
             self.push_screen(SaveGone(f"{name} has gone from disk since you started editing. Write it anew "
                                       "with your edits, or Cancel?"),
-                             lambda choice: again() if choice == "anew" else failed and failed())
+                             lambda choice: self.doc_write(path, newest(force=True)) if choice == "anew" else ended())
         elif "refused" in answer:
             self.push_screen(SaveFailed(f"{name} wasn't saved: {answer['refused']} (your edits are kept)"),
-                             lambda _: failed and failed())
+                             lambda _: ended())
         else:
-            self.doc_written(path, text, answer.get("mtime_ns"), since=since)
+            self.doc_written(path, ask.text, answer.get("mtime_ns"), since=ask.since)
             self.notify(f"Saved {name}")
-            if then is not None:
+            for then in ask.thens:
                 then()
+            ended(True, answer.get("mtime_ns"))
 
     def doc_written(self, path: str, text: str, mtime: int | None, reloaded: bool = False,
                     since: tuple | None = None) -> None:
@@ -8101,18 +8143,18 @@ class WheelhouseApp(App):
                 self.send_off(lambda: self.client.choose_steps({}), lambda _: setattr(self, "steps_chosen", True))
         self.open_after_read("SESSION STEPS", self.client.steps_table, SessionSteps, chosen)
 
-    def first_press(self, button: str, then: Callable[[], None]) -> None:
+    def first_press(self, button: str, then: Callable[[], None], target: object = None) -> None:
         """A press of anything that fires a step with add-ons (button, its id), acted on by
         then, which carries what it acts on, taken as it was pressed (#391 review: a selection
         moved meanwhile never redirects it). Before the first such press, the first-press
         dialog (FirstSteps): its answer kept, then the press acted on; Esc cancels it. Whether
         the steps are chosen is read off the UI thread (read_off, #391): a press meanwhile waits
-        with it, one per button (a second press of the same one replaces the first, as a busy
-        button would), and none is dropped. In process, read at once."""
+        with it, one per button and target (the same press again stands once), and none is
+        dropped. In process, read at once."""
         if self.steps_chosen:
             then()
             return
-        self.steps_waiting[button] = then
+        self.steps_waiting[(button, target)] = then
         if self.steps_reading:   # the read under way acts on it too
             return
         self.steps_reading = True
@@ -8905,7 +8947,7 @@ class WheelhouseApp(App):
         self.settle()
         sid = self.current_session()
         if sid:
-            self.first_press("relaunch", lambda: self.relaunch_now(sid))
+            self.first_press("relaunch", lambda: self.relaunch_now(sid), sid)
 
     @session_action
     def relaunch_now(self, sid: str) -> None:
@@ -10228,8 +10270,13 @@ class WheelhouseApp(App):
         if what == "interrupt":
             self.host_command(sid, what)
         else:   # Compact, on the session pressed on
-            self.first_press(what, lambda: self.push_screen(CompactSession(self.label(sid)),
-                                                           lambda plan: plan and self.host_command(sid, what, **plan)))
+            self.first_press(what, lambda: self.compact_asked(sid), sid)
+
+    @session_action
+    def compact_asked(self, sid: str) -> None:
+        """host_pressed's Compact, on the session it was pressed on (first_press): gone meanwhile,
+        said (session_action)."""
+        self.push_screen(CompactSession(self.label(sid)), lambda plan: plan and self.host_command(sid, "compact", **plan))
 
     def handover(self, sid: str) -> None:
         """Handover to Claude Code in a shell, from the session menu (#257): a hosted session
@@ -10319,7 +10366,7 @@ class WheelhouseApp(App):
         if event.button.id == "leave-it":
             self.send_off(lambda: self.client.close(*target, True))
         else:   # on the item pressed on
-            self.first_press("compact-now", lambda: self.compact_now(target))
+            self.first_press("compact-now", lambda: self.compact_now(target), target)
 
     @on(Button.Pressed, "#keep-waiting, #abort-compaction")
     def notes_wait_pressed(self, event: Button.Pressed) -> None:
@@ -10725,7 +10772,7 @@ class WheelhouseApp(App):
         self.settle()
         sid = self.current_session()
         if sid:
-            self.first_press("end", lambda: self.end_now(sid))
+            self.first_press("end", lambda: self.end_now(sid), sid)
 
     @session_action
     def end_now(self, sid: str) -> None:

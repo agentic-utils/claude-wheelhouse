@@ -329,3 +329,51 @@ async def test_a_quick_second_save_never_conflicts_with_the_first(store, sid, tm
         assert not isinstance(app.screen, (SaveConflict, SaveFailed)), type(app.screen).__name__
         assert open(path).read() == "# second\n"
         assert notices(app)[-2:] == ["Saved plan.md", "Saved plan.md"], notices(app)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("via", ["threaded"], indirect=True)
+async def test_a_held_compact_on_a_session_gone_meanwhile_is_said(store, sid, via, first_press):
+    """#391 review 2: Compact waits on the steps read; the session ends meanwhile: said, no crash."""
+    store.set_setting(steps.CHOSEN, "1")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        await pick(app, pilot, sid)
+        app.client.steps_table = held = Held(app.client.steps_table)
+        app.host_pressed(types.SimpleNamespace(button=types.SimpleNamespace(id="compact", screen=app.screen)))
+        await held.wait_sent()
+        store.end_session(sid)
+        app.refresh_data()
+        await pilot.pause()
+        held.go.set()
+        await lane_landed(app, pilot)
+        assert app.is_running, "the app carries on"
+        assert "session no longer exists" in notices(app), notices(app)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("via", ["threaded"], indirect=True)
+async def test_two_saves_into_a_conflict_overwrite_with_the_newest(store, sid, tmp_path, via):
+    """#391 review 2: the file changed on disk; Ctrl+S twice before the first answers: one
+    prompt, and Overwrite writes the second text, never the first after it."""
+    post(store, sid, tmp_path, "doc", "plan")
+    path = str(tmp_path / "plan.md")
+    mtime = __import__("os").stat(path).st_mtime_ns
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        __import__("time").sleep(0.01)
+        open(path, "w").write("# someone else\n")   # changed on disk since read
+        app.client.write_doc = held = Held(app.client.write_doc)
+        app.save_doc(path, "# first\n", mtime)
+        await held.wait_sent()
+        app.save_doc(path, "# second\n", mtime)
+        held.go.set()
+        await lane_landed(app, pilot)
+        assert isinstance(app.screen, SaveConflict), type(app.screen).__name__
+        app.screen.action_answer("overwrite")
+        await lane_landed(app, pilot)
+        assert not isinstance(app.screen, (SaveConflict, SaveFailed)), "one prompt, not two"
+        assert open(path).read() == "# second\n"
+        assert notices(app).count("Saved plan.md") == 1, notices(app)

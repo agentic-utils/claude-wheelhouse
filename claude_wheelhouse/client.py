@@ -305,7 +305,10 @@ class RemoteClient:
         self.asides: list[Callable[[], object]] = []   # writes nobody waits on, to send in order (aside)
         self.aside_thread: threading.Thread | None = None
         self.tour_kept: list[list] = []
-        self.session_expecting: dict[str, list[dict]] = {}   # each session's changes shown before the daemon has them (expect_session)   # the tour's changes shown before a fetch has them (tour_change)
+        self.session_expecting: dict[str, list[dict]] = {}   # each session's changes shown before the daemon has them (expect_session)
+        # those let go while the sessions shown predate a fetch_now that failed, as letting_go
+        self.session_letting_go: list[dict] = []
+        self.sessions_unfetched = -1   # the tour's changes shown before a fetch has them (tour_change)
         self.stopping = False
         self.threads: list[threading.Thread] = []
         self.last_event: str | None = None
@@ -532,6 +535,8 @@ class RemoteClient:
                     self.dirty.add(key)
                     if key == ("inbox",):
                         self.unfetched = max(self.unfetched, seq)
+                    else:
+                        self.sessions_unfetched = max(self.sessions_unfetched, seq)
                     self.lock.notify_all()
                 continue
             with self.lock:
@@ -594,14 +599,23 @@ class RemoteClient:
         return token
 
     def expected_session(self, token: object) -> None:
-        """An expect_session let go, as its command lands: the session as fetched from now."""
+        """An expect_session let go, as its command lands: the session as fetched from now. With
+        the sessions shown older than a fetch_now that failed, kept until a fresh fetch is shown,
+        as expected keeps an item's."""
         with self.lock:
-            for sid, tokens in list(self.session_expecting.items()):
-                tokens[:] = [t for t in tokens if t is not token]
-                if not tokens:
-                    del self.session_expecting[sid]
-            self.lay_sessions()
-            self.version += 1
+            if self.shown_seq.get(("sessions",), -1) < self.sessions_unfetched:
+                self.session_letting_go.append(token)
+                return
+            self.let_go_sessions([token])
+
+    def let_go_sessions(self, gone: list) -> None:
+        """The session expects in gone dropped, the sessions laid out again (under the lock)."""
+        for sid, tokens in list(self.session_expecting.items()):
+            tokens[:] = [t for t in tokens if not any(t is g for g in gone)]
+            if not tokens:
+                del self.session_expecting[sid]
+        self.lay_sessions()
+        self.version += 1
 
     def lay_sessions(self) -> None:
         """The sessions as fetched, with the changes expected laid over them (under the lock)."""
@@ -741,7 +755,10 @@ class RemoteClient:
             self.statuses = {s["id"]: s["liveness"] for s in data}
             self.relaunching = {s["id"] for s in data if s["status"] == "relaunching"}
             self.compacting = {s["id"] for s in data if s.get("compacting")}
-            if self.session_expecting:
+            if self.session_letting_go and seq > self.sessions_unfetched:   # fresh since a fetch_now failed
+                gone, self.session_letting_go = self.session_letting_go, []
+                self.let_go_sessions(gone)
+            elif self.session_expecting:
                 self.lay_sessions()
         elif kind == "inbox":
             self.items = data["items"]
