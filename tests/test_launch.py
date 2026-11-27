@@ -375,8 +375,8 @@ def test_shell_env_drops_the_wheelhouses_and_claudes_variables():
 
 @pytest.mark.parametrize("start, desc", [
     (lambda: subprocess.run(["cmd.exe", "/c", "echo"]), "subprocess.run, a bare name"),
-    (lambda: subprocess.Popen(["/nonexistent/wt.exe", "new-tab"]), "Popen, a path"),
-    (lambda: subprocess.run("true; /nonexistent/wt.exe new-tab", shell=True), "a shell line"),
+    (lambda: subprocess.Popen(["/nonexistent/WT.EXE", "new-tab"]), "Popen, a path, any case"),
+    (lambda: subprocess.run("/nonexistent/wt.exe new-tab", shell=True), "a shell line's program"),
     (lambda: os.system("/nonexistent/powershell.exe -c x"), "os.system"),
     (lambda: os.posix_spawnp("/nonexistent/cmd.exe", ["cmd.exe"], {}), "os.posix_spawnp"),
 ])
@@ -390,10 +390,29 @@ def test_no_test_starts_windows(no_windows_started, start, desc):
     del no_windows_started[before:]
 
 
+def test_a_launcher_named_in_an_argument_is_no_start_of_it(no_windows_started):
+    """#388: only the program is matched, so prose naming wt.exe (a prompt, a commit message) runs."""
+    before = len(no_windows_started)
+    done = subprocess.run(["echo", "run cmd.exe /c wt.exe new-tab"], capture_output=True, text=True)
+    assert done.stdout == "run cmd.exe /c wt.exe new-tab\n"
+    assert len(no_windows_started) == before
+
+
+def test_a_child_process_finds_only_blocking_launchers():
+    """#388: a child process the guard can't see (a daemon, the MCP server) finds cmd.exe and
+    wt.exe on PATH as fakes that refuse and exit 1, never the real ones."""
+    done = subprocess.run(["sh", "-c", "cmd.exe /c echo; wt.exe new-tab"], capture_output=True, text=True)
+    assert done.returncode == 1
+    assert done.stderr.count("test guard:") == 2, done.stderr
+
+
 def test_fake_launchers_are_let_through(fake_launchers, no_windows_started):
-    """#388: fake_launchers' own cmd.exe and wt.exe run, first on PATH; a real one still doesn't."""
+    """#388: fake_launchers' own cmd.exe and wt.exe run, first on PATH; a real one still doesn't,
+    by path or by a bare name on a PATH, the start's own env, that misses the fakes."""
     subprocess.run(["cmd.exe", "/c", "wt.exe", "new-tab"], check=True)
     assert (fake_launchers / "calls.log").read_text() == "cmd.exe /c wt.exe new-tab\n"
-    with pytest.raises(PermissionError, match="test guard"):
-        subprocess.run(["/nonexistent/wt.exe"])
-    no_windows_started.pop()
+    for start in (lambda: subprocess.run(["/nonexistent/wt.exe"]),
+                  lambda: subprocess.run(["wt.exe"], env={"PATH": "/usr/bin:/bin"})):
+        with pytest.raises(PermissionError, match="test guard"):
+            start()
+        no_windows_started.pop()

@@ -1,8 +1,8 @@
 import functools
+import inspect
 import itertools
 import json
 import os
-import re
 import shutil
 import signal
 import subprocess
@@ -586,42 +586,53 @@ def no_group_kill(monkeypatch):
 
 
 # No test starts Windows: a real cmd.exe or wt.exe on WSL opens a Windows Terminal tab and
-# takes the focus (#388). CI has none, so a test that reaches one passes there unseen.
-LAUNCHER = re.compile(r"[^\s\"'&|;()<>]*\b(?:cmd|wt|powershell|pwsh)\.exe\b", re.IGNORECASE)
+# takes the focus (#388). CI has none, so a test that reaches one passes there unseen. Two
+# layers: this run's own starts are refused by their program (refuse_launcher), and every
+# child process finds blocking fakes first on PATH (windows_blocked). Known limit: a start
+# from a thread that outlives its test is charged to the test running then (running[0]).
+LAUNCHERS = {"cmd.exe", "wt.exe", "powershell.exe", "pwsh.exe"}
 SPAWN_REFUSED = []   # every start refused, as (the test running, the call)
 fake_launchers_dir = [None]   # the bin of the test's fake launchers (fake_launchers), else None
+EXECUTE_CHILD = inspect.signature(subprocess.Popen._execute_child)
 
 
-def launchers_in(words) -> list[str]:
-    """Each word of a command (a shell line's too) that names cmd.exe, wt.exe or PowerShell."""
-    return [m.group() for w in words for m in LAUNCHER.finditer(os.fsdecode(w))]
+def program_of(argv) -> str | None:
+    """The program a start runs: argv[0], or a shell line's first word."""
+    if isinstance(argv, (str, bytes, os.PathLike)):
+        words = os.fsdecode(argv).split()
+        return words[0] if words else None
+    return os.fsdecode(argv[0]) if argv else None
 
 
-def faked(word: str, env) -> bool:
-    """The launcher a word names is the test's fake: a path into fake_launchers' bin, or a bare
-    name the command's PATH finds there first."""
+def faked(program: str, env) -> bool:
+    """The launcher is the test's fake: a path into fake_launchers' bin, or a bare name the
+    start's own PATH finds there first."""
     fakes = fake_launchers_dir[0]
     if fakes is None:
         return False
-    path = (env or os.environ).get("PATH", os.defpath)
-    found = word if "/" in word else shutil.which(word.strip("\\"), path=os.fsdecode(path))
+    path = os.fsdecode((env or os.environ).get("PATH", os.defpath))
+    found = program if "/" in program else shutil.which(program, path=path)
     return found is not None and Path(found).resolve().parent == fakes.resolve()
 
 
-def refuse_launcher(name: str, words, env=None) -> None:
-    """Raises PermissionError, and records it, for a start that names a real launcher."""
-    words = [w for w in ([words] if isinstance(words, (str, bytes, os.PathLike)) else words) if w is not None]
-    real = [w for w in launchers_in(words) if not faked(w, env)]
-    if real:
-        call = f"{name}({' '.join(os.fsdecode(w) for w in words)[:200]}): starts {real[0]}"
-        SPAWN_REFUSED.append((running[0], call))
-        raise PermissionError(f"test guard: {call}")
+def refuse_launcher(name: str, program, argv, env=None) -> None:
+    """Raises PermissionError, and records it, for a start whose program is cmd.exe, wt.exe or
+    PowerShell (by its basename, any case) other than fake_launchers' own. Its arguments are
+    never matched: prose naming wt.exe is no start of it."""
+    if program is None or os.path.basename(program.replace("\\", "/")).lower() not in LAUNCHERS:
+        return
+    if faked(program, env):
+        return
+    shown = os.fsdecode(argv) if isinstance(argv, (str, bytes)) else " ".join(map(os.fsdecode, argv))
+    call = f"{name}({shown[:200]}): starts {program}"
+    SPAWN_REFUSED.append((running[0], call))
+    raise PermissionError(f"test guard: {call}")
 
 
-def launcher_guarded(name, real, words_env):
+def launcher_guarded(name, real, start):
     @functools.wraps(real)
     def guarded(*args, **kwargs):
-        refuse_launcher(name, *words_env(*args, **kwargs))
+        refuse_launcher(name, *start(*args, **kwargs))
         return real(*args, **kwargs)
     return guarded
 
@@ -629,26 +640,44 @@ def launcher_guarded(name, real, words_env):
 real_execute_child = subprocess.Popen._execute_child
 
 
-def guarded_execute_child(self, args, executable, *rest, **kwargs):
-    """Every subprocess start (run, check_output, Popen, asyncio's, os.popen) passes here."""
-    env = rest[5] if len(rest) > 5 else kwargs.get("env")
-    refuse_launcher("subprocess", [executable, *([args] if isinstance(args, (str, bytes)) else args)], env)
-    return real_execute_child(self, args, executable, *rest, **kwargs)
+def guarded_execute_child(self, *args, **kwargs):
+    """Every subprocess start (run, check_output, Popen, asyncio's, os.popen) passes here.
+    Its arguments bound by name, as the installed Python's signature has them."""
+    given = EXECUTE_CHILD.bind(self, *args, **kwargs).arguments
+    argv, executable = given["args"], given["executable"]
+    program = program_of(argv) if given["shell"] else os.fsdecode(executable) if executable else program_of(argv)
+    refuse_launcher("subprocess", program, argv, given["env"])
+    return real_execute_child(self, *args, **kwargs)
 
 
 # for the whole run, as the signal guard: os.exec*p, os.execl* and os.spawnl* call these
 subprocess.Popen._execute_child = guarded_execute_child
-for _name, _words_env in [
-        ("execv", lambda path, args: ([path, *args], None)),
-        ("execve", lambda path, args, env: ([path, *args], env)),
-        ("spawnv", lambda mode, path, args: ([path, *args], None)),
-        ("spawnve", lambda mode, path, args, env: ([path, *args], env)),
-        ("spawnvp", lambda mode, file, args: ([file, *args], None)),
-        ("spawnvpe", lambda mode, file, args, env: ([file, *args], env)),
-        ("posix_spawn", lambda path, argv, env, **kw: ([path, *argv], env)),
-        ("posix_spawnp", lambda path, argv, env, **kw: ([path, *argv], env)),
-        ("system", lambda command: ([command], None))]:
-    setattr(os, _name, launcher_guarded(f"os.{_name}", getattr(os, _name), _words_env))
+for _name, _start in [
+        ("execv", lambda path, args: (os.fsdecode(path), args, None)),
+        ("execve", lambda path, args, env: (os.fsdecode(path), args, env)),
+        ("spawnv", lambda mode, path, args: (os.fsdecode(path), args, None)),
+        ("spawnve", lambda mode, path, args, env: (os.fsdecode(path), args, env)),
+        ("spawnvp", lambda mode, file, args: (os.fsdecode(file), args, None)),
+        ("spawnvpe", lambda mode, file, args, env: (os.fsdecode(file), args, env)),
+        ("posix_spawn", lambda path, argv, env, **kw: (os.fsdecode(path), argv, env)),
+        ("posix_spawnp", lambda path, argv, env, **kw: (os.fsdecode(path), argv, env)),
+        ("system", lambda command: (program_of(command), command, None))]:
+    setattr(os, _name, launcher_guarded(f"os.{_name}", getattr(os, _name), _start))
+
+
+@pytest.fixture(autouse=True, scope="session")
+def windows_blocked(tmp_path_factory):
+    """cmd.exe, wt.exe and PowerShell first on PATH for the whole run, each saying it was
+    refused and exiting 1: a child process (a daemon, the MCP server, a shell) that starts
+    one by name never reaches the real one. fake_launchers' own go ahead of these."""
+    blocked = tmp_path_factory.mktemp("windows-blocked")
+    for name in sorted(LAUNCHERS):
+        (blocked / name).write_text(f'#!/bin/sh\necho "test guard: {name} refused in a test (#388)" >&2\nexit 1\n')
+        (blocked / name).chmod(0o755)
+    before = os.environ["PATH"]
+    os.environ["PATH"] = f"{blocked}{os.pathsep}{before}"
+    yield blocked
+    os.environ["PATH"] = before
 
 
 @pytest.fixture(autouse=True)
