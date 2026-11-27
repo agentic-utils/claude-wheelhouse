@@ -9791,17 +9791,23 @@ def held_calls(app, fail=None):
     return gate
 
 
-def held_in_turn(app) -> list:
+def held_in_turn(app, undo_last: bool = False) -> list:
     """The hub calls Delete and Ctrl+Z make on their worker threads (close, delete_family), each
-    held until its own event in the returned list, in the order they were called, is set."""
+    held until its own event in the returned list, in the order they were called, is set. With
+    undo_last, Ctrl+Z's call (a close that reopens) is made only once every other call has landed."""
     import threading
+    import time
     gates = []
     for name in ("close", "delete_family"):
         real = getattr(app.client, name)
 
-        def held(*a, real=real, **kw):
+        def held(*a, real=real, name=name, **kw):
             if threading.current_thread() is threading.main_thread():   # Ctrl+R's: not held
                 return real(*a, **kw)
+            if undo_last and name == "close" and a[2] is False:   # Ctrl+Z's own worker, off the lane
+                deadline = time.monotonic() + 10
+                while len(app.calls) > 1 and time.monotonic() < deadline:   # its own call alone under way
+                    time.sleep(0.01)
             gates.append(gate := threading.Event())
             assert gate.wait(10), "the test never let the call through"
             return real(*a, **kw)
@@ -9882,21 +9888,24 @@ async def test_delete_takes_rows_at_once_and_the_hub_call_lands_after(store, sid
 
 @pytest.mark.anyio
 @pytest.mark.both
-@pytest.mark.parametrize("keys, dismissed, pins, marks, desc", [
-    ("delete ctrl+r to-T1", {"T1"}, set(), set(),
+@pytest.mark.parametrize("keys, undo_last, dismissed, pins, marks, desc", [
+    ("delete ctrl+r to-T1", False, {"T1"}, set(), set(),
      "Ctrl+R typed on T2 while its Delete lands, the cursor moved on: T2 back, T1 left dismissed"),
-    ("delete ctrl+space ctrl+r to-T1 ctrl+space", {"T1"}, set(), {"T1"},
+    ("delete ctrl+space ctrl+r to-T1 ctrl+space", False, {"T1"}, set(), {"T1"},
      "Ctrl+R on the marked T2, T1 marked after: only T2 back, T1's mark kept"),
-    ("delete ctrl+z to-T3 delete", {"T1", "T3"}, set(), set(),
+    ("delete ctrl+z to-T3 delete", False, {"T1", "T3"}, set(), set(),
      "Ctrl+Z typed after Delete on T2, then Delete on T3: T2's delete undone, T3's stands"),
-    ("delete to-T3 delete ctrl+z", {"T1", "T2"}, set(), set(),
+    ("delete ctrl+z to-T3 delete", True, {"T1", "T3"}, set(), set(),
+     "the same, T3's Delete landing before the undo: still T2's undone, the act typed before the Ctrl+Z"),
+    ("delete to-T3 delete ctrl+z", False, {"T1", "T2"}, set(), set(),
      "Ctrl+Z after Deletes on T2 then T3: T3's undone, the last typed"),
-    ("delete alt+p to-T1", {"T1", "T2"}, {"T2"}, set(),
+    ("delete alt+p to-T1", False, {"T1", "T2"}, {"T2"}, set(),
      "Alt+P typed on T2 while its Delete lands: T2 pinned, not T1"),
-    ("delete alt+p ctrl+z to-T3 delete", {"T1", "T2", "T3"}, set(), set(),
+    ("delete alt+p ctrl+z to-T3 delete", False, {"T1", "T2", "T3"}, set(), set(),
      "Alt+P then Ctrl+Z on T2, then Delete on T3: the pin goes first, so Ctrl+Z undoes the pin"),
 ])
-async def test_a_key_typed_while_a_delete_lands_acts_on_its_own_row(store, sid, keys, dismissed, pins, marks, desc):
+async def test_a_key_typed_while_a_delete_lands_acts_on_its_own_row(store, sid, keys, undo_last, dismissed, pins,
+                                                                    marks, desc):
     """#312: a key acts on what was selected when it was pressed, whatever is still in flight.
     Delete's call goes off the UI thread (delete_off_thread), held here until the keys are in,
     as on a slow daemon: a key that waits for it (behind_deletes) keeps its row, its marks and
@@ -9912,14 +9921,14 @@ async def test_a_key_typed_while_a_delete_lands_acts_on_its_own_row(store, sid, 
         await pilot.press("alt+v")   # the finished rows in sight, T1 among them
         table.move_cursor(row=table.get_row_index(f"{sid}|{refs['T2']}"))
         await pilot.pause()
-        gates = held_in_turn(app)
+        gates = held_in_turn(app, undo_last)
         for key in keys.split(" "):
             if key.startswith("to-"):
                 table.move_cursor(row=table.get_row_index(f"{sid}|{refs[key[3:]]}"))
             else:
                 await pilot.press(key)
-            for _ in range(500):   # each Delete's call reached the hub, or waits on the lane behind one that has
-                if len(gates) >= len(app.calls) or (gates and app.lane_jobs):
+            for _ in range(500):   # each Delete's call reached the hub, or waits its turn on the lane
+                if len(gates) >= len(app.calls) - len(app.lane_jobs):
                     break
                 await pilot.pause(0.01)
         assert app.deleting, f"{desc}: the keys all typed before the Delete landed"

@@ -165,6 +165,7 @@ async def test_focus_moves_in_the_app_update_the_screen_as_textual_does(store, s
     (Compositor.cuts.fget, "205385a66fdabffe", "Compositor.cuts, which repaint reads"),
     (Compositor.visible_widgets.fget, "6eddec5f271628f7", "Compositor.visible_widgets, which repaint._touched reads"),
     (Compositor._regions_to_spans, "af3b73d8e34fb8b9", "Compositor._regions_to_spans, which render_partial_update calls"),
+    (App.call_from_thread, "aa17a9a327d207d8", "App.call_from_thread, which tui's WheelhouseApp.post_soon follows"),
 ])
 def test_the_textual_code_repaint_stands_in_for_is_unchanged(original, digest, desc):
     """repaint.py replaces two of Textual's methods and leans on its internals (Compositor's

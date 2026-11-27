@@ -339,6 +339,50 @@ async def test_the_lane_keeps_order_and_always_lands(store, sid, tmp_path, via, 
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("via", ["threaded"], indirect=True)
+@pytest.mark.parametrize("first, desc", [
+    ("delete", "a Delete answered as the app quits: the Allow queued behind it still reaches the daemon"),
+    ("pin", "a pin answered as the app quits: the Allow queued behind it still reaches the daemon"),
+])
+async def test_quitting_lets_the_lane_finish(store, sid, tmp_path, via, monkeypatch, first, desc):
+    """#399 review: a job on the lane hands its landing to the UI thread without waiting for
+    it, so a close waiting on the calls under way (on_unmount) never holds up the job behind."""
+    import threading
+    import time
+    from claude_wheelhouse import tui
+    monkeypatch.setattr(tui, "CALLS_WAIT", 3)
+    done = post(store, sid, tmp_path, "task", "done", status="done")
+    t2 = post(store, sid, tmp_path, "task", "two")
+    p = store.post_item(sid, "permission", "Bash: make")
+    app = WheelhouseApp(store)
+    go, sent = threading.Event(), threading.Event()
+
+    def held(real):
+        def call(*args):
+            if not sent.is_set():   # the first call alone, held until the app quits
+                sent.set()
+                go.wait(10)
+            return real(*args)
+        return call
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        table = app.items_table
+        table.focus()
+        app.client.close, app.client.set_pinned = held(app.client.close), held(app.client.set_pinned)
+        for ref, key in [(done, "delete") if first == "delete" else (t2, "alt+p"), (p, "alt+y")]:
+            table.move_cursor(row=table.get_row_index(f"{sid}|{ref}"))
+            await pilot.pause()
+            await pilot.press(key)
+        assert sent.wait(10), f"{desc}: the first call reached the daemon"
+        threading.Timer(0.3, go.set).start()   # answered once the close has started waiting
+        started = time.monotonic()
+        app.exit()
+    took = time.monotonic() - started
+    assert store.item(sid, p)["status"] == "allowed", f"{desc}: the Allow behind was dropped after {took:.1f}s"
+    assert took < 2, f"{desc}: the close waited {took:.1f}s"
+
+
+@pytest.mark.anyio
 async def test_ctrl_a_never_marks_a_pinned_row(store, sid, tmp_path):
     done = post(store, sid, tmp_path, "task", "done", status="done")
     kept = post(store, sid, tmp_path, "task", "kept", status="done", pinned=True)
