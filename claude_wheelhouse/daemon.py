@@ -88,7 +88,9 @@ LAYOUT = "layout."   # the only settings a client reads and writes: the TUI's sp
 # what the inbox leaves out of each item, as the item list shows none of it: the body and
 # answer come with its thread, and seq is retired (store.RETIRED_TRIGGER). A PR's body, its URL,
 # stays: the row shows its repo (#111)
-UNLISTED = ("body", "answer", "seq")
+UNLISTED = ("body", "answer", "seq", "changed")
+# an item's columns only the store uses: seq retired (store.RETIRED_TRIGGER), changed its stamp (#391)
+STORE_ONLY = ("seq", "changed")
 
 
 class AlreadyRunning(RuntimeError):
@@ -256,14 +258,22 @@ class InboxLog:
         self.rows: dict[tuple, dict] = {}
         self.changed: dict[tuple, int] = {}   # each row's version when it last changed
         self.removed: dict[tuple, int] = {}   # each row gone, the version it went at, oldest first
-        self.mark = None   # what the rows were read from (Daemon.inbox_answer): unmoved, they aren't read again
+        # what the rows were read from (Daemon.inbox_answer): the items mark and each session's name
+        # and parked. Unmoved, they aren't read again; moved, only the rows changed since are
+        self.mark = None
+        self.facts = None   # tutorial.facts as last read, and the mark it was read at (Daemon.tutorial_facts)
         self.lock = threading.Lock()   # held over the read and the diff: one snapshot at a time
 
-    def update(self, rows: list[dict]) -> None:
-        """The rows as read now, compared with the last: one version on, if anything moved."""
+    def update(self, rows: list[dict], gone: set[tuple] | None = None) -> None:
+        """The rows as read now, compared with the last: one version on, if anything moved.
+        Either every row (gone None: one not among them is gone), or only those that may have
+        changed since the last read, with the keys gone since (#391)."""
         new = {(r["session_id"], r["ref"]): r for r in rows}
         moved = [key for key, row in new.items() if self.rows.get(key) != row]
-        gone = self.rows.keys() - new.keys()
+        if gone is None:
+            gone = self.rows.keys() - new.keys()
+        else:
+            new = {key: row for key, row in (self.rows | new).items() if key not in gone}
         if moved or gone:
             self.version += 1
             for key in moved:
@@ -285,6 +295,17 @@ class InboxLog:
         v = int(version)
         return ([self.rows[key] for key, at in self.changed.items() if at > v],
                 [key for key, at in self.removed.items() if at > v])
+
+
+INBOX_ROWS = ("SELECT i.*, s.name AS session_name, s.parked AS session_parked FROM items i "
+              "JOIN sessions s ON s.id = i.session_id")
+
+
+def listed(rows) -> list[dict]:
+    """Item rows as the inbox serves them (UNLISTED left out)."""
+    return [{**{k: v for k, v in dict(r).items() if k not in UNLISTED or (k == "body" and r["kind"] == "pr")},
+             "compact_question": r["answer"] == COMPACT_QUESTION, "notes_wait": r["answer"] == NOTES_WAIT}
+            for r in rows]
 
 
 def stamp_of(follower) -> tuple | None:
@@ -903,7 +924,7 @@ class Daemon:
         for it in sorted(self.store.items(sid), key=lambda it: inbox_rank(it, processing, busy)):
             key, where = (it["session_id"], it["ref"]), standing(it, busy)
             if finished or where != "finished":
-                row = {k: v for k, v in dict(it).items() if k != "seq"}   # retired, unused (store.RETIRED_TRIGGER)
+                row = {k: v for k, v in dict(it).items() if k not in STORE_ONLY}
                 out.append({**row, "standing": where, "queued": key in queued,
                             "processing": key in processing, "awaiting": key in awaiting})
         return out
@@ -918,7 +939,7 @@ class Daemon:
     def thread(self, request: Request) -> dict:
         sid, ref = request.path_params["sid"], request.path_params["ref"]
         item = self.item(sid, ref)
-        row = {k: v for k, v in dict(item).items() if k != "seq"}   # retired, unused (store.RETIRED_TRIGGER)
+        row = {k: v for k, v in dict(item).items() if k not in STORE_ONLY}
         return {"item": row, "messages": [dict(m) for m in self.store.thread(sid, ref)]}
 
     def folders(self, request: Request) -> dict:
@@ -957,18 +978,33 @@ class Daemon:
     def inbox_answer(self, since: str | None) -> dict:
         log = self.inbox_log
         with log.lock:
-            # what the rows are read from, read first: the items' mark (store.MARKED), moved by any
-            # write, and each session's name and parked. Unmoved, the rows are as last read
-            mark = (self.store._one("SELECT n FROM marks WHERE kind = 'items'")[0],
-                    [tuple(r) for r in self.store._all("SELECT id, name, parked FROM sessions ORDER BY id")])
-            if mark != log.mark:
-                rows = self.store._all("SELECT i.*, s.name AS session_name, s.parked AS session_parked FROM items i "
-                                       "JOIN sessions s ON s.id = i.session_id ORDER BY i.id")
-                log.update([{**{k: v for k, v in dict(r).items()
-                                if k not in UNLISTED or (k == "body" and r["kind"] == "pr")},
-                             "compact_question": r["answer"] == COMPACT_QUESTION,
-                             "notes_wait": r["answer"] == NOTES_WAIT} for r in rows])
-                log.mark = mark
+            with self.store.snapshot() as db:
+                # what the rows are read from, in the same snapshot as they are: the items mark
+                # (store.MARKED), moved by any write, and each session's name and parked
+                n = db.execute("SELECT n FROM marks WHERE kind = 'items'").fetchone()[0]
+                sessions = {sid: (name, parked)
+                            for sid, name, parked in db.execute("SELECT id, name, parked FROM sessions")}
+                if log.mark is None or n < log.mark[0]:   # a first read, or a mark gone back (a database swapped)
+                    log.update(listed(db.execute(INBOX_ROWS + " ORDER BY i.id")))
+                elif (n, sessions) != log.mark:
+                    # the rows stamped since (store items_marked_*), and every row of a session renamed,
+                    # parked, new or gone. Then the keys gone, read only when the rows left don't number
+                    # those held and those just read: a delete has no stamp
+                    was = log.mark[1]
+                    moved = [sid for sid in sessions.keys() | was.keys() if sessions.get(sid) != was.get(sid)]
+                    rows = listed(db.execute(INBOX_ROWS + f" WHERE i.changed > ? OR i.session_id IN "
+                                             f"({','.join('?' * len(moved))}) ORDER BY i.id", (log.mark[0], *moved)))
+                    held = log.rows.keys() | {(r["session_id"], r["ref"]) for r in rows}
+                    gone = set()
+                    if db.execute(f"SELECT count(*) FROM ({INBOX_ROWS})").fetchone()[0] != len(held):
+                        now = {tuple(r) for r in db.execute("SELECT i.session_id, i.ref FROM items i "
+                                                            "JOIN sessions s ON s.id = i.session_id")}
+                        gone = held - now
+                        if now - held:   # a row no stamp accounts for: read every row again
+                            rows, gone = listed(db.execute(INBOX_ROWS + " ORDER BY i.id")), None
+                    log.update(rows, gone)
+                log.mark = (n, sessions)
+                facts = self.tutorial_facts(db, n)
             delta = log.since(since)
             stamp = {"epoch": log.epoch, "version": log.version}
             if delta is None:
@@ -979,9 +1015,20 @@ class Daemon:
         return {**stamp, "processing": sorted(self.store.processing()), "awaiting": sorted(self.store.awaiting()),
                 "drafts": [{"id": m["id"], "session_id": m["session_id"], "item_ref": m["item_ref"]}
                            for m in self.store.drafts()],
-                "tutorial": {"facts": tutorial.facts(self.store), "dir": str(tutorial.tutorial_dir(self.store)),
+                "tutorial": {"facts": facts, "dir": str(tutorial.tutorial_dir(self.store)),
                              "offer": (tour := tutorial.state(self.store))["offer"], "tour": tour},
                 "sdk": self.hub.sdk, "usage_mode": self.hub.usage_probe.mode}
+
+    def tutorial_facts(self, db, items: int) -> dict | None:
+        """tutorial.facts, read again only when what it reads has moved: which session is the
+        tutorial's, and the items and messages marks (store.MARKED), as its items and messages
+        are all it reads of it. Called inside inbox_answer's snapshot, with the items mark read there."""
+        log = self.inbox_log
+        mark = (items, db.execute("SELECT n FROM marks WHERE kind = 'messages'").fetchone()[0],
+                tutorial.session_id(self.store))
+        if log.facts is None or log.facts[0] != mark:
+            log.facts = (mark, tutorial.facts(self.store))
+        return log.facts[1]
 
     def usage(self, request: Request) -> dict:
         """The account's plan usage, as the hub last read it: {kind: [percent, resets at]}

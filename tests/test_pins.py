@@ -5,7 +5,7 @@ import pytest
 from rich.cells import cell_len
 
 from claude_wheelhouse import mcp_server
-from claude_wheelhouse.store import Store, standing
+from claude_wheelhouse.store import TRIGGERS_VERSION, Store, standing
 from claude_wheelhouse.tui import PIN, UNPINNED, Confirm, WheelhouseApp
 from test_tui import header_x
 
@@ -69,7 +69,7 @@ def test_the_mcp_tools_pinned(store, sid, tmp_path, kind, pinned, expected, desc
 
 def test_docs_from_before_pins_come_up_pinned(store, sid, tmp_path, db_file):
     doc, task = post(store, sid, tmp_path, "doc"), post(store, sid, tmp_path, "task")
-    store.db.execute("DROP TRIGGER items_pinned_by_kind_v1")   # as before pins: neither it nor the column
+    store.db.execute(f"DROP TRIGGER items_pinned_by_kind_v{TRIGGERS_VERSION}")   # as before pins: neither it nor the column
     store.db.execute("ALTER TABLE items DROP COLUMN pinned")
     again = Store(db_file)
     assert [bool(again.item(sid, r)["pinned"]) for r in (doc, task)] == [True, False]
@@ -80,7 +80,7 @@ async def test_docs_cleared_before_pins_stay_unpinned_and_hidden(store, sid, tmp
     live, dismissed, deleted = (post(store, sid, tmp_path, "doc", n) for n in ("live", "dismissed", "deleted"))
     store.dismiss(sid, dismissed)
     store.db.execute("UPDATE items SET dismissed = 'deleted' WHERE ref = ?", (deleted,))
-    store.db.execute("DROP TRIGGER items_pinned_by_kind_v1")   # as before pins: neither it nor the column
+    store.db.execute(f"DROP TRIGGER items_pinned_by_kind_v{TRIGGERS_VERSION}")   # as before pins: neither it nor the column
     store.db.execute("ALTER TABLE items DROP COLUMN pinned")
     again = Store(db_file)
     assert [again.item(sid, r)["pinned"] for r in (live, dismissed, deleted)] == [1, 0, 0], "only the live doc"

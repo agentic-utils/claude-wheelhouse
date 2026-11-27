@@ -436,12 +436,20 @@ CREATE INDEX IF NOT EXISTS messages_item ON messages (session_id, item_ref, draf
 # of an older version (none counts as 0). A newer version's stay, so older code reopening
 # never drops them: the two sets then both fire, which is harmless for each below.
 # The marks: each table the daemon marks (marks) bumped on every row inserted, updated or
-# deleted. The daemon compares marks only for equality, so a write may bump one twice
+# deleted. A mark only grows; a write may bump one more than once (older and newer triggers together).
+# Version 2 (#391): an item inserted or updated is also stamped (items.changed) with the items mark
+# just bumped, above any mark read before the write committed, so a reader that has every row up to
+# mark m needs only those with changed > m. The stamp's own write skips the update trigger (its
+# changed moves); version 1's, still firing beside it while older code runs, bumps the mark again
 MARKED = ("items", "messages")
-TRIGGERS_VERSION = 1
+TRIGGERS_VERSION = 2
 TRIGGER_BODIES = {f"{table}_marked_{op.lower()}": f"AFTER {op} ON {table} "
                   f"BEGIN UPDATE marks SET n = n + 1 WHERE kind = '{table}'; END"
                   for table in MARKED for op in ("INSERT", "UPDATE", "DELETE")}
+TRIGGER_BODIES |= {f"items_marked_{op.lower()}": f"AFTER {op} ON items {when}"
+                   "BEGIN UPDATE marks SET n = n + 1 WHERE kind = 'items'; "
+                   "UPDATE items SET changed = (SELECT n FROM marks WHERE kind = 'items') WHERE id = NEW.id; END"
+                   for op, when in (("INSERT", ""), ("UPDATE", "WHEN NEW.changed IS OLD.changed "))}
 # A row the person placed under a Status sort (pos_group status*, status▲, status▼) is placed
 # only until its status changes, whoever writes it: from then on it goes by status, until
 # dragged again (T121). Not with ordering off (manual), where nothing moves by itself, nor
@@ -529,7 +537,11 @@ ADDED_COLUMNS = [("sessions", "end_requested_at", "TEXT"), ("sessions", "park_re
                  ("items", "run_at", "TEXT"), ("items", "run_tab", "TEXT"),
                  # a draft the person sent mid-compaction (Send now, Immediate, Send): held, and sent by
                  # the hub once the cycle has ended (send_held, #383)
-                 ("messages", "after_cycle", "INTEGER NOT NULL DEFAULT 0")]
+                 ("messages", "after_cycle", "INTEGER NOT NULL DEFAULT 0"),
+                 # the items mark (marks.n) as of the row's last insert or update, set by items_marked_*:
+                 # the daemon reads only the rows changed since it last read (#391). NULL until the
+                 # row's first write after the column came
+                 ("items", "changed", "INTEGER")]
 # older databases may also carry sessions.transcript_title and sessions.renamed_at,
 # from a /rename pickup since dropped, and items.seq (RETIRED_TRIGGER): unused, and left in place
 DECISIONS_CLOSE = "migrated_decisions_close"   # settings: the one-off migration above has run
@@ -794,6 +806,16 @@ class Store:
                     self.db.execute("ROLLBACK")
                 raise
             self.mine.n = self.written() + self.db.total_changes - before
+
+    @contextmanager
+    def snapshot(self):
+        """One read transaction: every read inside it sees the database as of its first."""
+        with self.lock:
+            self.db.execute("BEGIN")
+            try:
+                yield self.db
+            finally:
+                self.db.execute("ROLLBACK")
 
     def written(self) -> int:
         """How many rows this thread's transactions have changed, counting only those that

@@ -8,7 +8,7 @@ from unittest import mock
 import pytest
 
 from claude_wheelhouse import whatsnew
-from claude_wheelhouse.store import (AWAITING, PROCESSING, TOUR_MIGRATED, TRIGGER_NAMES, TUTORIAL_OFFER, SessionGone, Store,
+from claude_wheelhouse.store import (AWAITING, PROCESSING, TOUR_MIGRATED, TRIGGER_NAMES, TRIGGERS_VERSION, TUTORIAL_OFFER, SessionGone, Store,
                                      now, standing)
 
 
@@ -478,7 +478,7 @@ def test_an_older_database_gains_the_marks_on_open(db_file, sid, store):
 
 
 def test_an_older_versions_marks_triggers_are_replaced_and_a_repeat_open_changes_nothing(db_file, sid, store):
-    store.db.execute("DROP TRIGGER items_marked_insert_v1")
+    store.db.execute(f"DROP TRIGGER items_marked_insert_v{TRIGGERS_VERSION}")
     store.db.execute("CREATE TRIGGER items_marked_insert AFTER INSERT ON items BEGIN SELECT 1; END")
     Store(db_file)
     names = {r[0] for r in store.db.execute("SELECT name FROM sqlite_master WHERE type = 'trigger'")}
@@ -492,11 +492,11 @@ def test_an_older_versions_marks_triggers_are_replaced_and_a_repeat_open_changes
 
 
 @pytest.mark.parametrize("name, kept, desc", [
-    ("items_marked_insert_v2", True, "a newer version's, made by newer code: kept"),
+    (f"items_marked_insert_v{TRIGGERS_VERSION + 1}", True, "a newer version's, made by newer code: kept"),
     ("messages_marked_delete_v0", False, "an older version's: dropped"),
     ("items_marked_update", False, "one with no version, as before versions: dropped"),
     ("items_marked_seen", True, "a trigger not a marks one: kept"),
-    ("items_seq_insert_v1", False, "#70's retired seq trigger, at the current version: dropped"),
+    (f"items_seq_insert_v{TRIGGERS_VERSION}", False, "#70's retired seq trigger, at the current version: dropped"),
     ("items_seq_update_v2", False, "a retired seq trigger at any version: dropped"),
 ])
 def test_opening_drops_only_an_older_versions_marks_triggers(db_file, store, name, kept, desc):

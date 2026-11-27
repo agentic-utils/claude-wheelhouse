@@ -101,15 +101,18 @@ def is_tutorial(store: Store, session) -> bool:
 
 
 def session_id(store: Store) -> str | None:
-    """The tutorial's session, if one exists."""
-    return next((s["id"] for s in store.sessions() if is_tutorial(store, s)), None)
+    """The tutorial's session, if one exists: the first made (store.sessions' order) in its directory.
+    Read on its own, not through store.sessions, whose counts cost a pass over every item (#391)."""
+    row = store._one("SELECT id FROM sessions WHERE cwd = ? ORDER BY created_at, rowid LIMIT 1",
+                     (str(tutorial_dir(store)),))
+    return row["id"] if row else None
 
 
 def should_offer(store: Store) -> bool:
     """The first-run offer: a wheelhouse with no sessions that has never offered it, or one
     reset() has asked to offer it again. Answering it either way overwrites the setting."""
     offer = store.setting(OFFER_KEY)
-    return offer == RESET or (offer is None and not store.sessions())
+    return offer == RESET or (offer is None and store._one("SELECT 1 FROM sessions LIMIT 1") is None)
 
 
 def state(store: Store) -> dict:
