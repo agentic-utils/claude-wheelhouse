@@ -33,7 +33,8 @@ the designs. Read the matching `.plan/` doc before changing a feature it covers.
   asked, what it changed fetched there too (`RemoteClient.deferred`, `fetch_now`), and lands it
   on the UI thread, undoing the acknowledgement and saying why if it failed. Each waits for the
   one before it however long the daemon takes, and Ctrl+Z and Ctrl+R, sent off the lane, wait
-  behind it (`behind_deletes`). In process, or
+  behind it (`behind_deletes`). A Delete's calls go on the lane too (`delete_off_thread`), so
+  however many queue on a daemon that hangs, they hold one thread of the pool. In process, or
   through a synchronous client, it runs at once. A setting kept goes the same way, off the UI
   thread in order (`RemoteClient.aside`), as do the tour's place and features seen
   (`RemoteClient.tour_change`, laid over each inbox fetched before they're made). A read the UI

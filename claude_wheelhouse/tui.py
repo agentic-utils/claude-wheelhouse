@@ -9450,8 +9450,9 @@ class WheelhouseApp(App):
 
     def on_lane(self, job: Callable[[], None]) -> None:
         """job run on the command lane, after those asked before it: one worker runs them all in
-        turn (drain_lane), so however many queue on a daemon that hangs, they hold one thread of
-        the pool, never the rest (a conversation's read, a spawn)."""
+        turn (drain_lane), so however many queue on a daemon that hangs, commands and Deletes
+        (delete_off_thread), they hold one thread of the pool, never the rest (a conversation's
+        read, a spawn)."""
         with self.lane_lock:
             self.lane_jobs.append(job)
             if self.lane_running:
@@ -9581,9 +9582,9 @@ class WheelhouseApp(App):
         self.send_off(call, landed, undo)
 
     def delete_off_thread(self, acts: list, landed: Callable[[list], None]) -> None:
-        """Delete's rows off the inbox at once, and the hub's calls on a worker thread, one after
-        another (#234): a call is a daemon round trip, queued behind the hub's tick, so twenty
-        took seconds on the UI thread. acts: each (item, its family, [] for none), deleted as
+        """Delete's rows off the inbox at once, and the hub's calls on the command lane (on_lane),
+        one after another (#234): a call is a daemon round trip, queued behind the hub's tick, so
+        twenty took seconds on the UI thread. acts: each (item, its family, [] for none), deleted as
         Delete does (Hub.delete_family, else Hub.close). Until they land their rows stay off
         whatever a refresh brings (going); then landed(done) on the UI thread, done the acts that
         acted, to say and make undoable, and the inbox read again. One that failed comes back,
@@ -9634,7 +9635,7 @@ class WheelhouseApp(App):
             finally:
                 made.set()
             self.post(lambda: self.as_typed(at, lambda: self.deletes_landed(keys, acts, results, landed, made)))
-        self.run_worker(work, thread=True, group="delete", exit_on_error=False)
+        self.on_lane(work)   # behind the commands asked before it, on the lane's one thread, not a thread each
 
     def deletes_landed(self, keys: set, acts: list, results: list, landed: Callable[[list], None],
                        made: threading.Event) -> None:

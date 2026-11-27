@@ -207,6 +207,7 @@ async def test_a_pin_shows_before_the_daemon_answers(store, sid, tmp_path, via, 
     ("inbox unfetched", "the pin's answer bringing no inbox (an older daemon's) and the lane's inbox fetch "
                         "failing: the pin stays drawn until a fresh inbox shows it"),
     ("inbox brought", "the pin's answer brings the inbox as the pin left it: the lane fetches no inbox"),
+    ("deletes", "Deletes typed while the first is held on the daemon queue on the lane: no thread each (#391)"),
 ])
 async def test_the_lane_keeps_order_and_always_lands(store, sid, tmp_path, via, case, desc):
     """#385 review: a command on the lane always lands, whatever goes wrong after it is sent, and
@@ -216,6 +217,7 @@ async def test_the_lane_keeps_order_and_always_lands(store, sid, tmp_path, via, 
     t1, t2 = post(store, sid, tmp_path, "task", "one"), post(store, sid, tmp_path, "task", "two")
     q = post(store, sid, tmp_path, "question", "which db?", status="closed")
     p = store.post_item(sid, "permission", "Bash: make")
+    asked = [post(store, sid, tmp_path, "question", f"ask {n}") for n in range(3)] if case == "deletes" else []
     app = WheelhouseApp(store)
     go, sent = threading.Event(), threading.Event()
     lane = []
@@ -255,6 +257,11 @@ async def test_the_lane_keeps_order_and_always_lands(store, sid, tmp_path, via, 
             app.client.set_pinned = held(app.client.set_pinned)
             await on(t1)
             await pilot.press("alt+p")
+        elif case == "deletes":
+            app.client.close = held(app.client.close)
+            for ref in asked:
+                await on(ref)
+                await pilot.press("delete", "alt+y")   # an open question: confirmed
         elif case == "allow ctrl+r":
             await pilot.press("alt+v")   # the closed question in sight
             app.client.answer_permission = held(app.client.answer_permission)
@@ -295,6 +302,10 @@ async def test_the_lane_keeps_order_and_always_lands(store, sid, tmp_path, via, 
             await on(q)
             await pilot.press("ctrl+r")
             assert store.item(sid, q)["status"] == "closed", f"{desc}: not sent ahead of the Allow"
+        elif case == "deletes":
+            assert len(app.calls) == len(asked), f"{desc}: each Delete under way"
+            assert not [w for w in app.workers if w.group == "delete" and not w.is_finished], desc
+            assert all(store.item(sid, ref)["status"] == "open" for ref in asked), f"{desc}: none landed yet"
         lane_workers = [w for w in app.workers if w.group == "lane" and not w.is_finished]
         assert len(lane_workers) <= 1, f"{desc}: one thread of the pool however many queue (on_lane)"
         await landed()
@@ -305,6 +316,8 @@ async def test_the_lane_keeps_order_and_always_lands(store, sid, tmp_path, via, 
         elif case == "pin ctrl+z pin":
             assert store.item(sid, t1)["pinned"], f"{desc}: {notices(app)}"
             assert notices(app)[-3:] == [f"pinned {t1}", f"undone: pinned {t1}", f"pinned {t1}"], desc
+        elif case == "deletes":
+            assert [store.item(sid, ref)["status"] for ref in asked] == ["closed"] * 3, f"{desc}: {notices(app)}"
         elif case == "allow ctrl+r":
             assert store.item(sid, p)["status"] == "allowed", desc
             assert store.item(sid, q)["status"] == "answered", f"{desc}: {notices(app)}"
