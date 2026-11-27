@@ -44,6 +44,7 @@ def _touched(compositor: Compositor, regions: Iterable[Region]) -> Iterable[tupl
     shown_at = [region.intersection(clip) for region, clip in visible_widgets.values()]
     owned: dict = {}   # each front widget's regions
     shared = []   # the rest, which every widget they touch draws
+    clear: dict[int, bool] = {}   # whether no widget in front reaches into a front widget at all
     for r in regions:
         try:
             widget, _ = WIDGET_AT(compositor, r.x, r.y)   # what is drawn there, pass_through or not
@@ -51,8 +52,13 @@ def _touched(compositor: Compositor, regions: Iterable[Region]) -> Iterable[tupl
             shared.append(r)
             continue
         front = order.get(widget)
-        if front is not None and shown_at[front].contains_region(r) and not any(
-                shown.overlaps(r) for shown in shown_at[:front]):
+        if front is None or not shown_at[front].contains_region(r):
+            shared.append(r)
+            continue
+        # asked once a widget, not once a region: the eyes' windows take dozens of regions a frame (#385)
+        if front not in clear:
+            clear[front] = not any(shown.overlaps(shown_at[front]) for shown in shown_at[:front])
+        if clear[front] or not any(shown.overlaps(r) for shown in shown_at[:front]):
             owned.setdefault(widget, []).append(r)
         else:
             shared.append(r)
