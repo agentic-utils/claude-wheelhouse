@@ -9,7 +9,7 @@ import pytest
 
 from claude_wheelhouse import tui
 from claude_wheelhouse.tui import DocEditor, LeaveEdits, SaveConflict, SaveFailed, SaveGone, WheelhouseApp
-from test_tui import UNDONE_ACROSS_THE_SCROLLBAR, item_list_rows, item_row, undone_across_the_scrollbar
+from test_tui import UNDONE_ACROSS_THE_SCROLLBAR, item_list_rows, item_row, landed, undone_across_the_scrollbar
 
 DOC = "# The plan\n\nBuild it.\n\n- one\n- two\n\n```py\nx = 1\n```\n\n| alpha | beta |\n|---|---|\n| 1 | 2 |\n"
 # a doc taller than the viewer: forty sections of a heading and a paragraph, four lines each
@@ -52,6 +52,7 @@ async def pressed(pilot, key: str, done) -> None:
     lands. Bounded: one that never does fails the test's own assert after."""
     await pilot.press(key)
     await until(pilot, done)
+    await landed(pilot.app, pilot)   # a save sent on the lane, landed (send_off, #391)
 
 
 async def until(pilot, done) -> None:
