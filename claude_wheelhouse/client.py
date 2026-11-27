@@ -758,7 +758,7 @@ class RemoteClient:
             if self.session_letting_go and seq > self.sessions_unfetched:   # fresh since a fetch_now failed
                 gone, self.session_letting_go = self.session_letting_go, []
                 self.let_go_sessions(gone)
-            elif self.session_expecting:
+            if self.session_expecting:   # any still expected, laid over this fetch, fresh or not
                 self.lay_sessions()
         elif kind == "inbox":
             self.items = data["items"]
