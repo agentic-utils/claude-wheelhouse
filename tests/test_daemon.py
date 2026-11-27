@@ -31,6 +31,7 @@ def daemon(store, monkeypatch, sdk_on):
     """A daemon in SDK mode, which a remote client's sessions need (test_sdk_mode_off_refuses_new_sessions)."""
     monkeypatch.setattr(launch, "open_session", lambda store, sid, may_tab=True: None)
     monkeypatch.setattr(launch, "restore_session", lambda store, sid, sdk=None, may_tab=True: None)
+    monkeypatch.setattr(launch, "open_shell", lambda store, cwd, title, *a, **k: None)   # /shell: no real tab (#388)
     d = Daemon(store, hosts("127.0.0.1", 7428), TOKEN, inline=True)
     d.feed = Feed(start=100)
     yield d
@@ -1691,3 +1692,123 @@ async def test_a_command_whose_inbox_cant_be_read_still_answers_done(daemon, sto
     monkeypatch.setattr(daemon, "inbox_answer", busy)
     r = await call(daemon, "POST", f"/items/{sid}/{t1}/pin", {"pinned": True}, x_inbox_since="x:1")
     assert (r.status_code, "inbox" in r.json(), store.item(sid, t1)["pinned"]) == (200, False, 1), r.text
+
+
+def reads(daemon, monkeypatch):
+    """The rows each inbox read takes from the store (InboxLog.update's rows), as refs by session."""
+    seen = []
+    real = daemon.inbox_log.update
+    monkeypatch.setattr(daemon.inbox_log, "update", lambda rows, gone=None: (
+        seen.append(sorted((r["session_id"], r["ref"]) for r in rows)), real(rows, gone))[1])
+    return seen
+
+
+def older_code(db_file, sql, params=()):
+    """A write by a connection that knows nothing of the stamps, as a session on older code."""
+    db = sqlite3.connect(db_file)
+    db.execute("PRAGMA foreign_keys=ON")
+    db.execute(sql, params)
+    db.commit()
+    db.close()
+
+
+@pytest.mark.parametrize("write, read, sent, removed, desc", [
+    (lambda s, f, a, b: None, None, [], [], "nothing written: nothing read"),
+    (lambda s, f, a, b: s.post_item(a, "task", "three"), [("a", "T3")], [("a", "T3")], [], "an item posted"),
+    (lambda s, f, a, b: older_code(f, "UPDATE items SET title = 'x' WHERE session_id = ? AND ref = 'T1'", (a,)),
+     [("a", "T1")], [("a", "T1")], [], "a title, by older code"),
+    (lambda s, f, a, b: older_code(f, "UPDATE items SET status = 'done' WHERE session_id = ? AND ref = 'T2'", (a,)),
+     [("a", "T2")], [("a", "T2")], [], "a status, by older code"),
+    (lambda s, f, a, b: s.set_pinned(b, "T1", True), [("b", "T1")], [("b", "T1")], [], "a pin, by the store"),
+    (lambda s, f, a, b: older_code(f, "UPDATE items SET body = 'new' WHERE session_id = ? AND ref = 'T1'", (a,)),
+     [("a", "T1")], [], [], "a body, which the inbox doesn't serve: read, nothing sent"),
+    (lambda s, f, a, b: older_code(f, "UPDATE items SET title = title || '!' WHERE session_id = ?", (a,)),
+     [("a", "T1"), ("a", "T2")], [("a", "T1"), ("a", "T2")], [], "a bulk update: every row it touched"),
+    (lambda s, f, a, b: older_code(f, "DELETE FROM items WHERE session_id = ? AND ref = 'T2'", (a,)),
+     [], [], [("a", "T2")], "an item deleted: a tombstone"),
+    (lambda s, f, a, b: (older_code(f, "DELETE FROM items WHERE session_id = ? AND ref = 'T2'", (a,)),
+                         s.post_item(b, "task", "two")),
+     [("b", "T2")], [("b", "T2")], [("a", "T2")], "one deleted and one posted, the count unmoved"),
+    (lambda s, f, a, b: s.rename(a, "renamed"), [("a", "T1"), ("a", "T2")], [("a", "T1"), ("a", "T2")], [],
+     "a session renamed: its rows read again, no other's"),
+    (lambda s, f, a, b: older_code(f, "UPDATE sessions SET parked = 1 WHERE id = ?", (b,)),
+     [("b", "T1")], [("b", "T1")], [], "a session parked: its rows read again"),
+    (lambda s, f, a, b: older_code(f, "DELETE FROM sessions WHERE id = ?", (b,)),
+     [], [], [("b", "T1")], "a session deleted: its items by cascade, tombstones"),
+])
+def test_an_inbox_read_after_a_change_reads_only_the_rows_it_moved(daemon, store, db_file, sid, tmp_path, monkeypatch,
+                                                                   write, read, sent, removed, desc):
+    """#391: after the first read, the daemon reads only the rows stamped since (store
+    items_marked_*, whoever writes them) and those of a session renamed or parked, and finds the
+    rows gone by their count; what it sends since a version is as a full read would have it."""
+    other = store.create_session(str(tmp_path / "b"), name="other")
+    store.post_item(sid, "task", "one"), store.post_item(sid, "task", "two"), store.post_item(other, "task", "one")
+    first = daemon.inbox_answer(None)
+    seen = reads(daemon, monkeypatch)
+    write(store, db_file, sid, other)
+    name = {sid: "a", other: "b"}
+    delta = daemon.inbox_answer(f"{first['epoch']}:{first['version']}")
+    assert [[(name[s], r) for s, r in rows] for rows in seen] == ([] if read is None else [read]), desc
+    assert (sorted((name[i["session_id"]], i["ref"]) for i in delta["items"]),
+            sorted((name[s], r) for s, r in delta["removed"])) == (sent, removed), desc
+    held = dict(daemon.inbox_log.rows)
+    monkeypatch.setattr(daemon, "inbox_log", daemon_mod.InboxLog())
+    whole = daemon.inbox_answer(None)
+    assert held == {(i["session_id"], i["ref"]): i for i in whole["items"]}, f"{desc}: held as a full read has them"
+
+
+BEFORE_391 = [f"CREATE TRIGGER items_marked_{op.lower()}_v1 AFTER {op} ON items "
+              "BEGIN UPDATE marks SET n = n + 1 WHERE kind = 'items'; END" for op in ("INSERT", "UPDATE", "DELETE")]
+
+
+@pytest.mark.parametrize("alongside, desc", [
+    (False, "a database from before #391, opened by this code"),
+    (True, "and then reopened by older code, its version 1 triggers firing beside version 2's"),
+])
+def test_a_database_from_before_the_stamps_upgrades_in_place(daemon, store, db_file, sid, monkeypatch, alongside, desc):
+    """#391: items.changed is added and the items triggers replaced on open; rows from before carry
+    no stamp, the first read takes them all, and after it a change reads only its own row."""
+    t1, t2 = store.post_item(sid, "task", "one"), store.post_item(sid, "task", "two")
+    for (name,) in store.db.execute("SELECT name FROM sqlite_master WHERE type = 'trigger'").fetchall():
+        store.db.execute(f'DROP TRIGGER "{name}"')
+    store.db.execute("ALTER TABLE items DROP COLUMN changed")
+    for trigger in BEFORE_391:
+        store.db.execute(trigger)
+    Store(db_file)
+    triggers = {r[0] for r in store.db.execute("SELECT name FROM sqlite_master WHERE type = 'trigger'")}
+    assert set(store_mod.TRIGGER_NAMES) <= triggers and not {t for t in triggers if t.endswith("_v1")}, desc
+    assert [store.item(sid, r)["changed"] for r in (t1, t2)] == [None, None], "rows from before: no stamp"
+    if alongside:
+        for trigger in BEFORE_391:
+            store.db.execute(trigger)
+    first = daemon.inbox_answer(None)
+    assert sorted(i["ref"] for i in first["items"]) == [t1, t2] and all("changed" not in i for i in first["items"]), desc
+    seen = reads(daemon, monkeypatch)
+    older_code(db_file, "UPDATE items SET title = 'renamed' WHERE session_id = ? AND ref = ?", (sid, t2))
+    delta = daemon.inbox_answer(f"{first['epoch']}:{first['version']}")
+    assert (seen, [(i["ref"], i["title"]) for i in delta["items"]]) == ([[(sid, t2)]], [(t2, "renamed")]), desc
+
+
+def test_the_tutorial_facts_are_read_again_only_when_what_they_read_moves(daemon, store, sid, monkeypatch):
+    """#391: tutorial.facts is kept on the items and messages marks and the tutorial's session;
+    tutorial.state, read from settings and tour_seen, which no mark covers, is read every time."""
+    calls = []
+    real = daemon_mod.tutorial.facts
+    monkeypatch.setattr(daemon_mod.tutorial, "facts", lambda s: calls.append(1) or real(s))
+
+    def facts():
+        answer = daemon.inbox_answer(None)["tutorial"]
+        return len(calls), answer["facts"] and {k: answer["facts"][k] for k in ("posted", "answered")}
+
+    assert facts() == (1, None), "no tutorial session"
+    assert facts() == (1, None), "nothing moved: kept"
+    demo = store.create_session(str(daemon_mod.tutorial.tutorial_dir(store)), name="tutorial")
+    assert facts() == (2, {"posted": False, "answered": False}), "its session made"
+    q = store.post_item(demo, "question", "which?")
+    assert facts() == (3, {"posted": True, "answered": False}), "an item posted"
+    store.send(demo, "this one", q)
+    assert facts() == (4, {"posted": True, "answered": True}), "a message sent"
+    store.rename(demo, "renamed")
+    assert facts() == (4, {"posted": True, "answered": True}), "a rename, which facts never reads: kept"
+    store.set_setting(store_mod.TOUR_AT, "tour:x")
+    assert daemon.inbox_answer(None)["tutorial"]["tour"]["at"] == "tour:x", "tutorial.state read afresh"

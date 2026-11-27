@@ -1974,8 +1974,9 @@ async def burst_outcome(store, tmp_path, monkeypatch, focus, at, burst, desc, sl
     qa = store.post_item(alpha, "question", "which db?")
     store.request(alpha, "park")
     store.db.execute("UPDATE sessions SET park_requested_at = ?", ("2020-01-01T00:00:00.000000+00:00",))   # asked long ago: P reaches Cancel or Force (#107)
-    hosts, exits, launched = [], [], []
+    hosts, exits, launched, shells = [], [], [], []
     monkeypatch.setattr(WheelhouseApp, "host_command", lambda self, sid, what: hosts.append(what))
+    monkeypatch.setattr(launch, "open_shell", lambda store, cwd, title, *a, **k: shells.append(title))   # Shell: no real tab (#388)
     monkeypatch.setattr(WheelhouseApp, "exit", lambda self, *a, **k: exits.append(True))
     monkeypatch.setattr(Hub, "open_session",
                         lambda self, sid, restore=False, **k: launched.append(store.session(sid)["name"]) or Done())
@@ -2004,7 +2005,7 @@ async def burst_outcome(store, tmp_path, monkeypatch, focus, at, burst, desc, sl
         current = app.current_session()
         out = {"stack": tuple(type(screen).__name__ for screen in app.screen_stack), "focus": focused_id(app),
                "box": app.screen.box.text if isinstance(app.screen, ThreadView) else app.answer.text,
-               "unsent": sorted(app.unsent.values()), "hosts": hosts, "quit": bool(exits), "launched": launched,
+               "unsent": sorted(app.unsent.values()), "hosts": hosts, "quit": bool(exits), "launched": launched, "shells": shells,
                "names": sorted(row["name"] for row in store.sessions()),
                "pending": s and app.pending(alpha), "parked": bool(s and s["parked"]),
                "queued": [m["body"] for m in store.drafts(alpha)] + [m["body"] for m in store.pending(alpha)],
