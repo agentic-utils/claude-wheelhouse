@@ -815,7 +815,8 @@ class Store:
             try:
                 yield self.db
             finally:
-                self.db.execute("ROLLBACK")
+                if self.db.in_transaction:
+                    self.db.execute("ROLLBACK")
 
     def written(self) -> int:
         """How many rows this thread's transactions have changed, counting only those that

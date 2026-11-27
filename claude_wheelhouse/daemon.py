@@ -1008,7 +1008,7 @@ class Daemon:
             delta = log.since(since)
             stamp = {"epoch": log.epoch, "version": log.version}
             if delta is None:
-                stamp["items"] = list(log.rows.values())
+                stamp["items"] = sorted(log.rows.values(), key=lambda r: r["id"])   # id order, as client.merged says
             else:
                 stamp.update(delta=True, since=int(since.partition(":")[2]), items=delta[0],
                              removed=[list(key) for key in delta[1]])
