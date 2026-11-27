@@ -4540,11 +4540,18 @@ class Reading(Dialog):
     def __init__(self, title: str):
         super().__init__()
         self.title_text = title
+        self.when_top: Callable[[], None] | None = None   # its read landed under another screen (open_after_read)
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
             yield Label(self.title_text, classes="dialog-title", markup=False)
             yield Label(READING_DIALOG, classes="dialog-prompt", markup=False)
+
+    def on_screen_resume(self) -> None:
+        super().on_screen_resume()
+        if self.when_top is not None:   # the screen over it closed: its dialog now
+            then, self.when_top = self.when_top, None
+            self.app.call_later(then)
 
 
 def failure_said(error: Exception) -> tuple[str, str]:
@@ -5526,9 +5533,11 @@ class WheelhouseApp(App):
         self.half_frame = 0   # the frame // 2 the eyes and panes last moved on (animate)
         self.blink = False   # whether the busy dots were last dimmed (animate, dot_dimmed)
         self.steps_chosen = False   # the first-press dialog answered, here or before (first_press)
-        self.steps_reading = False   # first_press's read under way: another press waits for it
+        self.steps_reading = False   # first_press's read under way: another press waits with it
+        self.doc_saving: collections.Counter[str] = collections.Counter()   # each doc's saves on the lane (save_doc)
+        self.doc_chain: dict[str, int | None] = {}   # each doc's mtime as the last of them wrote it, on the lane
         self.efforts: dict[str, list[str]] = {}   # each session's efforts asked and not yet landed, shown meanwhile (set_effort)
-        self.steps_pass: Button | None = None   # the press first_press lets through, once its read landed
+        self.steps_waiting: dict[str, Callable[[], None]] = {}   # the presses first_press holds, by button
         self.animating = True   # whether it runs: paused while unfocused with nothing busy (pace)
         self.input_at = -REST   # when the last key, click or pointer move came: the animation rests after it (frame_due)
         self.frame_period = 0.0   # seconds between animate's timer's fires (frame_due)
@@ -7159,9 +7168,29 @@ class WheelhouseApp(App):
                                      [tuple(k.split("|", 1)) + (() if across else (own[k],)) for k in new])
         else:
             call = functools.partial(self.client.reorder_sessions, ordering.MANUAL if across else group, new)
-        # written on the lane (#391), the rows placed as it lands; failed, nothing written: the
-        # sort, and every row, as they were (sent_landed says why). A key behind waits for it
-        self.send_off(call, lambda _: self.dropped_row(which, across, new))
+        if not self.client.remote or getattr(self.client, "synchronous", True):
+            # at once, the store's own: failed, nothing written, the sort and every row as they
+            # were (sent_landed says why)
+            self.send_off(call, lambda _: self.dropped_row(which, across, new))
+            return
+        # through the daemon (#391): every row placed now (expect), so a second move reads this
+        # one, and the order written on the lane; failed, the rows as fetched again and the sort
+        # back on (sent_landed says why)
+        token = ordering.MANUAL if across else group
+        if which == "items":
+            tokens = [self.client.expect(*k.split("|", 1), pos=i, pos_group=token if across else own[k])
+                      for i, k in enumerate(new)]
+            let_go = self.client.expected
+        else:
+            tokens = [self.client.expect_session(k, pos=i, pos_group=token) for i, k in enumerate(new)]
+            let_go = self.client.expected_session
+        was = self.item_sort if which == "items" else self.session_sort
+        self.dropped_row(which, across, new)
+
+        def failed() -> None:
+            if across:
+                self.set_sort(which, was)
+        self.send_off(call, settled=lambda: [let_go(t) for t in tokens], failed=failed, shown=True)
 
     def dropped_row(self, which: str, across: bool, new: list[str]) -> None:
         """drop_row's order written: the rows it placed painted there."""
@@ -7443,15 +7472,31 @@ class WheelhouseApp(App):
         `failed` runs when it ends unsaved with the edits kept (Cancel, or refused). Written on
         the command lane (send_off, #391), the editor open meanwhile: what's typed while it saves
         stays in the buffer (doc_written's since: editor, the one saving, and the edits kept as
-        the save was asked), and a save that fails keeps it all and says so."""
+        the save was asked), and a save that fails keeps it all and says so.
+        A save asked while one of the same doc is still on the lane goes from what that one
+        wrote (doc_chain), not the mtime its editor had then, so a quick second Ctrl+S never
+        conflicts with the first (#391 review)."""
         since = (editor, self.doc_edits.get(path))
+        after = self.doc_saving[path]   # saves of this doc ahead of it on the lane
+        self.doc_saving[path] += 1
 
-        def write() -> dict:
+        def write() -> dict:   # on the lane, after those ahead of it
+            sent = self.doc_chain.get(path, mtime) if after else mtime
             try:
-                return self.client.write_doc(path, text, mtime, force)
+                answer = self.client.write_doc(path, text, sent, force)
             except Exception as e:   # anything at all: said in the prompt, the edits kept
-                return {"refused": str(e) or type(e).__name__}
-        self.send_off(write, lambda answer: self.doc_saved(answer, path, text, mtime, then, failed, since))
+                answer = {"refused": str(e) or type(e).__name__}
+            if not ({"conflict", "gone", "refused"} & set(answer)):
+                self.doc_chain[path] = answer.get("mtime_ns")
+            return answer
+
+        def settled() -> None:
+            self.doc_saving[path] -= 1
+            if not self.doc_saving[path]:
+                del self.doc_saving[path]
+                self.doc_chain.pop(path, None)
+        self.send_off(write, lambda answer: self.doc_saved(answer, path, text, mtime, then, failed, since),
+                      settled=settled)
 
     def doc_saved(self, answer: dict, path: str, text: str, mtime: int | None,
                   then: Callable[[], None] | None, failed: Callable[[], None] | None, since: tuple) -> None:
@@ -8056,48 +8101,47 @@ class WheelhouseApp(App):
                 self.send_off(lambda: self.client.choose_steps({}), lambda _: setattr(self, "steps_chosen", True))
         self.open_after_read("SESSION STEPS", self.client.steps_table, SessionSteps, chosen)
 
-    def first_press(self, button: Button) -> bool:
-        """Before the first press of anything that fires a step with add-ons, the
-        first-press dialog (FirstSteps): its answer kept, then the same button pressed again;
-        Esc cancels the press. True while it shows: the press waits for it. Whether the steps
-        are chosen is read off the UI thread (read_off, #391): the press waits for that too, and
-        is pressed again once it's known."""
+    def first_press(self, button: str, then: Callable[[], None]) -> None:
+        """A press of anything that fires a step with add-ons (button, its id), acted on by
+        then, which carries what it acts on, taken as it was pressed (#391 review: a selection
+        moved meanwhile never redirects it). Before the first such press, the first-press
+        dialog (FirstSteps): its answer kept, then the press acted on; Esc cancels it. Whether
+        the steps are chosen is read off the UI thread (read_off, #391): a press meanwhile waits
+        with it, one per button (a second press of the same one replaces the first, as a busy
+        button would), and none is dropped. In process, read at once."""
         if self.steps_chosen:
-            return False
-        if self.steps_pass is button:   # pressed again once the read landed (asked): it goes on
-            self.steps_pass = None
-            return False
-        if self.steps_reading:   # pressed again while it reads: the first press stands for both
-            return True
-        inline, waits = True, []   # read at once (in process): whether the press waits, said here
+            then()
+            return
+        self.steps_waiting[button] = then
+        if self.steps_reading:   # the read under way acts on it too
+            return
+        self.steps_reading = True
 
         def asked(table) -> None:
             self.steps_reading = False
             if not isinstance(table, Exception) and not table.get("chosen"):
                 self.push_screen(FirstSteps(self.client.sdk), answered)
-                waits.append(True)
                 return
             if not isinstance(table, Exception):
                 self.steps_chosen = True
-            # chosen, or a daemon on older code or unreachable: the press goes on as before
-            waits.append(False)
-            if not inline:
-                self.steps_pass = button
-                self.post_message(Button.Pressed(button))
+            self.steps_go()   # chosen, or a daemon on older code or unreachable: as before
 
         def answered(ticks: dict | None) -> None:
-            if ticks is None:
+            if ticks is None:   # Esc: the presses waiting are cancelled
+                self.steps_waiting.clear()
                 return
 
             def chosen(_) -> None:
                 self.steps_chosen = True
-                self.post_message(Button.Pressed(button))
-            self.send_off(lambda: self.client.choose_steps(ticks), chosen)
+                self.steps_go()
+            self.send_off(lambda: self.client.choose_steps(ticks), chosen, failed=self.steps_waiting.clear)
         self.read_off(self.client.steps_table, asked, asked)
-        if waits:   # read at once
-            return waits[0]
-        inline, self.steps_reading = False, True   # read off the thread: asked presses it again
-        return True
+
+    def steps_go(self) -> None:
+        """The presses first_press held, acted on, in the order pressed."""
+        waiting, self.steps_waiting = self.steps_waiting, {}
+        for then in waiting.values():
+            then()
 
     def hosted(self, slot: str, taken: set[str]):
         """The widgets for a slot: each module's pane, or a card saying why it isn't running
@@ -8857,11 +8901,15 @@ class WheelhouseApp(App):
         back where it left off, unparked; a running one is stopped, a host or a tab's Claude
         Code, then started again on the conversation, asked first only if it's mid-turn
         (that turn is lost), or offered Compact first if its context is large. The
-        first-press dialog first, until answered (first_press)."""
+        first-press dialog first, until answered (first_press), on the session pressed on."""
         self.settle()
         sid = self.current_session()
-        if not sid or self.first_press(self.query_one("#relaunch", Button)):
-            return
+        if sid:
+            self.first_press("relaunch", lambda: self.relaunch_now(sid))
+
+    @session_action
+    def relaunch_now(self, sid: str) -> None:
+        """relaunch_pressed's Relaunch, on the session it was pressed on (first_press)."""
         s = self.row(sid)
         host = (s["claude_pid"], s["claude_start"])
         if sid in self.relaunching:
@@ -9297,24 +9345,27 @@ class WheelhouseApp(App):
             waiting = Reading(title)
             self.push_screen(waiting)
 
-        def landed(value) -> None:
-            if waiting is not None:
-                if waiting not in self.screen_stack:   # cancelled while it read
-                    return
+        def in_place(then: Callable[[], None]) -> None:
+            """then, in Reading's place: at once with it on top; with another screen over it (a
+            prompt that landed meanwhile), once that closes, never popping it. Cancelled, never."""
+            if waiting is None:
+                then()
+            elif waiting not in self.screen_stack:   # cancelled while it read
+                return
+            elif self.screen is waiting:
                 waiting.dismiss(None)
-            self.push_screen(dialog(value), answered)
+                then()
+            else:
+                waiting.when_top = lambda: in_place(then)
 
         def gone(e: Exception) -> None:
-            if waiting is not None:
-                if waiting not in self.screen_stack:
-                    return
-                waiting.dismiss(None)
             if failed is not None:
                 failed(e)
             else:
                 said, severity = failure_said(e)
                 self.notify(said, severity=severity)
-        self.read_off(read, landed, gone)
+        self.read_off(read, lambda value: in_place(lambda: self.push_screen(dialog(value), answered)),
+                      lambda e: in_place(lambda: gone(e)))
 
     def pressing(self, sid: str, button: str, call: Callable[[], object], ref: str | None = None,
                  landed: Callable[[object], None] | None = None, failed: Callable[[], None] | None = None) -> None:
@@ -9776,15 +9827,18 @@ class WheelhouseApp(App):
         calls = [(it, self.closing(it, closed)) for it in picked]   # reopened: on the lane (#391)
 
         def reopen() -> list:
-            done = []
+            answers = []
             for it, call in calls:
                 try:
-                    if call().ok:
-                        done.append(it)
+                    answers.append((it, call()))
                 except (SessionGone, KeyError):   # ended or gone meanwhile: the rest still go
                     continue
-            return done
-        self.send_off(reopen, lambda done: self.said_picked(done, families, closed, kept),
+            return answers
+
+        def landed(answers: list) -> None:   # each one's word said, as when they were made here
+            done = [it for it, answer in answers if self.told(answer).ok]
+            self.said_picked(done, families, closed, kept)
+        self.send_off(reopen, landed,
                       settled=lambda: [self.closed_shown(it, closed) for it in picked])
 
     def said_picked(self, done: list, families: dict, closed: bool, kept: str) -> None:
@@ -10173,10 +10227,9 @@ class WheelhouseApp(App):
         what = event.button.id
         if what == "interrupt":
             self.host_command(sid, what)
-        elif what == "compact" and self.first_press(event.button):
-            return
-        else:
-            self.push_screen(CompactSession(self.label(sid)), lambda plan: plan and self.host_command(sid, what, **plan))
+        else:   # Compact, on the session pressed on
+            self.first_press(what, lambda: self.push_screen(CompactSession(self.label(sid)),
+                                                           lambda plan: plan and self.host_command(sid, what, **plan)))
 
     def handover(self, sid: str) -> None:
         """Handover to Claude Code in a shell, from the session menu (#257): a hosted session
@@ -10265,10 +10318,8 @@ class WheelhouseApp(App):
             return
         if event.button.id == "leave-it":
             self.send_off(lambda: self.client.close(*target, True))
-        elif self.first_press(event.button):
-            return
-        else:
-            self.compact_now(target)
+        else:   # on the item pressed on
+            self.first_press("compact-now", lambda: self.compact_now(target))
 
     @on(Button.Pressed, "#keep-waiting, #abort-compaction")
     def notes_wait_pressed(self, event: Button.Pressed) -> None:
@@ -10672,11 +10723,13 @@ class WheelhouseApp(App):
         it know (it does its end steps) or just stop it, by its cache's warmth. The
         first-press dialog first, until answered (first_press)."""
         self.settle()
-        if self.first_press(self.query_one("#end", Button)):
-            return
         sid = self.current_session()
-        if not sid:
-            return
+        if sid:
+            self.first_press("end", lambda: self.end_now(sid))
+
+    @session_action
+    def end_now(self, sid: str) -> None:
+        """end_pressed's Forget, on the session it was pressed on (first_press)."""
         n = len(self.client.drafts(sid))
         if self.running(sid) and self.pending(sid) is None:
             warm = self.client.warm(sid)

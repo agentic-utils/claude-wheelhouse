@@ -202,7 +202,7 @@ def steps_answered(request, monkeypatch):
     """The session steps' first-press dialog as answered, so a press of Compact, Forget or
     Relaunch goes straight on; a test of the dialog takes first_press."""
     if "first_press" not in request.fixturenames:
-        monkeypatch.setattr(tui.WheelhouseApp, "first_press", lambda self, button: False)
+        monkeypatch.setattr(tui.WheelhouseApp, "first_press", lambda self, button, then: then())
 
 
 @pytest.fixture(autouse=True)

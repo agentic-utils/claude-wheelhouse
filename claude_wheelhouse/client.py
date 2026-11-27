@@ -78,6 +78,12 @@ class LocalClient(Hub):
     def expected(self, token) -> None:
         pass
 
+    def expect_session(self, sid: str, **fields) -> None:
+        return None   # as expect
+
+    def expected_session(self, token) -> None:
+        pass
+
     def sessions_loaded(self) -> bool:
         return True   # read from the store at every refresh
 
@@ -159,11 +165,10 @@ class LocalClient(Hub):
         """What the tour's offer is decided from (tutorial.state, tour.opening)."""
         return tutorial.state(self.store)
 
-    def tour_at(self, at: str | None) -> bool:
+    def tour_at(self, at: str | None) -> None:
         """Where the tour under way resumes (tour.Tour.where), kept so a pause, or the app
-        quitting mid-tour, never loses it; None once it's over. Whether it was kept."""
+        quitting mid-tour, never loses it; None once it's over."""
         self.set_setting(TOUR_AT, at)
-        return True
 
     def start(self, post=None) -> None:
         pass   # its work runs on the app's own workers (spawn, post)
@@ -299,7 +304,8 @@ class RemoteClient:
         self.unfetched = -1
         self.asides: list[Callable[[], object]] = []   # writes nobody waits on, to send in order (aside)
         self.aside_thread: threading.Thread | None = None
-        self.tour_kept: list[list] = []   # the tour's changes shown before a fetch has them (tour_change)
+        self.tour_kept: list[list] = []
+        self.session_expecting: dict[str, list[dict]] = {}   # each session's changes shown before the daemon has them (expect_session)   # the tour's changes shown before a fetch has them (tour_change)
         self.stopping = False
         self.threads: list[threading.Thread] = []
         self.last_event: str | None = None
@@ -578,6 +584,34 @@ class RemoteClient:
             self.version += 1
             self.inbox_version += 1
 
+    def expect_session(self, sid: str, **fields) -> object:
+        """As expect, for a session's row (a drag's place, #391): laid over every sessions fetch
+        until let go (expected_session). The caller draws it."""
+        token = dict(fields)
+        with self.lock:
+            self.session_expecting.setdefault(sid, []).append(token)
+            self.lay_sessions()
+        return token
+
+    def expected_session(self, token: object) -> None:
+        """An expect_session let go, as its command lands: the session as fetched from now."""
+        with self.lock:
+            for sid, tokens in list(self.session_expecting.items()):
+                tokens[:] = [t for t in tokens if t is not token]
+                if not tokens:
+                    del self.session_expecting[sid]
+            self.lay_sessions()
+            self.version += 1
+
+    def lay_sessions(self) -> None:
+        """The sessions as fetched, with the changes expected laid over them (under the lock)."""
+        raw = self.stamped.get("sessions")
+        if raw is None:
+            return
+        self.views = [{**s, **{k: v for t in self.session_expecting.get(s["id"], ()) for k, v in t.items()}}
+                      for s in raw]
+        self.by_id = {s["id"]: s for s in self.views}
+
     def overlay(self, moved: bool = True) -> None:
         """The inbox as fetched, with the changes expected laid over it, as shown (under the lock);
         moved on (version, unless not moved) so the next paint reads it."""
@@ -707,6 +741,8 @@ class RemoteClient:
             self.statuses = {s["id"]: s["liveness"] for s in data}
             self.relaunching = {s["id"] for s in data if s["status"] == "relaunching"}
             self.compacting = {s["id"] for s in data if s.get("compacting")}
+            if self.session_expecting:
+                self.lay_sessions()
         elif kind == "inbox":
             self.items = data["items"]
             self.by_key = {(it["session_id"], it["ref"]): it for it in self.items}
@@ -1081,9 +1117,8 @@ class RemoteClient:
     def tour_state(self) -> dict:
         return self.tutorial_state.setdefault("tour", {})
 
-    def tour_at(self, at: str | None) -> bool:
+    def tour_at(self, at: str | None) -> None:
         self.tour_change(lambda tour: tour.__setitem__("at", at), "/tour/at", {"at": at})
-        return True
 
     def tour_change(self, lay: Callable[[dict], None], path: str, body: dict) -> None:
         """A change the tour made to its state (where it is, a feature seen), shown at once and

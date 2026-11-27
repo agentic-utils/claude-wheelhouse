@@ -7,13 +7,14 @@ import threading
 import types
 
 import pytest
-from textual.widgets import Button
 
 from claude_wheelhouse.hub import Done
+from claude_wheelhouse import steps
 from claude_wheelhouse.store import TOUR_AT
-from claude_wheelhouse.tui import (AdoptSession, DocEdit, FirstSteps, Reading, SaveFailed, SessionInfo,
-                                   SessionSteps, WheelhouseApp)
+from claude_wheelhouse.tui import (AdoptSession, Confirm, DocEdit, FirstSteps, Reading, SaveConflict, SaveFailed,
+                                   SessionInfo, SessionSteps, WheelhouseApp)
 from test_pins import notices, post
+from test_tui import pick
 
 REFUSED = "refused for the test"
 
@@ -77,9 +78,9 @@ ACTIONS = {
                and f"reopened {ctx['q']} as answered" in notices(app),
                lambda app, store, sid, ctx: store.item(sid, ctx["q"])["status"] == "closed"),
     "drag": (setup_items, "reorder_items", None, moved,
-             lambda app, store, sid, ctx: rows(app) == ctx["order"],
+             lambda app, store, sid, ctx: rows(app) != ctx["order"],   # shown moved at once
              lambda app, store, sid, ctx: rows(app) != ctx["order"],
-             lambda app, store, sid, ctx: rows(app) == ctx["order"]),
+             lambda app, store, sid, ctx: rows(app) == ctx["order"]),   # refused: as fetched again
     "doc save": (setup_doc, "write_doc", None, lambda app, sid, ctx: app.save_doc(ctx["path"], "# saved\n", None, force=True),
                  lambda app, store, sid, ctx: open(ctx["path"]).read() == "# plan\n",
                  lambda app, store, sid, ctx: open(ctx["path"]).read() == "# saved\n" and "Saved plan.md" in notices(app),
@@ -89,10 +90,11 @@ ACTIONS = {
               lambda app, store, sid, ctx: isinstance(app.screen, Reading),
               lambda app, store, sid, ctx: isinstance(app.screen, SessionSteps),
               lambda app, store, sid, ctx: not isinstance(app.screen, (Reading, SessionSteps))),
-    "first press": (nothing, "steps_table", None, lambda app, sid, ctx: ctx.update(waits=app.first_press(Button("x"))),
-                    lambda app, store, sid, ctx: ctx["waits"] and app.steps_reading,
-                    lambda app, store, sid, ctx: isinstance(app.screen, FirstSteps),
-                    lambda app, store, sid, ctx: not isinstance(app.screen, FirstSteps) and app.steps_pass is not None),
+    "first press": (nothing, "steps_table", None,
+                    lambda app, sid, ctx: app.first_press("relaunch", lambda: ctx.setdefault("ran", []).append(1)),
+                    lambda app, store, sid, ctx: app.steps_reading and "ran" not in ctx,
+                    lambda app, store, sid, ctx: isinstance(app.screen, FirstSteps) and "ran" not in ctx,
+                    lambda app, store, sid, ctx: not isinstance(app.screen, FirstSteps) and ctx.get("ran") == [1]),
     "adopt": (nothing, "adoptable", None, lambda app, sid, ctx: app.action_adopt(),
               lambda app, store, sid, ctx: isinstance(app.screen, Reading),
               lambda app, store, sid, ctx: isinstance(app.screen, AdoptSession),
@@ -205,3 +207,125 @@ def test_a_save_landing_keeps_what_was_typed_since(tmp_path, since, kept, desc):
     assert (edit and edit.text) == kept, desc
     if edit:
         assert (edit.base, edit.mtime) == ("# saved\n", 7), desc
+
+
+class Held:
+    """A client call held until released (go), noting each time it's made (sent)."""
+
+    def __init__(self, real, times: int = 1):
+        self.real, self.go, self.sent, self.held = real, threading.Event(), threading.Event(), times
+
+    def __call__(self, *args, **kw):
+        if self.held:
+            self.held -= 1
+            self.sent.set()
+            self.go.wait(10)
+        return self.real(*args, **kw)
+
+    async def wait_sent(self):
+        assert await asyncio.get_running_loop().run_in_executor(None, self.sent.wait, 10), "sent"
+
+
+async def lane_landed(app, pilot):
+    for _ in range(100):
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        if not (app.sending or app.behind or app.steps_reading):
+            return
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("via", ["threaded"], indirect=True)
+async def test_a_press_waiting_on_the_steps_acts_on_the_session_pressed_on(store, sid, tmp_path, via, first_press):
+    """#391 review: Relaunch pressed on A, the selection moved to B while the steps are read:
+    A relaunched, not B. And a press of another button meanwhile isn't dropped."""
+    other = store.create_session(str(tmp_path), name="other")
+    store.set_setting(steps.CHOSEN, "1")
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        await pick(app, pilot, sid)
+        assert app.current_session() == sid
+        app.client.steps_table = held = Held(app.client.steps_table)
+        got = []
+        app.relaunch_now = lambda s: got.append(("relaunch", s))
+        app.relaunch_pressed()
+        await held.wait_sent()
+        await pick(app, pilot, other)
+        assert app.current_session() == other
+        app.end_now = lambda s: got.append(("end", s))
+        app.end_pressed()   # another button meanwhile, on B
+        held.go.set()
+        await lane_landed(app, pilot)
+        assert got == [("relaunch", sid), ("end", other)], got
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("via", ["threaded"], indirect=True)
+async def test_a_read_landing_under_a_prompt_never_pops_it(store, sid, via):
+    """#391 review: a prompt that opened over Reading before its read landed stays; the dialog
+    takes Reading's place once the prompt closes."""
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.client.steps_table = held = Held(app.client.steps_table)
+        app.action_session_steps()
+        await held.wait_sent()
+        answers = []
+        app.push_screen(Confirm("over it?"), answers.append)
+        await pilot.pause()
+        held.go.set()
+        await lane_landed(app, pilot)
+        assert isinstance(app.screen, Confirm), "the prompt over it stays"
+        app.screen.action_answer(True)
+        await pilot.pause()
+        await pilot.pause()
+        assert answers == [True], "its answer heard"
+        assert isinstance(app.screen, SessionSteps), "the dialog in Reading's place"
+        assert not any(isinstance(sc, Reading) for sc in app.screen_stack), "Reading gone"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("via", ["threaded"], indirect=True)
+async def test_two_drags_in_a_row_compose(store, sid, tmp_path, via):
+    """#391 review: a second move made before the first is written reads the first: both stand."""
+    refs = [post(store, sid, tmp_path, "task", n) for n in ("one", "two", "three")]
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        order = rows(app)
+        keys = [f"{sid}|{r}" for r in refs]
+        ranked = sorted(keys, key=order.index)   # top to bottom as shown
+        app.client.reorder_items = held = Held(app.client.reorder_items)
+        app.drop_row(app.items_table, ranked[2], ranked[0], None)   # the bottom one to the top
+        await held.wait_sent()
+        assert rows(app).index(ranked[2]) < rows(app).index(ranked[0]), "shown moved at once"
+        app.drop_row(app.items_table, ranked[1], ranked[2], None)   # then the middle one above it
+        held.go.set()
+        await lane_landed(app, pilot)
+        app.refresh_data()
+        await pilot.pause()
+        shown = [k for k in rows(app) if k in keys]
+        assert shown == [ranked[1], ranked[2], ranked[0]], shown
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("via", ["threaded"], indirect=True)
+async def test_a_quick_second_save_never_conflicts_with_the_first(store, sid, tmp_path, via):
+    """#391 review: Ctrl+S twice before the first save lands: the second goes from what the
+    first wrote, so no conflict with itself, and the file has the second text."""
+    post(store, sid, tmp_path, "doc", "plan")
+    path = str(tmp_path / "plan.md")
+    mtime = __import__("os").stat(path).st_mtime_ns
+    app = WheelhouseApp(store)
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        app.client.write_doc = held = Held(app.client.write_doc)
+        app.save_doc(path, "# first\n", mtime)
+        await held.wait_sent()
+        app.save_doc(path, "# second\n", mtime)   # the mtime its editor still has
+        held.go.set()
+        await lane_landed(app, pilot)
+        assert not isinstance(app.screen, (SaveConflict, SaveFailed)), type(app.screen).__name__
+        assert open(path).read() == "# second\n"
+        assert notices(app)[-2:] == ["Saved plan.md", "Saved plan.md"], notices(app)
